@@ -5,7 +5,16 @@ import os
 from pathlib import Path
 
 
-from markdown_to_canvas.manifest import flush, load, needs_sync, record
+from markdown_to_canvas.manifest import (
+    LEGACY_MANIFEST_NAME,
+    flush,
+    load,
+    manifest_name_for,
+    manifest_path_for,
+    migrate_legacy_manifest,
+    needs_sync,
+    record,
+)
 
 
 def test_load_missing_file(tmp_path: Path) -> None:
@@ -13,7 +22,7 @@ def test_load_missing_file(tmp_path: Path) -> None:
 
 
 def test_load_existing_file(tmp_path: Path) -> None:
-    manifest_path = tmp_path / ".canvas-manifest.toml"
+    manifest_path = tmp_path / ".manifest-canvas.toml"
     manifest_path.write_bytes(
         b'["pages/syllabus.md"]\ncanvas_id = 11111\ncanvas_type = "page"\n'
     )
@@ -23,7 +32,7 @@ def test_load_existing_file(tmp_path: Path) -> None:
 
 
 def test_flush_round_trip(tmp_path: Path) -> None:
-    manifest_path = tmp_path / ".canvas-manifest.toml"
+    manifest_path = tmp_path / ".manifest-canvas.toml"
     data = {
         "pages/syllabus.md": {"canvas_id": 11111, "canvas_type": "page", "last_synced": "2025-01-01T00:00:00+00:00"},
         "assignments/week1.md": {"canvas_id": 98765, "canvas_type": "assignment", "last_synced": "2025-01-01T00:00:01+00:00"},
@@ -34,7 +43,7 @@ def test_flush_round_trip(tmp_path: Path) -> None:
 
 
 def test_flush_overwrites_existing(tmp_path: Path) -> None:
-    manifest_path = tmp_path / ".canvas-manifest.toml"
+    manifest_path = tmp_path / ".manifest-canvas.toml"
     flush(manifest_path, {"pages/old.md": {"canvas_id": 1, "canvas_type": "page", "last_synced": "2025-01-01T00:00:00+00:00"}})
     flush(manifest_path, {"pages/new.md": {"canvas_id": 2, "canvas_type": "page", "last_synced": "2025-01-01T00:00:00+00:00"}})
     loaded = load(manifest_path)
@@ -44,7 +53,7 @@ def test_flush_overwrites_existing(tmp_path: Path) -> None:
 
 def test_record_creates_entry(tmp_path: Path) -> None:
     manifest: dict = {}
-    manifest_path = tmp_path / ".canvas-manifest.toml"
+    manifest_path = tmp_path / ".manifest-canvas.toml"
     record(manifest, manifest_path, "pages/syllabus.md", 11111, "page")
     assert manifest["pages/syllabus.md"]["canvas_id"] == 11111
     assert manifest["pages/syllabus.md"]["canvas_type"] == "page"
@@ -53,7 +62,7 @@ def test_record_creates_entry(tmp_path: Path) -> None:
 
 def test_record_flushes_immediately(tmp_path: Path) -> None:
     manifest: dict = {}
-    manifest_path = tmp_path / ".canvas-manifest.toml"
+    manifest_path = tmp_path / ".manifest-canvas.toml"
     record(manifest, manifest_path, "pages/syllabus.md", 11111, "page")
     # disk must reflect the write without a separate flush call
     on_disk = load(manifest_path)
@@ -62,7 +71,7 @@ def test_record_flushes_immediately(tmp_path: Path) -> None:
 
 def test_record_updates_existing_entry(tmp_path: Path) -> None:
     manifest: dict = {"pages/syllabus.md": {"canvas_id": 99, "canvas_type": "page", "last_synced": "2020-01-01T00:00:00+00:00"}}
-    manifest_path = tmp_path / ".canvas-manifest.toml"
+    manifest_path = tmp_path / ".manifest-canvas.toml"
     flush(manifest_path, manifest)
     record(manifest, manifest_path, "pages/syllabus.md", 11111, "page")
     assert manifest["pages/syllabus.md"]["canvas_id"] == 11111
@@ -72,7 +81,7 @@ def test_record_updates_existing_entry(tmp_path: Path) -> None:
 
 def test_record_with_extra_fields(tmp_path: Path) -> None:
     manifest: dict = {}
-    manifest_path = tmp_path / ".canvas-manifest.toml"
+    manifest_path = tmp_path / ".manifest-canvas.toml"
     record(
         manifest,
         manifest_path,
@@ -91,7 +100,7 @@ def test_record_with_extra_fields(tmp_path: Path) -> None:
 
 def test_record_multiple_entries_all_flushed(tmp_path: Path) -> None:
     manifest: dict = {}
-    manifest_path = tmp_path / ".canvas-manifest.toml"
+    manifest_path = tmp_path / ".manifest-canvas.toml"
     record(manifest, manifest_path, "pages/a.md", 1, "page")
     record(manifest, manifest_path, "pages/b.md", 2, "page")
     record(manifest, manifest_path, "assignments/c.md", 3, "assignment")
@@ -103,7 +112,7 @@ def test_record_multiple_entries_all_flushed(tmp_path: Path) -> None:
 def test_create_vs_update_lookup(tmp_path: Path) -> None:
     """Manifest presence determines create-vs-update at call site."""
     manifest: dict = {}
-    manifest_path = tmp_path / ".canvas-manifest.toml"
+    manifest_path = tmp_path / ".manifest-canvas.toml"
     assert "pages/new.md" not in manifest  # → create path
     record(manifest, manifest_path, "pages/new.md", 42, "page")
     assert "pages/new.md" in manifest       # → update path on next run
@@ -191,3 +200,74 @@ def test_needs_sync_extra_mtime_paths_not_called_when_already_stale(tmp_path: Pa
 def test_needs_sync_default_extra_mtime_paths_unchanged_behavior(tmp_path: Path) -> None:
     f = _make_file(tmp_path, 0.0)
     assert needs_sync({"pages/a.md": _FUTURE_ENTRY}, "pages/a.md", f) is False
+
+
+# ---------------------------------------------------------------------------
+# Per-config manifest naming (one manifest per canvas.toml)
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_name_for_default_config() -> None:
+    assert manifest_name_for(None) == ".manifest-canvas.toml"
+    assert (
+        manifest_name_for(Path("course_settings/canvas.toml"))
+        == ".manifest-canvas.toml"
+    )
+
+
+def test_manifest_name_for_named_config() -> None:
+    """A second canvas.toml gets its own manifest, so sections don't collide."""
+    assert (
+        manifest_name_for(Path("course_settings/canvas-sec-a.toml"))
+        == ".manifest-canvas-sec-a.toml"
+    )
+
+
+def test_manifest_path_for_is_repo_relative(tmp_path: Path) -> None:
+    path = manifest_path_for(tmp_path, Path("elsewhere/canvas-sec-b.toml"))
+    assert path == tmp_path / ".manifest-canvas-sec-b.toml"
+
+
+def test_migrate_legacy_manifest_renames_for_default_config(tmp_path: Path) -> None:
+    legacy = tmp_path / LEGACY_MANIFEST_NAME
+    legacy.write_bytes(b'["pages/a.md"]\ncanvas_id = 1\ncanvas_type = "page"\n')
+
+    path = migrate_legacy_manifest(tmp_path, None)
+
+    assert path == tmp_path / ".manifest-canvas.toml"
+    assert not legacy.exists()
+    assert load(path)["pages/a.md"]["canvas_id"] == 1
+
+
+def test_migrate_legacy_manifest_ignores_legacy_for_other_config(tmp_path: Path) -> None:
+    """The legacy manifest holds the default course's IDs; another config must
+    not adopt them."""
+    legacy = tmp_path / LEGACY_MANIFEST_NAME
+    legacy.write_bytes(b'["pages/a.md"]\ncanvas_id = 1\ncanvas_type = "page"\n')
+
+    path = migrate_legacy_manifest(tmp_path, Path("course_settings/canvas-sec-a.toml"))
+
+    assert path == tmp_path / ".manifest-canvas-sec-a.toml"
+    assert legacy.exists()
+    assert load(path) == {}
+
+
+def test_migrate_legacy_manifest_keeps_existing_new_name(tmp_path: Path) -> None:
+    legacy = tmp_path / LEGACY_MANIFEST_NAME
+    legacy.write_bytes(b'["pages/old.md"]\ncanvas_id = 1\ncanvas_type = "page"\n')
+    current = tmp_path / ".manifest-canvas.toml"
+    current.write_bytes(b'["pages/new.md"]\ncanvas_id = 2\ncanvas_type = "page"\n')
+
+    path = migrate_legacy_manifest(tmp_path, None)
+
+    assert path == current
+    assert load(path) == {
+        "pages/new.md": {"canvas_id": 2, "canvas_type": "page"}
+    }
+    assert legacy.exists()
+
+
+def test_migrate_legacy_manifest_no_files(tmp_path: Path) -> None:
+    path = migrate_legacy_manifest(tmp_path, None)
+    assert path == tmp_path / ".manifest-canvas.toml"
+    assert not path.exists()

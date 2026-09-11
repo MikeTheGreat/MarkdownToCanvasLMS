@@ -24,7 +24,7 @@ from .conditionals import (
     parse_condition,
     resolve_published_if,
 )
-from .config import Config
+from .config import Config, validate_course_flags
 from .convert import (
     expand_frontmatter_snippets,
     find_referenced_snippets,
@@ -115,42 +115,54 @@ def load_due_dates(repo_path: Path, settings: dict | None = None) -> list[dict[s
     return settings.get("due_dates", [])
 
 
-_FLAG_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+def load_course_flags(
+    repo_path: Path,
+    settings: dict | None = None,
+    config: Config | None = None,
+) -> dict[str, bool]:
+    """The course flags in effect for this run.
 
-
-def load_course_flags(repo_path: Path, settings: dict | None = None) -> dict[str, bool]:
-    """Load the [course_flags] table from course_settings/course_settings.toml.
+    Starts from the [course_flags] table in course_settings/course_settings.toml
+    (shared by every config in the repo), then applies the [course_flags] table
+    of the canvas.toml being synced with, if any: a flag present in both takes
+    the canvas.toml value, and flags defined in only one of the two are kept as
+    they are. That is what lets one repo drive several sections whose content,
+    publish state and due dates differ (see `#if`, `published_if`, `only_if`)
+    while sharing everything else in course_settings.toml.
 
     If settings dict is provided (pre-loaded), use it; otherwise read from
-    disk. The table is optional (absent == no flags defined). An invalid flag
-    name or a non-boolean value is a whole-run config error: raises ValueError,
-    which the CLI reports via die().
+    disk. Both tables are optional (absent == no flags defined). An invalid
+    flag name or a non-boolean value in either file is a whole-run config
+    error: raises ValueError, which the CLI reports via die().
     """
+    flags: dict[str, bool] = {}
     if settings is None:
         settings_path = repo_path / "course_settings" / "course_settings.toml"
-        if not settings_path.exists():
-            return {}
-        with settings_path.open("rb") as fh:
-            settings = tomllib.load(fh)
-    table = settings.get("course_flags", {})
-    if not isinstance(table, dict):
-        raise ValueError(
-            "[course_flags] in course_settings.toml must be a table of "
-            "flag_name = true/false entries"
+        if settings_path.exists():
+            with settings_path.open("rb") as fh:
+                settings = tomllib.load(fh)
+    if settings is not None:
+        flags = validate_course_flags(
+            settings.get("course_flags", {}), "course_settings.toml"
         )
-    for name, value in table.items():
-        if not _FLAG_NAME_RE.match(name):
-            raise ValueError(
-                f"invalid course flag name {name!r} in [course_flags] — names "
-                f"must match [A-Za-z_][A-Za-z0-9_]* (letters, digits, "
-                f"underscores; not starting with a digit)"
+    if config is not None:
+        # Already validated by config.load(); a hand-built Config might not be.
+        source = str(config.config_path) if config.config_path else "canvas.toml"
+        overrides = validate_course_flags(config.course_flags, source)
+        if overrides:
+            name = Path(source).name
+            shown = ", ".join(
+                f"{k}={str(v).lower()}" for k, v in sorted(overrides.items())
             )
-        if not isinstance(value, bool):
-            raise ValueError(
-                f"course flag '{name}' in [course_flags] must be a TOML "
-                f"boolean (true/false), got {value!r}"
-            )
-    return dict(table)
+            print(f"Flags:     {shown}  (from {name})")
+            shadowed = sorted(k for k in overrides if k in flags and flags[k] != overrides[k])
+            if shadowed:
+                print(
+                    f"           overriding course_settings.toml: "
+                    f"{', '.join(shadowed)}"
+                )
+        flags.update(overrides)
+    return flags
 
 
 def load_pinned_resources(repo_path: Path, settings: dict | None = None) -> list[str]:
@@ -1712,13 +1724,18 @@ def run_sync(
     to a brand-new empty Canvas course: the on-disk manifest is ignored (every
     file takes the full processing path), all Canvas traffic goes to an
     in-memory DryRunCanvas, and nothing is written (no Canvas changes, no
-    .canvas-manifest.toml changes — see manifest_path=None).
+    manifest changes — see manifest_path=None).
+
+    The manifest file is the one belonging to ``config`` (see
+    ``manifest.manifest_name_for``), so two canvas.toml files in one repo keep
+    two independent sets of Canvas IDs.
     """
-    manifest_path: Path | None = repo_path / ".canvas-manifest.toml"
+    manifest_path: Path | None
     if check_all:
+        manifest_name = manifest_lib.manifest_name_for(config.config_path)
         print(
             "CHECK MODE: simulating a first sync to a brand-new empty Canvas "
-            "course.\nNothing will be uploaded and .canvas-manifest.toml will "
+            f"course.\nNothing will be uploaded and {manifest_name} will "
             "not be modified.\n"
         )
         api: Any = dryrun.DryRunCanvas()
@@ -1727,6 +1744,9 @@ def run_sync(
         manifest_path = None
     else:
         api = capi
+        manifest_path = manifest_lib.migrate_legacy_manifest(
+            repo_path, config.config_path
+        )
         manifest = manifest_lib.load(manifest_path)
         course = capi.get_course(config)
     matcher = load_ignore_matcher(repo_path)
@@ -1759,7 +1779,7 @@ def run_sync(
 
     assignment_group_ids = api.get_assignment_group_ids(course)
 
-    course_flags = load_course_flags(repo_path, _settings_dict)
+    course_flags = load_course_flags(repo_path, _settings_dict, config)
     due_dates = filter_due_dates_by_flags(load_due_dates(repo_path, _settings_dict), course_flags)
 
     ctx = SyncContext(
@@ -1905,7 +1925,7 @@ def run_prune(config: Config, repo_path: Path, mode: str) -> bool:
     object (and question banks, which have no unpublish concept) are skipped with a
     warning and keep their manifest entry. Returns True if any errors occurred.
     """
-    manifest_path = repo_path / ".canvas-manifest.toml"
+    manifest_path = manifest_lib.migrate_legacy_manifest(repo_path, config.config_path)
     manifest = manifest_lib.load(manifest_path)
 
     # Canvas-only modules (module_order.toml entries cached under
@@ -3186,7 +3206,7 @@ def run_targeted_sync(
     -s (single_targets) runs second, independently: no BFS, no dependency on -t's visited set.
     If -t already uploaded a file and updated its manifest timestamp, -s will skip it via needs_sync.
     """
-    manifest_path = repo_path / ".canvas-manifest.toml"
+    manifest_path = manifest_lib.migrate_legacy_manifest(repo_path, config.config_path)
     manifest = manifest_lib.load(manifest_path)
     course = capi.get_course(config)
     snippets_dir = repo_path / "snippets"
@@ -3199,7 +3219,7 @@ def run_targeted_sync(
     rubric_ids = capi.get_rubric_ids(course)
     _targeted_order_entries = _load_module_order(repo_path)
     _targeted_position_map = _local_module_positions(_targeted_order_entries)
-    course_flags = load_course_flags(repo_path)
+    course_flags = load_course_flags(repo_path, config=config)
     due_dates = filter_due_dates_by_flags(load_due_dates(repo_path), course_flags)
     pinned = load_pinned_resources(repo_path)
 

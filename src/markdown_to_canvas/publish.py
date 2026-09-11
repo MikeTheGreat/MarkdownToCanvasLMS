@@ -20,6 +20,7 @@ from typing import Any
 import yaml
 
 from .conditionals import apply_conditionals, resolve_published_if
+from .config import Config
 from .convert import (
     apply_outside_fences,
     expand_frontmatter_snippets,
@@ -680,7 +681,9 @@ def _render_index(
 # Staging orchestration
 # ---------------------------------------------------------------------------
 
-def stage(repo: Path, staging_dir: Path) -> dict[str, Any]:
+def stage(
+    repo: Path, staging_dir: Path, config: Config | None = None
+) -> dict[str, Any]:
     """Write the full MkDocs staging tree (mkdocs.yml + docs/ + overrides/).
 
     Returns a small info dict (site_name, content counts, staged file paths)
@@ -696,7 +699,7 @@ def stage(repo: Path, staging_dir: Path) -> dict[str, Any]:
     (staging_dir / "overrides").mkdir(parents=True, exist_ok=True)
 
     site_name = load_site_name(repo)
-    flags = load_course_flags(repo)
+    flags = load_course_flags(repo, config=config)
     errors: list[str] = []
 
     syllabus = _find_syllabus(repo, flags)
@@ -888,8 +891,15 @@ def _run_mkdocs(args: list[str], staging_dir: Path, cwd: Path) -> None:
 def run_publish(
     course_dir: Path,
     output_dir: Path,
+    config: Config | None = None,
 ) -> None:
-    """Top-level entry point for the `publish` subcommand."""
+    """Top-level entry point for the `publish` subcommand.
+
+    ``config`` supplies the [course_flags] overrides of the canvas.toml this
+    site is being built for (see sync.load_course_flags); None means only the
+    flags in course_settings.toml apply. publish never contacts Canvas, so the
+    rest of the config is unused and no API token is needed.
+    """
     repo = Path(course_dir).resolve()
     if not repo.is_dir():
         raise ValueError(f"Course directory not found: {course_dir}")
@@ -897,7 +907,7 @@ def run_publish(
     staging_dir = Path(tempfile.mkdtemp(prefix="g2c-publish-"))
     print(f"Staging site in: {staging_dir}")
     try:
-        info = stage(repo, staging_dir)
+        info = stage(repo, staging_dir, config)
         print(f"Site: {info['site_name']}  ({info['module_count']} module(s), "
               f"{len(info['staged_files'])} content file(s))")
 

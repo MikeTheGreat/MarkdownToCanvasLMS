@@ -6,6 +6,16 @@ If you think the user is doing any of the following please stop an confirm with 
 * User asks you to do work on something that's in a different project / directory
 * User asks you about a feature that doesn't exist in this project
 
+## Check for existing features before building a new one
+
+This tool has more features than the user can keep in his head, so a request for
+a "new" feature may already be covered by something that exists. Before starting
+any feature work, read through the existing feature set (README.md, the CLI
+options in `src/markdown_to_canvas/cli.py`, ARCHITECTURE.md) and tell the user
+about any existing command, option, or mechanism that could do the job or get
+part of the way there. Then let him decide whether to use it or build the new
+thing.
+
 ## Errors caused by input files: diagnose before fixing
 
 When the user reports an error, first check whether the problem is in the user's input files (e.g., wrong relative paths in their course repo) rather than a bug in this tool's code. If the root cause is in the input files, stop and tell the user before making any code changes.

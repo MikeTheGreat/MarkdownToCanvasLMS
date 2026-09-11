@@ -362,7 +362,7 @@ def _mock_item(item_id: int) -> MagicMock:
 @pytest.fixture
 def course_root(tmp_path: Path) -> Path:
     root = tmp_path / "course"
-    shutil.copytree(FIXTURES, root, ignore=shutil.ignore_patterns(".canvas-manifest.toml"))
+    shutil.copytree(FIXTURES, root, ignore=shutil.ignore_patterns(".manifest-canvas.toml"))
     return root
 
 
@@ -394,7 +394,7 @@ def test_due_dates_override_assignment(course_root: Path) -> None:
     stub_page = _mock_page(99999, "syllabus-stub")
     course.create_page.return_value = stub_page
 
-    manifest_path = course_root / ".canvas-manifest.toml"
+    manifest_path = course_root / ".manifest-canvas.toml"
     manifest = manifest_lib.load(manifest_path)
     md_file = course_root / "assignments" / "week1.md"
     snippets_dir = course_root / "snippets"
@@ -426,7 +426,7 @@ def test_due_dates_override_discussion(course_root: Path) -> None:
     discussion = _mock_discussion(55555)
     course.create_discussion_topic.return_value = discussion
 
-    manifest_path = course_root / ".canvas-manifest.toml"
+    manifest_path = course_root / ".manifest-canvas.toml"
     manifest = manifest_lib.load(manifest_path)
     md_file = course_root / "discussions" / "week1-intro.md"
     snippets_dir = course_root / "snippets"
@@ -461,7 +461,7 @@ def test_none_sentinel_clears_dates_on_canvas(course_root: Path) -> None:
     stub_page = _mock_page(99999, "syllabus-stub")
     course.create_page.return_value = stub_page
 
-    manifest_path = course_root / ".canvas-manifest.toml"
+    manifest_path = course_root / ".manifest-canvas.toml"
     manifest = manifest_lib.load(manifest_path)
     md_file = course_root / "assignments" / "week1.md"
     snippets_dir = course_root / "snippets"
@@ -496,7 +496,7 @@ def test_create_none_then_keep_on_create(course_root: Path) -> None:
     stub_page = _mock_page(99999, "syllabus-stub")
     course.create_page.return_value = stub_page
 
-    manifest_path = course_root / ".canvas-manifest.toml"
+    manifest_path = course_root / ".manifest-canvas.toml"
     manifest = manifest_lib.load(manifest_path)
     md_file = course_root / "assignments" / "week1.md"
     snippets_dir = course_root / "snippets"
@@ -533,7 +533,7 @@ def test_create_none_then_keep_on_update(course_root: Path) -> None:
     stub_page = _mock_page(99999, "syllabus-stub")
     course.create_page.return_value = stub_page
 
-    manifest_path = course_root / ".canvas-manifest.toml"
+    manifest_path = course_root / ".manifest-canvas.toml"
     manifest = manifest_lib.load(manifest_path)
     # Pre-populate manifest so it's treated as an update
     from markdown_to_canvas import manifest as mlib
@@ -583,7 +583,7 @@ def test_bad_request_retries_without_dates(course_root: Path) -> None:
     stub_page = _mock_page(99999, "syllabus-stub")
     course.create_page.return_value = stub_page
 
-    manifest_path = course_root / ".canvas-manifest.toml"
+    manifest_path = course_root / ".manifest-canvas.toml"
     manifest = manifest_lib.load(manifest_path)
     md_file = course_root / "assignments" / "week1.md"
     snippets_dir = course_root / "snippets"
@@ -619,7 +619,7 @@ def test_empty_string_warning_in_errors(course_root: Path) -> None:
     stub_page = _mock_page(99999, "syllabus-stub")
     course.create_page.return_value = stub_page
 
-    manifest_path = course_root / ".canvas-manifest.toml"
+    manifest_path = course_root / ".manifest-canvas.toml"
     manifest = manifest_lib.load(manifest_path)
     md_file = course_root / "assignments" / "week1.md"
     snippets_dir = course_root / "snippets"
@@ -1070,7 +1070,7 @@ def test_full_sync_records_resolved_dates(course_root: Path) -> None:
     course.create_assignment.return_value = _mock_assignment(98765)
     course.create_page.return_value = _mock_page(99999, "syllabus-stub")
 
-    manifest_path = course_root / ".canvas-manifest.toml"
+    manifest_path = course_root / ".manifest-canvas.toml"
     manifest = manifest_lib.load(manifest_path)
     ctx = SyncContext(
         course=course, repo_path=course_root, snippets_dir=course_root / "snippets",
@@ -1193,7 +1193,7 @@ def test_list_titles_output(tmp_path: Path) -> None:
 
     # Copy fixtures
     root = tmp_path / "course"
-    shutil.copytree(FIXTURES, root, ignore=shutil.ignore_patterns(".canvas-manifest.toml"))
+    shutil.copytree(FIXTURES, root, ignore=shutil.ignore_patterns(".manifest-canvas.toml"))
 
     runner = CliRunner()
     result = runner.invoke(main, ["list-titles", str(root)])
@@ -1210,7 +1210,7 @@ def test_list_titles_sorted_by_date(tmp_path: Path) -> None:
     from markdown_to_canvas.cli import main
 
     root = tmp_path / "course"
-    shutil.copytree(FIXTURES, root, ignore=shutil.ignore_patterns(".canvas-manifest.toml"))
+    shutil.copytree(FIXTURES, root, ignore=shutil.ignore_patterns(".manifest-canvas.toml"))
 
     runner = CliRunner()
     result = runner.invoke(main, ["list-titles", str(root)])
@@ -1225,7 +1225,7 @@ def test_list_titles_with_centralized_dates(tmp_path: Path) -> None:
     from markdown_to_canvas.cli import main
 
     root = tmp_path / "course"
-    shutil.copytree(FIXTURES, root, ignore=shutil.ignore_patterns(".canvas-manifest.toml"))
+    shutil.copytree(FIXTURES, root, ignore=shutil.ignore_patterns(".manifest-canvas.toml"))
 
     cs_dir = root / "course_settings"
     cs_dir.mkdir(exist_ok=True)

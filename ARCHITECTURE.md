@@ -13,7 +13,7 @@ git clone (local)
 
 // This tool:
 1. git pull                             (ensure local copy is up-to-date)
-2. load .canvas-manifest.toml           (into in-memory dict; single source of truth during the run)
+2. load .manifest-<config stem>.toml    (into in-memory dict; single source of truth during the run)
 2.1. build ignore matcher               (from optional .canvasignore at repo root; .gitignore is NOT consulted;
      any matched file/dir is skipped during discovery in every phase below)
 2.5. if course_settings/course_settings.toml exists: apply course metadata to Canvas (name, dates, flags, grading
@@ -128,7 +128,7 @@ assets/slides/week1.pdf
 
 **Ignore files:**
 
-An optional `.canvasignore` at the repo root controls which files are uploaded. Patterns use git's `gitwildmatch` syntax (via the [`pathspec`](https://pypi.org/project/pathspec/) library), so negation (`!`), `**`, anchoring, and directory-only patterns (`build/`) all behave as in git. `.gitignore` is deliberately **not** consulted: this lets a repo exclude per-term materials from git while still uploading them to Canvas. Content that should be excluded from both git and Canvas must be listed in both files (the duplication is expected and fine). Matching is applied at every discovery point (assets, content folders, quizzes, question banks, modules), matching repo-root-relative POSIX paths; a matched directory is pruned entirely (its contents are never walked). With no `.canvasignore` present, nothing is matched and every file is processed as before. The tool's own `.canvas-manifest.toml` is always excluded. Ignoring a file only stops future uploads — it does **not** prune anything already on Canvas (the file still exists locally and keeps its manifest entry; see the `prune` subcommand for removing content). Implemented in `ignore.py`.
+An optional `.canvasignore` at the repo root controls which files are uploaded. Patterns use git's `gitwildmatch` syntax (via the [`pathspec`](https://pypi.org/project/pathspec/) library), so negation (`!`), `**`, anchoring, and directory-only patterns (`build/`) all behave as in git. `.gitignore` is deliberately **not** consulted: this lets a repo exclude per-term materials from git while still uploading them to Canvas. Content that should be excluded from both git and Canvas must be listed in both files (the duplication is expected and fine). Matching is applied at every discovery point (assets, content folders, quizzes, question banks, modules), matching repo-root-relative POSIX paths; a matched directory is pruned entirely (its contents are never walked). With no `.canvasignore` present, nothing is matched and every file is processed as before. The tool's own manifests (`.manifest-*.toml`, plus the legacy `.canvas-manifest.toml`) are always excluded. Ignoring a file only stops future uploads — it does **not** prune anything already on Canvas (the file still exists locally and keeps its manifest entry; see the `prune` subcommand for removing content). Implemented in `ignore.py`.
 
 **Asset upload detail:**
 
@@ -281,7 +281,7 @@ Mechanism (see `run_sync(check_all=True)` in sync.py and `dryrun.py`):
   manifest is still populated with fake entries during the run (link
   rewriting, `annotatable_attachment` resolution, and module items read it),
   but `manifest_path=None` makes `manifest_lib.flush()`/`record()` skip the
-  disk write, so `.canvas-manifest.toml` is byte-identical afterwards.
+  disk write, so the manifest file is byte-identical afterwards.
 - **Output**: a `CHECK MODE` banner, then the normal pipeline output with
   action verbs softened via `ctx.check_only` ("Would upload:" instead of
   "Uploading:", `Link:` lines suppressed — the fake URLs mean nothing).
@@ -508,6 +508,29 @@ Everything else (classes, `data-*`, `target`, etc.) is dropped. If a block has n
 
 Fenced divs get one further step: if a div's attribute block ends up empty, the div wrapper itself (both the opening and closing `:::` fence lines) is removed and its content unwrapped, recursively for nested divs. Since Pandoc only ever emits fenced-div syntax for a `<div>` that has at least one attribute (an attribute-less div is passed through as raw HTML instead), fence pairing is done on the pre-simplification text — every opening fence line is guaranteed to have content, and every bare (attribute-less) `:::` line is unambiguously a closing fence.
 
+### Nested span collapsing (`_collapse_redundant_spans`)
+
+Runs immediately after `_simplify_pandoc_attrs()` in `_html_to_markdown()`, and cleans up what that pass leaves behind. Pandoc writes an inline `<span>` (and a `<div>` it cannot express as a fence) as `[content]{#id .class}`. Canvas nests several of these around exported content, so once the meaningless `{.class}` blocks are dropped what remains is a run of bare brackets carrying no formatting:
+
+```text
+[[[[[[[[[text]]]]]]]{#module_sequence_footer_container}]]
+```
+
+The pass keeps only the pairs that still mean something — the character immediately after the close is `(` (link), `[` (reference link), or `{` (an attribute block that survived) — and deletes the rest, yielding `[text]{#module_sequence_footer_container}`.
+
+**This is a performance fix, not cosmetics.** Pandoc parses nested bracketed spans by backtracking exponentially, measured at roughly 3x per level: 3 levels 0.07s, 5 levels 0.59s, 7 levels 4.9s, 8 levels 14.7s, 9 levels several minutes — on a 691-byte file, on every conversion of it, forever. One such file in a real course repo made a `find-local-orphans` run take 5 minutes instead of 5 seconds (see the orphan-detection section).
+
+Safety rules, in order of how much they matter:
+
+- **Only contiguous runs of two or more `[`.** A lone `[text]` is left alone: it is indistinguishable from prose the author wrote (`the value at position [0]`) and costs nothing to parse. This is the single rule that makes the pass safe to run unconditionally.
+- **Fenced code blocks and inline code spans are skipped** (`apply_outside_fences` plus an inline-backtick scan). `a[i][j]` and `m[[0]]` are real content in a programming course.
+- **Escaped brackets are skipped.** This is what makes the pass lossless in the import pipeline specifically: pandoc *escapes* author-typed literal brackets when writing Markdown (`<p>literal [[x]]</p>` → `literal \[\[x\]\]`), so an unescaped run is always pandoc's own span markup and never author content. Outside the importer that guarantee would not hold, which is why this lives in `imscc_import.py` rather than `convert.py`.
+- **Unbalanced runs are left alone.** `_match_bracket_run()` returns `None` when it cannot pair every open in the run, and the caller skips it rather than guessing. (The mismatched real-world case — 9 opens, 7 closes, an id, then 2 closes — *is* balanced overall and is handled.)
+
+The pass is idempotent, and a run may span a line break (`[[[[[[[[[Thanks!\n--Mike]]]]]]]]]` is one run).
+
+Repos imported before this pass existed can still contain such runs; nothing rewrites them retroactively, but `find-local-orphans` names the offending file and says to check for nested `[]`s.
+
 ### Module file generation
 
 - `ContextModuleSubHeader` indent 0 → `## Title` heading
@@ -573,7 +596,7 @@ Two keys look droppable and are not: `group_weighting_scheme` is absent from `_C
 
 ### Key behaviours
 
-- **No `.canvas-manifest.toml` written** — IMSCC `gXXX` identifiers are not real Canvas numeric IDs; the first `sync` run creates all items and populates the manifest with real IDs.
+- **No manifest written** — IMSCC `gXXX` identifiers are not real Canvas numeric IDs; the first `sync` run creates all items and populates the manifest with real IDs.
 - **`course_settings/` directory** — `course_settings.toml`, `canvas.toml`, syllabus, events, and any other converted content land here.
 - **`course_settings/course_settings.toml`** — all course-wide settings, alongside the rest of the course-settings files.
 - **Centralized due dates** — during import, `due_at`/`lock_at`/`unlock_at` fields from assignments, discussions, and quizzes are collected into a `due_dates` inline-table array in `course_settings/course_settings.toml`. The individual `.md` files have these fields commented out (with a note pointing to the centralized file). During `update`/`publish`, centralized `due_dates` entries override any frontmatter dates; matching is by title (with an optional `type` field for disambiguation). Unmatched entries produce a warning. Each date field supports sentinel values (case-insensitive): `"NONE"` actively clears the date on Canvas; `"KEEP"` leaves whatever Canvas currently has; `""` (empty string) behaves like KEEP but prints a warning; `"CREATE_NONE_THEN_KEEP"` clears the date when creating a new item but leaves it alone on subsequent updates. If Canvas rejects due dates (e.g. due_at outside availability window), the tool retries without dates and prints a warning.
@@ -603,7 +626,7 @@ Generates a public [MkDocs](https://www.mkdocs.org/) + [Material](https://squidf
 static website from the local course repo and optionally deploys it to GitHub
 Pages. The site mirrors Canvas's left-sidebar navigation model so it feels
 familiar, without exposing any student data. This is a read-only export — it
-never touches Canvas, the API, or `.canvas-manifest.toml`.
+never touches Canvas, the API, or the manifest.
 
 ```text
 markdown-to-canvas publish [COURSE_DIR] [--output-dir site] [--deploy] [--emit-workflow]
@@ -705,8 +728,13 @@ check, which is correct — only typed input carries the intent.
    for files/directories that haven't been `git add`ed yet). Handles
    case-only renames (e.g. `Unit-01` → `unit-01`) via a temporary
    intermediate name.
-2. **`.canvas-manifest.toml`** — renames top-level keys for moved files and
-   updates `canvas_item_ids` sub-tables inside module entries.
+2. **Every manifest in the repo root** — `find_manifests()` globs
+   `.manifest-*.toml` (plus a legacy `.canvas-manifest.toml` if present) and
+   `compute_all_manifest_updates()` rewrites each one that changes: top-level
+   keys for moved files, and `canvas_item_ids` sub-tables inside module
+   entries. `mv` has no `--config` and a rename is a repo-wide fact, so all of
+   the repo's courses are updated in one go; the summary line names the files
+   when more than one changed.
 3. **All `.md` files in the repo** — rewrites relative Markdown links
    (`[text](path)`, `![alt](path)`) and inline snippet references
    (`$path.md$`) that point to moved files. Also adjusts outbound links inside
@@ -739,6 +767,132 @@ check, which is correct — only typed input carries the intent.
 
 This subcommand is purely local — it never contacts Canvas. Run `update` after
 moving files to push the changes.
+
+## Orphan detection (`find-local-orphans` / `find-canvas-orphans`)
+
+Two independent implementations of "what does nothing point at?", from opposite
+sides. Both are read-only reports and both are **non-transitive**: only zero
+inbound references count, so an asset linked from an orphaned page is not
+itself an orphan. Reachability from the module roots is future work (TODO.md).
+
+`find-canvas-orphans` (`orphans.py`) queries the live course: it fetches pages,
+assignments, discussions and quizzes, regex-scans their HTML for
+`/courses/<id>/{pages,assignments,discussion_topics,quizzes,files,modules}/…`
+references (`extract_canvas_refs`), adds module item membership, the front page
+and the syllabus, and reports every fetched resource not in the referenced set.
+Note that Canvas **files** are collected as reference *targets* but never
+enumerated as candidates, so an uploaded-but-unlinked Canvas file is not
+reported (see TODO.md).
+
+`find-local-orphans` (`local_orphans.py`) never contacts Canvas — no config
+file is read beyond `course_settings.toml`, and no API token is needed. It
+computes `candidates - referenced` over repo-root-relative keys (the same keys
+the manifest uses).
+
+**Candidates** (`collect_candidates`) — what may be reported:
+
+| Source | Key |
+| --- | --- |
+| `assets/**` | every file, recursively |
+| content folders (repo root dirs minus `{assets, modules, quizzes, snippets, course_settings, question_banks}` and dotdirs) | every `.md`, recursively |
+| `quizzes/<name>/` | `quizzes/<name>/<name>.md` — one candidate per quiz |
+
+Never candidates, and each for its own reason: `snippets/` (a library file;
+"unused this term" is not a deletion signal — the user's explicit call),
+`modules/` and `course_settings/` (the roots — nothing in a repo links *to*
+them), and `question_banks/` (quizzes embed their questions inline; the format
+has no "draw N from bank X" reference, so every bank would be reported every
+run). A quiz is one unit keyed by its main file rather than per question file,
+matching how `load_pinned_resources` validates quiz pins.
+
+**Reference sources** (`collect_sources` → `collect_local_refs`) — what is
+scanned, dispatched on the top-level folder:
+
+| Folder | Extraction |
+| --- | --- |
+| content, `snippets/`, `course_settings/syllabus.md` | `parse_frontmatter` → `expand_frontmatter_snippets` → `preprocess_snippets` → `markdown_to_html` → `extract_local_refs()`, plus the frontmatter `annotatable_attachment` path |
+| `modules/` | `parse_module_body()`, taking `local_path` of every `type == "content"` item |
+| `quizzes/` | `split_quiz_body()` for the question list, then the same HTML pass over the description and each question file |
+| `question_banks/` | each `questions/*.md` through the content path |
+| `assets/` | nothing (binary leaves) |
+
+`course_settings.toml` contributes `front_page` and `dashboard_image` as direct
+references, plus `pinned_resources` — returned separately by
+`collect_settings_refs` because a pin may name a folder, which needs
+`find_pinned_match()`'s prefix rule against each candidate rather than a set
+lookup. `due_dates` contributes nothing: those entries match content by title,
+not by path.
+
+**`collect_local_refs` overlaps `sync._get_file_refs` deliberately and must not
+be merged with it.** `_get_file_refs` drives targeted-sync BFS, where quizzes
+intentionally return no refs (see its TODO). Here quizzes *must* be followed —
+otherwise every asset used only inside a quiz would be reported as an orphan.
+The two have different correctness requirements for the same-looking question.
+
+**Conservative by construction**, in three places:
+
+- Course-flag conditionals are **not** applied, so a link in a currently-false
+  `#if` branch still counts — same conservative-superset stance as
+  `_get_file_refs` and the `_phase_modules` pre-scan. Turning a flag off never
+  makes content look deletable.
+- `pinned_resources` entries count as referenced, so a pinned live quiz is
+  never reported.
+- Parse and conversion failures are **reported** instead of dropping the file's
+  links silently. A malformed-frontmatter file has its `---` block stripped
+  textually and its body probed anyway (Pandoc parses a leading `---` fence as
+  YAML metadata and dies on the same content, so the block must go). A module
+  item resolving outside the repo, a Pandoc failure, or a conversion timeout
+  appends `(local_key, message)` to `report.errors` rather than manufacturing
+  orphans. `_print_errors()` renders that list **last**, after the findings,
+  since each entry means the orphan list above may name a file that is really
+  referenced.
+
+**Conversion timeout.** `_to_html()` calls `markdown_to_html(..., timeout=_PANDOC_TIMEOUT_SECONDS)`
+(20s). Pandoc parses nested bracketed spans by backtracking exponentially —
+measured at roughly 3x per level on real hardware: 3 levels 0.07s, 7 levels
+4.9s, 9 levels several minutes on a 691-byte file. Runs like that are Canvas
+export artifacts (see `_collapse_redundant_spans` below). `update` rarely trips
+over one because its mtime staleness gate converts only changed files; this
+command has no manifest and re-converts everything every run, so one such file
+dominated a whole scan (measured: 5m00s total, ~4.5m of it in one file, 5.4s
+after that file was fixed). The timeout turns that into a named error line
+(`timed out after 20s - check for nested []s`) instead of a stall.
+
+`_quiet()` (a `redirect_stdout` context manager) swallows parser chatter during
+the scan — snippet-resolution errors, module indent warnings. Those belong to
+`update`, which reports them properly; repeating them here would bury the
+finding.
+
+**`-v` / `--verbose`.** `find_local_orphans()` returns a `LocalOrphanReport`
+(`orphans`, `referenced`, `warnings`) rather than a bare orphan list, because
+the scan already knows the inbound edges and throwing them away would mean
+re-scanning to explain a result. `referenced` maps each referenced candidate to
+the sorted keys of everything referring to it, built by accumulating
+`referrers[key].add(source_key)` as each source is scanned. `orphans` and
+`referenced` **partition the candidate set** — every candidate is in exactly one
+— so the two counts always add up to the number of candidates, and
+non-candidates (snippets, modules, course settings, question banks) appear in
+neither: listing them as "referenced" would imply they could otherwise have been
+reported. Settings-derived references are credited to
+`course_settings/course_settings.toml`; a pin is credited to that path with a
+`(pinned_resources)` suffix, since a pin is not a link but *is* what keeps the
+file off the orphan list. `print_report(report, verbose=False)` renders the
+referenced section first so the orphan list stays at the bottom of the output,
+and always leads with `_SCOPE_NOTE` naming the four folder classes that are
+never listed — an empty report otherwise reads as "everything is referenced".
+
+### Bounded Markdown conversion (`markdown_to_html(text, timeout=...)`)
+
+`convert.markdown_to_html()` has two conversion paths. With no `timeout` it
+calls `pypandoc.convert_text()` as before — that is what every upload path uses,
+since a silent partial result would be worse than a slow one for a file the user
+is actively syncing. With a `timeout` it calls pandoc directly via
+`subprocess.run` (`_convert_with_timeout`), because pypandoc exposes no timeout,
+and raises `subprocess.TimeoutExpired` past the deadline. The pandoc flags live
+in `_PANDOC_FROM` / `_PANDOC_TO` / `_PANDOC_EXTRA_ARGS` so both paths share one
+definition, and `test_convert.py` asserts both return byte-identical HTML for a
+representative document — the two paths must not drift. Only
+`find-local-orphans` passes a timeout today.
 
 ## Configuration
 
@@ -1174,12 +1328,16 @@ published: true
 - If any item cannot be added (e.g., its file was never synced so it has no manifest entry), the module's manifest entry is written **without** `last_synced` (`record(..., mark_synced=False)`) — the Canvas ID is kept so the next run updates the same module instead of duplicating it, but the module stays stale and is retried on the next `update`.
 - **Module-publish cascade conflict warning:** In Canvas a module's publish state cascades to its contents — `create_or_update_module(..., published=False)` (from a module file's `published: false` frontmatter) unpublishes not just the module but the underlying content of every item in it (pages, assignments, discussions, quizzes). Content is synced *before* modules, so a page uploaded with `published: true` is silently flipped back to unpublished when its module syncs — the module always wins, and the run still reports success. `_warn_module_publish_conflicts(ctx, title, items)` (called from `_sync_module()` only when the module's own `published` is `False`) surfaces this: for each `content` item whose `local_path` ends in `.md` and whose resolved `published` is `True`, it prints an inline `WARNING` and appends `(module_title, item_title, local_key)` to `ctx.publish_conflicts`, which `_print_publish_conflicts_summary()` lists at the end of the run (a **soft** warning like pinned/unpublishable — never added to `ctx.errors`, so the run still succeeds). Only `.md` content is checked: assets (Files) have no `published:` frontmatter to conflict with (their historical module-item default is "published", but there is no stated intent for the module to override), and ExternalUrl/SubHeader items have no underlying content. The check runs on parsed frontmatter, so it fires in `update --check-all` (dry-run) too. Sibling items do **not** affect each other, and links between files do **not** change publish state — the module-level cascade is the only cross-resource publish interaction, so it is the only conflict warned about.
 
-### Manifest file (`.canvas-manifest.toml`)
+### Manifest file (`.manifest-<config stem>.toml`)
 
-The tool maintains a `.canvas-manifest.toml` in the course repo that maps local file paths to their Canvas IDs. The tool reads this file to decide whether to create or update, and writes to it after each successful publish.
+The tool maintains a manifest in the course repo that maps local file paths to their Canvas IDs. The tool reads this file to decide whether to create or update, and writes to it after each successful publish.
+
+**One manifest per `canvas.toml`.** The file name is derived from the config in use (`manifest.manifest_name_for(config_path)`): `course_settings/canvas.toml` → `.manifest-canvas.toml`, `course_settings/canvas-sec-a.toml` → `.manifest-canvas-sec-a.toml`. `Config.config_path` carries the path `config.load()` read, and `run_sync`/`run_targeted_sync`/`run_prune` derive the manifest path from it, so pointing `--config` at a second course (another section, a sandbox) keeps two independent sets of Canvas IDs and `last_synced` times in one repo. `find-canvas-orphans` takes `--config` too but reads no manifest; `publish` and `import` touch none.
+
+**Legacy migration:** repos written before per-config manifests have a single `.canvas-manifest.toml`. `manifest.migrate_legacy_manifest(repo_path, config_path)` renames it to `.manifest-canvas.toml` on the next `update`/`prune` run and prints a one-line notice. It fires only for the default config and only when the new name doesn't already exist — a run pointed at some other `canvas.toml` must not adopt the default course's Canvas IDs. `ignore.py` always ignores both `.manifest-*.toml` and the legacy name, so no manifest is ever treated as uploadable content.
 
 ```toml
-# .canvas-manifest.toml — commit this file so collaborators share the same Canvas ID mapping
+# .manifest-canvas.toml — commit this file so collaborators share the same Canvas ID mapping
 
 ["pages/syllabus.md"]
 canvas_id = 11111
@@ -1334,6 +1492,8 @@ Editing a snippet file (body or frontmatter form) automatically marks every file
 
 Boolean flags in the optional `[course_flags]` table of `course_settings.toml` gate regions of Markdown body content via C-preprocessor-style HTML-comment directives (`<!-- #if flag -->` / `#elif` / `#else` / `#endif`, each alone on its own line). Implemented in `conditionals.py`; the original design rationale (including settled decisions and future work) is in `DESIGN-course-flags.md`.
 
+**Per-config overrides (`[course_flags]` in `canvas.toml`):** a `canvas.toml` may carry its own `[course_flags]` table. `config.load()` validates it with `validate_course_flags(table, source)` — the same function `load_course_flags()` uses for `course_settings.toml`, so both files enforce the same name/boolean rules and the error names the offending file — and stores it on `Config.course_flags`. `sync.load_course_flags(repo_path, settings=None, config=None)` then starts from the `course_settings.toml` table and `dict.update()`s the config's on top: same-named flag → the `canvas.toml` value wins, flags in only one file are kept (union). This is what makes `--config` a per-section switch: flags reach `#if`, `published_if` and due_dates `only_if`, so one repo can drive sections that differ in text, publish state and dates while sharing the rest of `course_settings.toml` (course name, grading standards, assignment groups, late policy, tabs — none of which can vary per config). Because each config also has its own manifest, the `flags_used` values recorded per file are per section and flipping between sections never forces a re-sync of the other one. When the config contributes any flags, `load_course_flags()` prints a `Flags:` line naming the file and, if any override changed a value, a second line listing the shadowed names. `publish` and `list-titles` take `--config` for the flags alone: `cli._flags_config()` loads it with `require_token=False, require_course=False` (an explicit `--config` must exist; the default `<repo>/course_settings/canvas.toml` is optional), and `run_publish`/`stage` thread it into `load_course_flags`. `mv` and `find-local-orphans` need no flags.
+
 **Module surface (`conditionals.py`):**
 
 - `apply_conditionals(text, flags, source_desc, errors=None, *, quiet=False) -> str | None` — evaluates directives, returns the filtered text, or `None` if any directive error occurred (caller must skip the file). Errors are reported through the usual `warn(msg, errors)` convention; `quiet=True` suppresses reporting for passive probes (used by `publish.collect_reachable`, which must not double-report errors that staging will report anyway). Directive lines and false-branch lines are removed **entirely** (no blank line left behind — that's what keeps a conditional list item inside one tight list).
@@ -1345,7 +1505,7 @@ Boolean flags in the optional `[course_flags]` table of `course_settings.toml` g
 
 **Pipeline placement:** the pass runs on each body immediately after `parse_frontmatter`/`expand_frontmatter_snippets` and **before** `preprocess_snippets` — so a snippet ref inside a false branch is removed before snippet expansion (a broken snippet path in a dormant branch reports nothing), and before all structural line parsers (module items, quiz question lists, question sections), which is what makes conditional module items / quiz questions work with no parser changes. `preprocess_snippets()` additionally takes a `flags` param and applies the pass to each snippet's content at insertion time (both block and `$inline.md$` forms; a snippet whose directives error contributes an error and the ref is left unexpanded). Consequence: directives must be balanced within each file and within each snippet file independently. Frontmatter is never processed (YAML; no use case). Loaded once per run by `load_course_flags(repo_path, settings=None)` in `sync.py` (mirrors `load_due_dates`; invalid flag name or non-boolean value raises `ValueError` → `die()`), threaded through `SyncContext.flags`.
 
-**Call sites:** `_sync_content_file()` (pages/assignments/discussions/announcements), `_sync_module()`, `sync_syllabus()`, `parse_quiz_file()`/`parse_question_file()` (via `flags`/`source_desc`/`errors` params, covering quizzes and question banks), and in `publish.py`: `stage_content_markdown()`, `render_module_overview()`, `render_quiz_study_guide()`, `collect_reachable()`, `_render_index()`. `publish` uses the **same** flag values as `update` (no per-target overrides in v1). Two passive probes intentionally do *not* apply conditionals and work on the conservative superset instead: the `_phase_modules` pre-scan and `_get_file_refs()` (targeted-sync BFS) — at worst they re-sync/visit a file that active content no longer references, and the real per-file pass reports any errors exactly once.
+**Call sites:** `_sync_content_file()` (pages/assignments/discussions/announcements), `_sync_module()`, `sync_syllabus()`, `parse_quiz_file()`/`parse_question_file()` (via `flags`/`source_desc`/`errors` params, covering quizzes and question banks), and in `publish.py`: `stage_content_markdown()`, `render_module_overview()`, `render_quiz_study_guide()`, `collect_reachable()`, `_render_index()`. `publish` uses the **same** flag values as `update` (no per-target overrides in v1). Three passive probes intentionally do *not* apply conditionals and work on the conservative superset instead: the `_phase_modules` pre-scan, `_get_file_refs()` (targeted-sync BFS), and `local_orphans.collect_local_refs()` (`find-local-orphans`) — at worst the first two re-sync/visit a file that active content no longer references, and the third counts a link in a false branch as a real reference so flipping a flag off never makes content look deletable. The real per-file pass reports any errors exactly once.
 
 **Error handling:** every directive problem (undefined flag, misspelled keyword, missing/unexpected/malformed argument, unbalanced structure — see the README's syntax guide or `DESIGN-course-flags.md` §7 for the full table) is a per-file hard error: reported via `warn()` with the repo-relative path and the offending line, the file is skipped (no upload / not staged), the run continues, and the end-of-run summary fails the run. In `publish`, staging errors are collected into the `stage()` info dict and `run_publish()` raises `ValueError` (→ `die()`) before building the site. Fatal whole-run errors (via `ValueError` → `die()`): non-boolean value or invalid name in `[course_flags]`.
 
@@ -1353,7 +1513,7 @@ Boolean flags in the optional `[course_flags]` table of `course_settings.toml` g
 
 **Unused-flag warning:** after the content pass, `check_course_flags_coverage()` (mirroring `_check_due_dates_coverage()`) scans every `.md` in the repo (including snippets — a flag referenced only inside a snippet counts as used), unions `find_referenced_flags()`, and warns once per defined-but-unreferenced flag. Warning only, never an error (defining a flag before writing the content that uses it is legitimate). Runs in `update` (full and targeted) and `publish`.
 
-**Subcommand matrix:** `update` — full feature; `publish` — same pass, same flag values, same hard errors (file skipped from the site) and unused-flag warning, no manifest/staleness work; `import` — no change (the importer never generates directives); `mv` — no change (entry re-keyed wholesale); `find-orphans`/`prune` — no change (manifest/file-presence based).
+**Subcommand matrix:** `update` — full feature; `publish` — same pass, same flag values, same hard errors (file skipped from the site) and unused-flag warning, no manifest/staleness work; `import` — no change (the importer never generates directives); `mv` — no change (entry re-keyed wholesale); `find-canvas-orphans`/`prune` — no change (Canvas-side / manifest/file-presence based); `find-local-orphans` — scans content but deliberately does not apply directives (conservative superset, above).
 
 **Future work** (spec'd in `DESIGN-course-flags.md` §12, tracked in TODO.md): whole-resource exclusion via delete/prune (as opposed to the unpublish-based `published_if` below), `--flag` CLI overrides, richer conditions (`and`/`or`, non-boolean values), and a `list-flags` report.
 

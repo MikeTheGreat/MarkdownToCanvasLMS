@@ -88,7 +88,7 @@ def _mock_item(item_id: int) -> MagicMock:
 def course_root(tmp_path: Path) -> Path:
     """Isolated copy of fixtures so tests never write manifest to the fixtures dir."""
     root = tmp_path / "course"
-    shutil.copytree(FIXTURES, root, ignore=shutil.ignore_patterns(".canvas-manifest.toml"))
+    shutil.copytree(FIXTURES, root, ignore=shutil.ignore_patterns(".manifest-canvas.toml"))
     return root
 
 
@@ -5483,3 +5483,54 @@ def test_pinned_question_file_stops_update_before_any_upload(
     # ...and no quiz was touched.
     mock_course.create_quiz.assert_not_called()
     mock_course.get_quiz.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Per-config manifests: one repo driving several Canvas courses
+# ---------------------------------------------------------------------------
+
+
+def _manifest_bytes(local_key: str, canvas_id: int) -> bytes:
+    return (
+        f'["{local_key}"]\ncanvas_id = {canvas_id}\ncanvas_type = "page"\n'
+        f'last_synced = "2025-01-01T00:00:00+00:00"\n'
+    ).encode()
+
+
+def test_prune_uses_the_manifest_named_by_its_config(tmp_path) -> None:
+    """Each canvas.toml owns its own manifest, so a run against section A's
+    config never touches section B's Canvas IDs."""
+    root = _prune_repo(tmp_path)
+    (root / ".manifest-canvas-sec-a.toml").write_bytes(_manifest_bytes("pages/gone.md", 11))
+    other = root / ".manifest-canvas-sec-b.toml"
+    other.write_bytes(_manifest_bytes("pages/gone.md", 22))
+
+    cfg = Config(
+        base_url="https://school.instructure.com",
+        course_id=COURSE_ID,
+        api_token="tok",
+        config_path=root / "course_settings" / "canvas-sec-a.toml",
+    )
+    assert run_prune(cfg, root, mode="manifest") is False
+
+    from markdown_to_canvas import manifest as manifest_lib
+
+    assert manifest_lib.load(root / ".manifest-canvas-sec-a.toml") == {}
+    assert manifest_lib.load(other)["pages/gone.md"]["canvas_id"] == 22
+
+
+def test_prune_migrates_legacy_manifest_for_default_config(tmp_path, capsys) -> None:
+    """A repo written by an older version keeps working: .canvas-manifest.toml
+    is renamed to the default config's manifest name."""
+    root = _prune_repo(tmp_path)
+    legacy = root / ".canvas-manifest.toml"
+    legacy.write_bytes(_manifest_bytes("pages/kept.md", 33))
+
+    assert run_prune(_config(), root, mode="manifest") is False
+
+    from markdown_to_canvas import manifest as manifest_lib
+
+    assert not legacy.exists()
+    migrated = root / ".manifest-canvas.toml"
+    assert manifest_lib.load(migrated)["pages/kept.md"]["canvas_id"] == 33
+    assert ".canvas-manifest.toml → .manifest-canvas.toml" in capsys.readouterr().out

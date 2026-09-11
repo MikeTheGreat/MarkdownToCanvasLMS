@@ -278,7 +278,7 @@ def test_manifest_without_section_hashes_migrates(tmp_path, mocker) -> None:
     """A pre-existing manifest entry lacking section_hashes (older tool version)
     re-runs all sections once when stale, then records hashes."""
     root = _make_repo(tmp_path)
-    manifest_path = root / ".canvas-manifest.toml"
+    manifest_path = root / ".manifest-canvas.toml"
     with manifest_path.open("wb") as f:
         tomli_w.dump(
             {
@@ -305,7 +305,7 @@ def test_manifest_without_section_hashes_migrates(tmp_path, mocker) -> None:
 def test_mv_preserves_resolved_dates(tmp_path) -> None:
     """mv re-keys the per-file entry wholesale; the resolved_dates cache rides along."""
     root = _make_repo(tmp_path)
-    manifest_path = root / ".canvas-manifest.toml"
+    manifest_path = root / ".manifest-canvas.toml"
     with manifest_path.open("wb") as f:
         tomli_w.dump(
             {

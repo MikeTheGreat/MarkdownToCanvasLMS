@@ -628,3 +628,40 @@ def test_find_referenced_snippets_ignores_refs_in_code_fences(tmp_path: Path) ->
     assert find_referenced_snippets(
         "[Tip](../snippets/tip.md)\n", source, snippets_dir
     ) == {snippet}
+
+
+# ---------------------------------------------------------------------------
+# markdown_to_html timeout path
+# ---------------------------------------------------------------------------
+
+
+class TestMarkdownToHtmlTimeout:
+    """The bounded path drives pandoc directly, so it must not drift."""
+
+    def test_both_paths_produce_identical_html(self):
+        from markdown_to_canvas.convert import markdown_to_html
+
+        doc = (
+            "# Heading\n\n"
+            "Text with *emphasis*, a [link](page.md) and ![img](a.png).\n\n"
+            "```python\ncode = [1, 2]\n```\n\n"
+            "> quote\n\n- a\n- b\n"
+        )
+        assert markdown_to_html(doc) == markdown_to_html(doc, timeout=60)
+
+    def test_timeout_raises_on_a_nested_bracket_run(self):
+        import subprocess
+
+        import pytest
+
+        from markdown_to_canvas.convert import markdown_to_html
+
+        # Pandoc backtracks exponentially here — roughly 3x per level.
+        nasty = "[" * 14 + "text" + "]" * 14
+        with pytest.raises(subprocess.TimeoutExpired):
+            markdown_to_html(nasty, timeout=1)
+
+    def test_no_timeout_by_default(self):
+        from markdown_to_canvas.convert import markdown_to_html
+
+        assert "<p>hi</p>" in markdown_to_html("hi")

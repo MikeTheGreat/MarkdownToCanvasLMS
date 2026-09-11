@@ -20,9 +20,11 @@ load_dotenv(find_dotenv(usecwd=True), override=True, verbose=True)
 
 
 from .canvas_api import get_course, read_tab_configuration
-from .config import find_repo_root
+from .config import Config, find_repo_root
 from .config import load as load_config
 from .imscc_import import run_import
+from .local_orphans import find_local_orphans
+from .local_orphans import print_report as print_local_orphan_report
 from .mv import run_mv
 from .orphans import find_orphans, print_report
 from .publish import run_publish
@@ -208,7 +210,7 @@ def mv_cmd(src: Path, dest: str, noop: bool, verbose: bool) -> None:
     same content-type directory (e.g. both under pages/, or both under
     assets/).
 
-    Updates .canvas-manifest.toml, all Markdown cross-references,
+    Updates every .manifest-*.toml, all Markdown cross-references,
     snippet references, and module_order.toml as needed.
 
     Uses git mv when inside a git repository.
@@ -240,6 +242,24 @@ def import_cmd(imscc_path: Path, output_dir: Path) -> None:
         die(str(e))
 
 
+def _flags_config(repo: Path, config: Path | None) -> Config | None:
+    """Load a canvas.toml for its [course_flags] table only.
+
+    Used by the subcommands that never contact Canvas (`publish`,
+    `list-titles`): an explicit --config must exist, while the default
+    <repo>/course_settings/canvas.toml is optional — a repo that only
+    publishes need not have one. No API token and no base_url/course_id
+    required (see config.load's require_course).
+    """
+    if config is None:
+        config = repo / "course_settings" / "canvas.toml"
+        if not config.exists():
+            return None
+    elif not config.exists():
+        die(f"Config file not found: {config}")
+    return load_config(config, require_token=False, require_course=False)
+
+
 @main.command(name="publish")
 @click.argument(
     "course_dir",
@@ -253,17 +273,28 @@ def import_cmd(imscc_path: Path, output_dir: Path) -> None:
     type=click.Path(path_type=Path),
     help="Where `mkdocs build` writes the static HTML (default: site/).",
 )
+@click.option(
+    "--config",
+    default=None,
+    type=click.Path(path_type=Path),
+    help=(
+        "Path to canvas.toml, read only for its [course_flags] table "
+        "(default: <repo>/course_settings/canvas.toml, if present)."
+    ),
+)
 def publish(
-    course_dir: Path | None, output_dir: Path
+    course_dir: Path | None, output_dir: Path, config: Path | None
 ) -> None:
     """Generate a public MkDocs static site from the course repo.
 
     COURSE_DIR is the course content repo. If omitted, the enclosing repo is
-    found by walking up from the current directory.
+    found by walking up from the current directory. --config selects which
+    section's course flags the site is built with; Canvas is never contacted.
     """
     course_dir = _resolve_repo(course_dir)
+    cfg = _flags_config(course_dir, config)
     try:
-        run_publish(course_dir, output_dir)
+        run_publish(course_dir, output_dir, cfg)
     except ValueError as e:
         die(str(e))
     except Exception as e:
@@ -350,7 +381,7 @@ def prune(repo: Path, config: Path | None, mode: str | None) -> None:
         click.secho("Prune successful", fg="green")
 
 
-@main.command(name="find-orphans")
+@main.command(name="find-canvas-orphans")
 @click.argument(
     "repo",
     default=".",
@@ -363,12 +394,13 @@ def prune(repo: Path, config: Path | None, mode: str | None) -> None:
     help="Path to canvas.toml (default: <repo>/course_settings/canvas.toml)",
 )
 @_handle_cli_errors
-def find_orphans_cmd(repo: Path, config: Path | None) -> None:
+def find_canvas_orphans_cmd(repo: Path, config: Path | None) -> None:
     """Find Canvas resources not referenced by any other resource in the course.
 
-    Scans all pages, assignments, discussions, and quizzes for internal links,
-    checks module item membership, and identifies the front page. Resources
-    with zero inbound references are reported.
+    Queries the live Canvas course: scans all pages, assignments, discussions,
+    and quizzes for internal links, checks module item membership, and
+    identifies the front page. Resources with zero inbound references are
+    reported. See find-local-orphans for the repo-side equivalent.
 
     REPO is the course content repo (defaults to the current directory).
     """
@@ -384,6 +416,46 @@ def find_orphans_cmd(repo: Path, config: Path | None) -> None:
 
     orphans = find_orphans(course)
     print_report(orphans, cfg.base_url)
+
+
+@main.command(name="find-local-orphans")
+@click.argument(
+    "repo",
+    default=".",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.option(
+    "-v",
+    "--verbose",
+    is_flag=True,
+    help="Also list every referenced file and what refers to it, before the "
+    "unreferenced ones.",
+)
+@_handle_cli_errors
+def find_local_orphans_cmd(repo: Path, verbose: bool) -> None:
+    """Find files in the course repo that nothing else in the repo references.
+
+    Reads the repo on disk only — no Canvas call, no API token needed. Scans
+    content files, modules, snippets, quizzes, question banks, the syllabus and
+    course_settings.toml for local links, then reports the assets, content files
+    and quizzes with zero inbound references.
+
+    Deliberately conservative: snippets, modules, course settings and question
+    banks are never reported, pinned resources count as referenced, and links
+    inside inactive course-flag branches still count. See find-canvas-orphans
+    for the live-course equivalent.
+
+    With -v, the referenced files and their referrers are listed first, so the
+    unreferenced ones end up at the bottom of the output.
+
+    REPO is the course content repo (defaults to the current directory).
+    """
+    _ensure_pandoc()
+    repo = repo.resolve()
+    click.echo(f"Repo: {repo}")
+    click.echo()
+
+    print_local_orphan_report(find_local_orphans(repo), verbose=verbose)
 
 
 def _parse_canvas_url(url: str) -> tuple[str, int]:
@@ -443,8 +515,6 @@ def create_tool_aliases(course_url: str) -> None:
     The output is a TOML tab_configuration block with external-tool labels
     filled in, ready to paste into course_settings/course_settings.toml.
     """
-    from .config import Config
-
     base_url, course_id = _parse_canvas_url(course_url)
     api_token = os.environ.get("CANVAS_API_TOKEN", "")
     if not api_token:
@@ -467,12 +537,22 @@ def create_tool_aliases(course_url: str) -> None:
     default=".",
     type=click.Path(exists=True, file_okay=False, path_type=Path),
 )
-def list_titles(repo: Path) -> None:
+@click.option(
+    "--config",
+    default=None,
+    type=click.Path(path_type=Path),
+    help=(
+        "Path to canvas.toml, read only for its [course_flags] table "
+        "(default: <repo>/course_settings/canvas.toml, if present)."
+    ),
+)
+def list_titles(repo: Path, config: Path | None) -> None:
     """List all assignments, discussions, and quizzes with their due dates and file paths.
 
     REPO is the course content repo (defaults to the current directory).
     Items are sorted by due date (earliest first), then items without
-    a due date are listed alphabetically by title.
+    a due date are listed alphabetically by title. --config selects which
+    section's course flags apply to due_dates `only_if` entries.
     """
     from .sync import (
         filter_due_dates_by_flags,
@@ -484,8 +564,11 @@ def list_titles(repo: Path) -> None:
     )
 
     repo = repo.resolve()
+    cfg = _flags_config(repo, config)
     try:
-        due_dates = filter_due_dates_by_flags(load_due_dates(repo), load_course_flags(repo))
+        due_dates = filter_due_dates_by_flags(
+            load_due_dates(repo), load_course_flags(repo, config=cfg)
+        )
     except ValueError as e:
         die(str(e))
 
@@ -598,7 +681,7 @@ def _format_concise_date(iso_date: str) -> str:
         "Validate the whole repo as if uploading it for the first time to a "
         "brand-new empty Canvas course (broken links, missing rubrics, malformed "
         "frontmatter, ...). Contacts Canvas for nothing and writes nothing "
-        "(no Canvas changes, no .canvas-manifest.toml changes); no API token "
+        "(no Canvas changes, no manifest changes); no API token "
         "needed. Exits nonzero if any problems are found."
     ),
 )

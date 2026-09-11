@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -362,11 +363,61 @@ def mark_decorative_images(html: str) -> str:
     return _IMG_TAG_RE.sub(_fix, html)
 
 
-def markdown_to_html(text: str) -> str:
-    html = pypandoc.convert_text(
-        text,
-        to="html5",
-        format="markdown+smart",
-        extra_args=["--mathml"],
+# Kept in one place because markdown_to_html() has two conversion paths that
+# must produce identical output — see _convert_with_timeout().
+_PANDOC_FROM = "markdown+smart"
+_PANDOC_TO = "html5"
+_PANDOC_EXTRA_ARGS = ["--mathml"]
+
+
+def _convert_with_timeout(text: str, timeout: float) -> str:
+    """`pypandoc.convert_text` equivalent, bounded by a wall-clock timeout.
+
+    pypandoc exposes no timeout, so this drives pandoc directly. The flags must
+    stay in step with the pypandoc call in markdown_to_html(); a test asserts
+    both paths return the same HTML.
+
+    Raises subprocess.TimeoutExpired if pandoc outruns `timeout`. That is a
+    real risk on imported content: pandoc parses nested bracketed spans by
+    backtracking exponentially, so a run like `[[[[[[[[[x]]]]]]]]]` left behind
+    by a Canvas export takes minutes on a file of a few hundred bytes.
+    """
+    result = subprocess.run(
+        [
+            pypandoc.get_pandoc_path(),
+            f"--from={_PANDOC_FROM}",
+            f"--to={_PANDOC_TO}",
+            *_PANDOC_EXTRA_ARGS,
+        ],
+        input=text.encode("utf-8"),
+        capture_output=True,
+        timeout=timeout,
+        check=False,
     )
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f'Pandoc died with exitcode "{result.returncode}" during '
+            f"conversion: {stderr}"
+        )
+    return result.stdout.decode("utf-8")
+
+
+def markdown_to_html(text: str, timeout: float | None = None) -> str:
+    """Convert Markdown to a Canvas-ready HTML fragment.
+
+    `timeout` bounds the conversion in seconds, for callers that convert every
+    file in a repo and must not stall on one pathological document. It is off
+    by default: the upload paths convert files the user is actively syncing,
+    where a silent partial result would be worse than a slow one.
+    """
+    if timeout is None:
+        html = pypandoc.convert_text(
+            text,
+            to=_PANDOC_TO,
+            format=_PANDOC_FROM,
+            extra_args=_PANDOC_EXTRA_ARGS,
+        )
+    else:
+        html = _convert_with_timeout(text, timeout)
     return mark_decorative_images(html)

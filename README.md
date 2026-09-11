@@ -58,6 +58,8 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
     * [Installing Pandoc](#installing-pandoc)
   * [Configuration](#configuration)
     * [`canvas.toml`](#canvastoml)
+    * [Several Canvas courses from one repo](#several-canvas-courses-from-one-repo)
+      * [Making the sections differ](#making-the-sections-differ)
     * [API token](#api-token)
   * [Usage](#usage)
   * [Canvas overwrite protection](#canvas-overwrite-protection)
@@ -70,6 +72,10 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
     * [Combining `-t` and `-s`](#combining--t-and--s)
   * [Removing content (`prune`)](#removing-content-prune)
   * [Moving and renaming files (`mv`)](#moving-and-renaming-files-mv)
+  * [Finding unreferenced content](#finding-unreferenced-content)
+    * [`find-local-orphans` — the repo](#find-local-orphans--the-repo)
+      * [`-v` / `--verbose` — showing what refers to what](#-v--verbose--showing-what-refers-to-what)
+    * [`find-canvas-orphans` — the live course](#find-canvas-orphans--the-live-course)
   * [Content file format](#content-file-format)
     * [`course_settings.toml`](#course_settingstoml)
       * [Centralized due dates](#centralized-due-dates)
@@ -138,7 +144,7 @@ Files are skipped if their local modification time is older than the `last_synce
 
 Files matched by an optional `.canvasignore` (git's `gitignore` syntax) at the repo root are never uploaded — handy for excluding editor backups and temp files such as Word's `~$*.docx`. `.gitignore` is **not** consulted, so you can keep per-term materials out of git while still uploading them to Canvas. To exclude content from both git and Canvas, list it in both files.
 
-A `.canvas-manifest.toml` file is written to your course repo to track Canvas IDs and sync times. Commit it so collaborators share the same mapping.
+A manifest file named after the `canvas.toml` in use (`course_settings/canvas.toml` → `.manifest-canvas.toml`) is written to your course repo to track Canvas IDs and sync times. Commit it so collaborators share the same mapping.
 
 ---
 
@@ -231,7 +237,80 @@ course_id = 12345
 # Fallback token for local use only. Prefer the CANVAS_API_TOKEN env var.
 # Never commit a real token to version control.
 api_token = ""
+
+# Optional. Overrides the same-named flags in course_settings.toml for runs
+# that use *this* config — see "Several Canvas courses from one repo".
+[course_flags]
+in_person_class = false
 ```
+
+### Several Canvas courses from one repo
+
+One course repo can drive more than one Canvas course — a separate section of
+the same class, a sandbox copy, a colleague's shell — by keeping one
+`canvas.toml` per course and naming it with `--config`:
+
+```
+course_settings/
+  canvas.toml            # base_url + course_id for the main section
+  canvas-sec-a.toml      # same base_url, different course_id
+  canvas-sec-b.toml
+```
+
+```bash
+markdown-to-canvas update . --config course_settings/canvas-sec-a.toml
+markdown-to-canvas update . --config course_settings/canvas-sec-b.toml
+```
+
+Each config gets its own manifest, named after the config file:
+`canvas-sec-a.toml` → `.manifest-canvas-sec-a.toml`. That is what keeps the
+runs independent — Canvas IDs and `last_synced` times are per course, so
+syncing section B does not make section A look up to date, and a `-t`/`-s`
+run against one section never touches the other's IDs. Commit all of them.
+
+`--config` is accepted by `update`, `prune`, and `find-canvas-orphans`. `mv`
+has no `--config`: a rename is a repo-wide fact, so it rewrites every
+`.manifest-*.toml` it finds in the repo root.
+
+#### Making the sections differ
+
+The content is one repo, so by default every section gets the same pages. To
+make a section differ, give its `canvas.toml` a `[course_flags]` table:
+
+```toml
+# course_settings/canvas-sec-a.toml
+base_url  = "https://yourschool.instructure.com"
+course_id = 67890
+
+[course_flags]
+in_person_class = false
+night_section   = true
+```
+
+These merge with the `[course_flags]` table in `course_settings.toml`: a flag
+defined in both takes the `canvas.toml` value, and flags defined in only one
+file are kept as they are. Everything that reads flags then follows —
+`#if`/`#elif` regions in bodies, `published_if` in frontmatter, and `only_if`
+on `due_dates` entries — so one repo can give section B different text,
+different published items, and different due dates while sharing grading
+standards, assignment groups, rubrics and the rest of
+`course_settings.toml`. See
+[Course flags](#course-flags--conditional-content-if--elif--else--endif).
+
+When a run's `canvas.toml` contributes flags, the tool prints them and says
+which ones overrode `course_settings.toml`:
+
+```text
+Flags:     in_person_class=false, night_section=true  (from canvas-sec-a.toml)
+           overriding course_settings.toml: in_person_class
+```
+
+`publish` and `list-titles` take `--config` for this reason too — they read
+the file only for its `[course_flags]` table, so no API token (and no
+`base_url`/`course_id`) is needed. What still cannot vary per section is
+everything else in `course_settings.toml`: course name, grading standards,
+assignment groups, late policy, tab configuration. Those are one set of values
+per repo.
 
 ### API token
 
@@ -350,7 +429,7 @@ CANVAS_API_TOKEN=your-token-here \
   markdown-to-canvas update .
 
 # 3. Commit the updated manifest
-git add .canvas-manifest.toml
+git add .manifest-canvas.toml
 git commit -m "sync: update Canvas IDs"
 git push
 ```
@@ -365,7 +444,7 @@ converted, every link resolved, every rubric / assignment-group / due-date
 reference checked — but:
 
 * **Canvas is never contacted** (works offline; no API token needed), and
-* **nothing is written** (no Canvas changes, no `.canvas-manifest.toml`
+* **nothing is written** (no Canvas changes, no manifest
   changes — the existing manifest is ignored so *everything* gets checked,
   not just files changed since the last sync).
 
@@ -537,7 +616,7 @@ Writing DEST with a trailing `/` says "this must be an existing directory" —
 * The file/directory on disk (via `git mv` when inside a git repo and the
   source is git-tracked; falls back to a plain filesystem move otherwise,
   e.g. for files not yet `git add`ed)
-* `.canvas-manifest.toml` — manifest keys and `canvas_item_ids` in module entries
+* Every manifest in the repo root (`.manifest-*.toml`) — manifest keys and `canvas_item_ids` in module entries; `mv` has no `--config`, and a rename applies to every course the repo drives
 * All Markdown files — relative links and snippet references
 * `module_order.toml` — if a module file is renamed
 * `course_settings.toml` — `dashboard_image` and `front_page`, if the file they point to is renamed
@@ -573,6 +652,157 @@ markdown-to-canvas mv --noop pages/old.md pages/new.md
 
 This command is purely local — it never contacts Canvas. Run `update` afterward
 to push the changes.
+
+---
+
+## Finding unreferenced content
+
+Two subcommands answer "what is nothing pointing at?", from opposite sides.
+Both are read-only: neither deletes or changes anything.
+
+Both are **non-transitive**. They report only things that nothing at all
+references. An image linked from a page that is itself unreferenced is *not*
+reported — the image has an inbound link. Run the command again after acting on
+its output to find the next layer.
+
+### `find-local-orphans` — the repo
+
+Reads the course repo on disk. No Canvas call, no API token, works offline.
+
+```bash
+markdown-to-canvas find-local-orphans path/to/course-repo
+```
+
+```text
+Note: snippets, modules, course settings and question banks are never
+listed here — they are excluded by design (see README).
+
+Unreferenced local files (4):
+
+  Assets:
+    - assets/handouts/2024-syllabus.pdf
+    - assets/old-diagram.png
+  Pages:
+    - pages/draft-week9.md
+  Quizzes:
+    - quizzes/pop-quiz/pop-quiz.md
+```
+
+Every run leads with that note, so an empty report is never mistaken for
+"everything in the repo is referenced".
+
+**What can be reported:** files under `assets/`, `.md` files in the content
+folders (`pages/`, `assignments/`, `discussions/`, `announcements/`, …), and
+quizzes. A quiz is reported as a single unit, keyed by its main `.md` — the same
+way `pinned_resources` treats it.
+
+**What is scanned for references:** content files, `modules/`, `snippets/`,
+quizzes and their question files, question banks and their question files,
+`course_settings/syllabus.md`, and the `front_page`, `dashboard_image` and
+`pinned_resources` keys in `course_settings.toml`. Markdown links, raw HTML
+`<img src>`/`<a href>`, module item lists, snippet includes, and an
+assignment's `annotatable_attachment` all count as references. `due_dates`
+entries do not — they match content by title, not by path.
+
+**What is never reported**, by design:
+
+* **Snippets.** A snippet is a library file. "Nothing includes it this term" is
+  not a reason to delete it.
+* **`modules/` and `course_settings/`.** These are the roots — nothing in a repo
+  ever links *to* a module file or the syllabus, so listing them would be noise.
+* **Question banks.** Quizzes embed their questions directly; there is no "draw
+  N from bank X" reference anywhere in the format, so every bank would be
+  reported on every run.
+* **Anything in `pinned_resources`**, including everything under a pinned
+  folder. A pinned live quiz is never reported.
+* **Anything matched by `.canvasignore`.**
+
+The command errs toward saying nothing rather than saying something wrong. Links
+inside an inactive course-flag branch (`#if` that currently evaluates false)
+still count as references, so turning a flag off never makes content look
+deletable.
+
+**Errors are listed last.** A file that cannot be parsed or converted has its
+links left unfollowed, which can make something it uses look unreferenced. Those
+files are named at the bottom of the report, after the findings, so they are hard
+to miss:
+
+```text
+Errors (1) — these files could not be scanned, so the results above may be incomplete:
+
+    - announcements/no-hybrid-participation.md : timed out after 20s - check for nested []s
+```
+
+Conversion is capped at 20 seconds per file. Well-formed course content converts
+in well under a second; the cap exists because a run of nested square brackets
+makes Pandoc backtrack exponentially — roughly 3x per level, so nine levels takes
+*minutes* on a file of a few hundred bytes. Runs like that come from Canvas
+exports (see [IMSCC import](#imscc-import)); `update` rarely trips over one
+because it skips files whose mtime is unchanged, but this command re-converts
+everything on every run. If a file times out, collapse the bracket run — the
+brackets carry no formatting.
+
+Nothing in the report is automatically safe to delete — it is a list of things
+worth *looking at*. Check them by hand before removing anything.
+
+#### `-v` / `--verbose` — showing what refers to what
+
+`-v` adds a second section listing every *referenced* file with the files that
+refer to it. It comes first, so the unreferenced list stays at the bottom of the
+output where it is easy to find.
+
+```bash
+markdown-to-canvas find-local-orphans -v path/to/course-repo
+```
+
+```text
+Note: snippets, modules, course settings and question banks are never
+listed here — they are excluded by design (see README).
+
+Referenced local files (3):
+
+  Assets:
+    - assets/logo.png : pages/home.md
+  Pages:
+    - pages/home.md : course_settings/course_settings.toml, modules/week1.md
+  Quizzes:
+    - quizzes/midterm/midterm.md : course_settings/course_settings.toml (pinned_resources)
+
+Unreferenced local files (2):
+
+  Assets:
+    - assets/old-diagram.png
+  Pages:
+    - pages/draft-week9.md
+```
+
+Use it to check *why* something is not being reported — a page you expected to
+see listed as an orphan will show the file that still links to it.
+
+The two sections together cover exactly the same set of files: everything that
+could be reported as an orphan is in one list or the other. Snippets, modules,
+course settings and question banks are in neither, since they can never be
+reported (see above). A pin shows up as a referrer labelled
+`(pinned_resources)`, since a pin is what is keeping that file off the orphan
+list.
+
+### `find-canvas-orphans` — the live course
+
+Queries Canvas and reports resources in the live course that nothing else in
+the course references.
+
+```bash
+markdown-to-canvas find-canvas-orphans path/to/course-repo
+```
+
+It scans page, assignment, discussion, and quiz HTML for internal Canvas links,
+follows module item membership, and checks the front page and syllabus.
+Resources with zero inbound references are reported with their publish state and
+a link.
+
+Use this one to find leftovers from before the repo existed, or content someone
+added through the Canvas web UI. Use `find-local-orphans` for the repo you
+actually edit.
 
 ---
 
@@ -985,7 +1215,7 @@ a rubric whose title already exists in Canvas is **updated in place** (reported 
 
 Change detection is per rubric: when `rubrics.toml` changes, only the rubrics whose
 content actually changed are re-sent (each rubric's content hash is cached in
-`.canvas-manifest.toml`); use `--force-uploads` to re-send all of them.
+the manifest); use `--force-uploads` to re-send all of them.
 
 **If a rubric is deleted on Canvas, the tool repairs it automatically.** Canvas
 deletes a rubric as soon as its last association is removed, and a deleted rubric
@@ -1488,7 +1718,7 @@ Two cases are errors (warning printed, run reports failure, that one entry is le
 
 An empty string in `order` is rejected outright, since it names nothing.
 
-Once resolved, the module's Canvas ID is cached in `.canvas-manifest.toml` so later runs skip the lookup:
+Once resolved, the module's Canvas ID is cached in the manifest so later runs skip the lookup:
 
 ```toml
 ["canvas_modules/Getting Started at Cascadia"]
@@ -1877,6 +2107,14 @@ Join the Zoom link posted in the module.
 Switching offerings is then a one-line change in `course_settings.toml`
 followed by an `update` run.
 
+**Per-section values.** A `canvas.toml` may carry its own `[course_flags]`
+table, which overrides the same-named flags in `course_settings.toml` for runs
+that use that config (`--config`); flags defined in only one of the two files
+are kept. That is how one repo drives several sections that differ — see
+[Several Canvas courses from one repo](#several-canvas-courses-from-one-repo).
+An invalid flag name or non-boolean value is a fatal config error in either
+file, and the error message names the file it came from.
+
 **Condition syntax.** `#if`/`#elif` take exactly one flag name, optionally
 preceded by the word `not` (`<!-- #if not in_person_class -->`). There is no
 `and`/`or`/parentheses and no `!` operator. `#if flag` is true when the flag is
@@ -1927,7 +2165,7 @@ If you want the conditional text to be its own paragraph, put blank lines
 * Directives must be balanced within each file, and within each snippet file
   independently (an `#if` opened in a page can't be closed inside an included
   snippet).
-* The flag values each file used are cached in `.canvas-manifest.toml`
+* The flag values each file used are cached in the manifest
   (`flags_used`), so flipping a flag re-syncs **only** the files whose output
   could change — not the whole course. With `-v` the tool prints why:
   `re-syncing: flag 'in_person_class' changed true → false`.
@@ -1994,10 +2232,15 @@ no `due_dates` entry, so it doesn't produce a spurious warning.
 
 ## Manifest file
 
-The tool creates `.canvas-manifest.toml` in your course repo. Commit this file.
+The tool creates a manifest in your course repo, named after the `canvas.toml`
+it is syncing with: `course_settings/canvas.toml` → `.manifest-canvas.toml`,
+`course_settings/canvas-sec-a.toml` → `.manifest-canvas-sec-a.toml`. Commit
+this file. (Repos written by an older version have a single
+`.canvas-manifest.toml`; the first run renames it to `.manifest-canvas.toml`
+and prints a line saying so.)
 
 ```toml
-# .canvas-manifest.toml — commit this so collaborators share Canvas IDs
+# .manifest-canvas.toml — commit this so collaborators share Canvas IDs
 
 ["pages/syllabus.md"]
 canvas_id   = 11111
@@ -2053,6 +2296,18 @@ This converts pages, assignments, discussions, announcements, quizzes, question 
 > **Heading levels:** Canvas already strips H1s from the content it exports, so imported headings normally keep their original levels — an H2 stays an H2. As a safety net, if a converted file *does* still contain an H1 (which Canvas would silently turn into an inaccessible styled paragraph; see the H1 warning above), the import shifts every heading in that file down one level so the H1 becomes an H2. Files without an H1 are left untouched.
 >
 > **Attribute cleanup:** Pandoc attaches curly-brace attribute blocks (e.g. `## Heading {#id .class style="..."}`) to headings, links, images, spans, and fenced divs during HTML→Markdown conversion. Import strips these down to just `id` (kept in case a table of contents links to it) and `style` (kept as user-authored formatting) — classes and other Canvas-internal attributes are dropped. If nothing is left, the `{...}` is removed entirely, and an emptied fenced div (`:::`) is unwrapped rather than left as an empty wrapper.
+>
+> **Nested span collapsing:** Pandoc writes an HTML `<span>`/`<div>` as `[content]{#id .class}`, and Canvas wraps exported content in several of these. Once the attribute cleanup above drops the meaningless `{.class}` blocks, what is left is a run of bare nested brackets that carry no formatting at all:
+>
+> ```text
+> [[[[[[[[[text]]]]]]]{#module_sequence_footer_container}]]
+> ```
+>
+> Import collapses each run to only the pairs that still mean something — a link, a reference, or a surviving attribute block — so the example above becomes `[text]{#module_sequence_footer_container}`.
+>
+> This is not just tidiness. Pandoc parses nested bracketed spans by backtracking exponentially, at roughly 3x per level: three levels take 0.07s, seven take 4.9s, and nine take *minutes* on a file of a few hundred bytes — every time anything converts that file. A course imported before this pass existed can still contain such runs; `find-local-orphans` will name the file and tell you to check for nested `[]`s.
+>
+> Only *contiguous* runs of two or more `[` are collapsed. A lone `[text]` and ordinary prose like `the value at position [0]` are left alone, as are escaped brackets (`\[`), fenced code blocks, and inline code spans — `a[i][j]` is real content in a programming course. Pandoc escapes author-typed literal brackets when it writes Markdown, so an *unescaped* run is always its own span markup, never something the author wrote.
 
 ### Verifying the import
 

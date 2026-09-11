@@ -16,6 +16,8 @@ import pypandoc
 import tomli_w
 
 from .canvas_api import NUMERIC_TAB_IDS, TOOL_TAB_PREFIX
+from .convert import apply_outside_fences
+
 
 
 # ---------------------------------------------------------------------------
@@ -728,6 +730,108 @@ def _simplify_pandoc_attrs(markdown: str) -> str:
     return re.sub(r"[ \t]+$", "", markdown, flags=re.MULTILINE)
 
 
+_INLINE_CODE_RE = re.compile(r"(`+)(?:.|\n)+?\1")
+_BRACKET_RUN_RE = re.compile(r"\[{2,}")
+# A bracket pair still means something when one of these follows its close:
+# "(" a link, "[" a reference link, "{" an attribute block that survived
+# _simplify_pandoc_attrs().
+_MEANINGFUL_AFTER = "({["
+
+
+def _protected_ranges(text: str) -> list[tuple[int, int]]:
+    """Index ranges holding inline code, which must never be rewritten."""
+    return [(m.start(), m.end()) for m in _INLINE_CODE_RE.finditer(text)]
+
+
+def _in_ranges(idx: int, ranges: list[tuple[int, int]]) -> bool:
+    return any(start <= idx < end for start, end in ranges)
+
+
+def _match_bracket_run(
+    text: str, opens: list[int], protected: list[tuple[int, int]]
+) -> list[int] | None:
+    """Find the closing bracket for each open in a contiguous run.
+
+    Returns closes aligned with `opens` (outermost first), or None if the run
+    is not balanced — in which case the caller leaves it alone rather than
+    guessing.
+    """
+    depth = len(opens)
+    closes: dict[int, int] = {}
+    i = opens[-1] + 1
+    while i < len(text):
+        ch = text[i]
+        if ch not in "[]" or _in_ranges(i, protected) or text[i - 1] == "\\":
+            i += 1
+            continue
+        if ch == "[":
+            depth += 1
+        else:
+            depth -= 1
+            if depth < len(opens):
+                closes[opens[depth]] = i
+            if depth == 0:
+                break
+        i += 1
+    if len(closes) != len(opens):
+        return None
+    return [closes[o] for o in opens]
+
+
+def _collapse_redundant_spans(markdown: str) -> str:
+    """Collapse bracket nesting left behind when span attributes are stripped.
+
+    Pandoc writes an HTML `<span>`/`<div>` as ``[content]{#id .class}``. Canvas
+    wraps exported content in several such elements, so once
+    `_simplify_pandoc_attrs()` drops the meaningless ``{.class}`` blocks what
+    is left is a run of bare nested brackets carrying no formatting at all::
+
+        [[[[[[[[[text]]]]]]]{#module_sequence_footer_container}]]
+
+    Beyond being noise, this is a performance trap: pandoc parses nested
+    bracketed spans by backtracking exponentially — measured at roughly 3x per
+    level, so nine levels takes minutes on a file of a few hundred bytes, every
+    time anything converts it. This keeps only the pairs that still mean
+    something, giving::
+
+        [text]{#module_sequence_footer_container}
+
+    Only *contiguous* runs of two or more ``[`` are considered. Ordinary prose
+    (``the value at position [0]``) and a lone leftover ``[text]`` are left
+    alone: a single pair is indistinguishable from content the author wrote,
+    and it costs nothing to parse. Fenced code blocks and inline code spans are
+    skipped outright, since ``a[i][j]`` is real content in a programming course.
+    """
+
+    def _collapse(segment: str) -> str:
+        protected = _protected_ranges(segment)
+        drop: set[int] = set()
+        pos = 0
+        while True:
+            m = _BRACKET_RUN_RE.search(segment, pos)
+            if m is None:
+                break
+            pos = m.end()
+            start = m.start()
+            if _in_ranges(start, protected) or (start and segment[start - 1] == "\\"):
+                continue
+            opens = list(range(start, m.end()))
+            closes = _match_bracket_run(segment, opens, protected)
+            if closes is None:
+                continue
+            for open_idx, close_idx in zip(opens, closes):
+                after = close_idx + 1
+                if after < len(segment) and segment[after] in _MEANINGFUL_AFTER:
+                    continue
+                drop.add(open_idx)
+                drop.add(close_idx)
+        if not drop:
+            return segment
+        return "".join(c for i, c in enumerate(segment) if i not in drop)
+
+    return apply_outside_fences(markdown, _collapse)
+
+
 _OPEN_DIV_RE = re.compile(r"<div(?:\s[^>]*)?>", re.IGNORECASE)
 _CLOSE_DIV_RE = re.compile(r"</div>", re.IGNORECASE)
 _DIV_TAG_RE = re.compile(r"</?div(?:\s[^>]*)?>", re.IGNORECASE)
@@ -773,6 +877,7 @@ def _html_to_markdown(html: str) -> str:
         extra_args=["--wrap=none"],
     )
     md = _simplify_pandoc_attrs(md)
+    md = _collapse_redundant_spans(md)
     if iframes:
         md = _restore_iframes(md, iframes)
     return md

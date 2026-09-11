@@ -614,9 +614,37 @@ def _get_inner_renames(
     return renames
 
 
+def find_manifests(repo_root: Path) -> list[Path]:
+    """Every manifest file in the repo root, one per canvas.toml.
+
+    ``mv`` has no ``--config`` option and a rename affects every course the
+    repo drives, so all of them are rewritten — including a pre-per-config
+    ``.canvas-manifest.toml`` left over from an older version of the tool
+    (renamed into place by the next ``update``/``prune`` run).
+    """
+    paths = sorted(repo_root.glob(manifest_lib.MANIFEST_GLOB))
+    legacy = repo_root / manifest_lib.LEGACY_MANIFEST_NAME
+    if legacy.exists():
+        paths.append(legacy)
+    return paths
+
+
+def compute_all_manifest_updates(
+    repo_root: Path, path_map: dict[str, str]
+) -> list[tuple[Path, manifest_lib.ManifestDict]]:
+    """(path, rewritten manifest) for each manifest the move actually changes."""
+    updates: list[tuple[Path, manifest_lib.ManifestDict]] = []
+    for path in find_manifests(repo_root):
+        manifest = manifest_lib.load(path)
+        new_manifest = compute_manifest_updates(manifest, path_map)
+        if new_manifest != manifest:
+            updates.append((path, new_manifest))
+    return updates
+
+
 def _describe_changes(
     path_map: dict[str, str],
-    manifest_changed: bool,
+    manifest_names: list[str],
     file_updates: dict[str, tuple[str, str]],
     module_order_updates: list[str] | None,
     course_settings_updates: dict[str, str] | None,
@@ -632,7 +660,7 @@ def _describe_changes(
             print(f"  {prefix}move: {old} → {new}")
 
     files_moved = len(path_map)
-    manifest_entries = sum(1 for o, n in path_map.items() if o != n) if manifest_changed else 0
+    manifest_entries = sum(1 for o, n in path_map.items() if o != n) if manifest_names else 0
 
     link_file_count = len(file_updates)
     link_total = 0
@@ -655,8 +683,9 @@ def _describe_changes(
 
     parts = []
     parts.append(f"{prefix}{'M' if not noop else 'm'}oved {files_moved} file(s)")
-    if manifest_changed:
-        parts.append(f"updated {manifest_entries} manifest entry/entries")
+    if manifest_names:
+        where = "" if len(manifest_names) == 1 else f" in {', '.join(manifest_names)}"
+        parts.append(f"updated {manifest_entries} manifest entry/entries{where}")
     if link_total:
         parts.append(f"updated {link_total} link(s) across {link_file_count} file(s)")
     if module_order_updates is not None:
@@ -707,10 +736,8 @@ def run_mv(
 
     path_map = build_path_map(src, dest, repo_root)
 
-    manifest_path = repo_root / ".canvas-manifest.toml"
-    manifest = manifest_lib.load(manifest_path)
-    new_manifest = compute_manifest_updates(manifest, path_map)
-    manifest_changed = new_manifest != manifest
+    manifest_updates = compute_all_manifest_updates(repo_root, path_map)
+    manifest_names = [path.name for path, _ in manifest_updates]
 
     file_updates = compute_file_updates(repo_root, path_map)
 
@@ -725,7 +752,7 @@ def run_mv(
         inner_renames_paths = _get_inner_renames(src, dest, src_rel, dest_rel)
 
     _describe_changes(
-        path_map, manifest_changed, file_updates,
+        path_map, manifest_names, file_updates,
         module_order_updates, course_settings_updates, pinned_updates,
         noop, verbose,
     )
@@ -740,8 +767,8 @@ def run_mv(
         target = repo_root / file_new_path
         target.write_text(new_content)
 
-    if manifest_changed:
-        manifest_lib.flush(manifest_path, new_manifest)
+    for path, new_manifest in manifest_updates:
+        manifest_lib.flush(path, new_manifest)
 
     if module_order_updates is not None:
         order_path = repo_root / "course_settings" / "module_order.toml"

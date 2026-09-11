@@ -39,7 +39,7 @@ def _make_repo(tmp_path: Path, files: dict[str, str] | None = None) -> Path:
 
 
 def _make_manifest(repo: Path, entries: dict) -> Path:
-    manifest_path = repo / ".canvas-manifest.toml"
+    manifest_path = repo / ".manifest-canvas.toml"
     with manifest_path.open("wb") as f:
         tomli_w.dump(entries, f)
     return manifest_path
@@ -609,7 +609,7 @@ class TestRunMv:
         assert not (repo / "pages/old-page.md").exists()
         assert (repo / "pages/new-page.md").exists()
 
-        manifest_path = repo / ".canvas-manifest.toml"
+        manifest_path = repo / ".manifest-canvas.toml"
         with manifest_path.open("rb") as f:
             manifest = tomllib.load(f)
         assert "pages/new-page.md" in manifest
@@ -639,7 +639,7 @@ class TestRunMv:
         assert not (repo / "assets/OldDir").exists()
         assert (repo / "assets/new-dir/img.png").exists()
 
-        with (repo / ".canvas-manifest.toml").open("rb") as f:
+        with (repo / ".manifest-canvas.toml").open("rb") as f:
             manifest = tomllib.load(f)
         assert "assets/new-dir/img.png" in manifest
         assert "assets/OldDir/img.png" not in manifest
@@ -696,7 +696,7 @@ class TestRunMv:
         moved = repo / "pages/worksheets/summer/week-1.md"
         assert moved.exists()
 
-        with (repo / ".canvas-manifest.toml").open("rb") as f:
+        with (repo / ".manifest-canvas.toml").open("rb") as f:
             manifest = tomllib.load(f)
         assert "pages/worksheets/summer/week-1.md" in manifest
         assert manifest["pages/worksheets/summer/week-1.md"]["canvas_id"] == 100
@@ -765,7 +765,7 @@ class TestRunMv:
         assert (repo / "assets/unit-1/slides/img/fig.png").exists()
         assert not (repo / "assets/unit-01").exists()
 
-        with (repo / ".canvas-manifest.toml").open("rb") as f:
+        with (repo / ".manifest-canvas.toml").open("rb") as f:
             manifest = tomllib.load(f)
         assert "assets/unit-1/slides/img/fig.png" in manifest
 
@@ -839,7 +839,7 @@ class TestRunMv:
         assert not (repo / "quizzes/new-quiz/old-quiz.md").exists()
         assert (repo / "quizzes/new-quiz/questions/q1.md").exists()
 
-        with (repo / ".canvas-manifest.toml").open("rb") as f:
+        with (repo / ".manifest-canvas.toml").open("rb") as f:
             manifest = tomllib.load(f)
         assert "quizzes/new-quiz/new-quiz.md" in manifest
 
@@ -866,7 +866,7 @@ class TestRunMv:
 
         run_mv(repo / "pages/old.md", repo / "pages/new.md")
 
-        with (repo / ".canvas-manifest.toml").open("rb") as f:
+        with (repo / ".manifest-canvas.toml").open("rb") as f:
             manifest = tomllib.load(f)
         item_ids = manifest["modules/week1.md"]["canvas_item_ids"]
         assert "pages/new.md" in item_ids
@@ -942,7 +942,7 @@ class TestRunMv:
         assert "../assets/my-image.png" in content
         assert "My%20Image" not in content
 
-        with (repo / ".canvas-manifest.toml").open("rb") as f:
+        with (repo / ".manifest-canvas.toml").open("rb") as f:
             manifest = tomllib.load(f)
         assert "assets/my-image.png" in manifest
         assert "assets/My Image.png" not in manifest
@@ -1038,3 +1038,54 @@ class TestRunMvInGitRepo:
             ["git", "status", "--porcelain"], cwd=str(repo), capture_output=True, text=True, check=True
         ).stdout
         assert "R  pages/old-page.md -> pages/new-page.md" in status
+
+
+# ---------------------------------------------------------------------------
+# mv rewrites every per-config manifest (mv has no --config option)
+# ---------------------------------------------------------------------------
+
+
+class TestMvMultipleManifests:
+    def _entry(self, canvas_id: int) -> dict:
+        return {
+            "pages/old-page.md": {
+                "canvas_id": canvas_id,
+                "canvas_type": "page",
+                "last_synced": "2025-01-01T00:00:00+00:00",
+            },
+        }
+
+    def test_all_manifests_rewritten(self, tmp_path: Path) -> None:
+        """A rename affects every Canvas course the repo drives, so each
+        section's manifest is updated."""
+        repo = _make_repo(tmp_path, {"pages/old-page.md": "---\ntitle: Old\n---\n"})
+        for name, canvas_id in (
+            (".manifest-canvas-sec-a.toml", 100),
+            (".manifest-canvas-sec-b.toml", 200),
+            (".canvas-manifest.toml", 300),
+        ):
+            with (repo / name).open("wb") as f:
+                tomli_w.dump(self._entry(canvas_id), f)
+
+        run_mv(repo / "pages/old-page.md", repo / "pages/new-page.md")
+
+        for name, canvas_id in (
+            (".manifest-canvas-sec-a.toml", 100),
+            (".manifest-canvas-sec-b.toml", 200),
+            (".canvas-manifest.toml", 300),
+        ):
+            with (repo / name).open("rb") as f:
+                manifest = tomllib.load(f)
+            assert "pages/old-page.md" not in manifest, name
+            assert manifest["pages/new-page.md"]["canvas_id"] == canvas_id
+
+    def test_summary_names_each_manifest(self, tmp_path: Path, capsys) -> None:
+        repo = _make_repo(tmp_path, {"pages/old-page.md": "---\ntitle: Old\n---\n"})
+        for name in (".manifest-canvas-sec-a.toml", ".manifest-canvas-sec-b.toml"):
+            with (repo / name).open("wb") as f:
+                tomli_w.dump(self._entry(100), f)
+
+        run_mv(repo / "pages/old-page.md", repo / "pages/new-page.md")
+
+        out = capsys.readouterr().out
+        assert ".manifest-canvas-sec-a.toml, .manifest-canvas-sec-b.toml" in out

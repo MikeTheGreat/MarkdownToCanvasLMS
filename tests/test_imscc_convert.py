@@ -24,6 +24,7 @@ from markdown_to_canvas.imscc_import import (
     _parse_rubrics,
     _restore_iframes,
     _shift_headings_down,
+    _collapse_redundant_spans,
     _simplify_pandoc_attrs,
     _strip_canvas_img_attrs,
     parse_announcement_meta,
@@ -1552,3 +1553,97 @@ class TestDedupQuestionSlugs:
         assert questions[3]["title"] == "Other"
         assert questions[4]["slug"] == "question-2"
         assert questions[4]["title"] == "Question 2"
+
+
+# ---------------------------------------------------------------------------
+# _collapse_redundant_spans
+# ---------------------------------------------------------------------------
+
+
+def test_collapse_spans_removes_a_fully_redundant_nest() -> None:
+    md = "[[[[[[[[[I un-published those.]]]]]]]]]"
+    assert _collapse_redundant_spans(md) == "I un-published those."
+
+
+def test_collapse_spans_keeps_the_pair_that_still_has_attributes() -> None:
+    """The real Canvas-export shape: 9 opens, 7 closes, an id, then 2 closes."""
+    md = "[[[[[[[[[**Thu** ]]]]]]]{#module_sequence_footer_container}]]"
+    assert _collapse_redundant_spans(md) == (
+        "[**Thu** ]{#module_sequence_footer_container}"
+    )
+
+
+def test_collapse_spans_leaves_a_lone_prose_bracket_alone() -> None:
+    md = "the value at position [0] is fine"
+    assert _collapse_redundant_spans(md) == md
+
+
+def test_collapse_spans_leaves_a_lone_span_alone() -> None:
+    assert _collapse_redundant_spans("[text]{#keep}") == "[text]{#keep}"
+
+
+def test_collapse_spans_preserves_links() -> None:
+    md = "a [link](http://x) here"
+    assert _collapse_redundant_spans(md) == md
+
+
+def test_collapse_spans_unwraps_a_span_around_a_link_keeping_the_link() -> None:
+    assert (
+        _collapse_redundant_spans("[[nested](http://y)]") == "[nested](http://y)"
+    )
+
+
+def test_collapse_spans_leaves_escaped_brackets_alone() -> None:
+    """Pandoc writes author-typed literal brackets escaped, so an unescaped
+    run is always its own span markup — but never touch the escaped form."""
+    md = r"literal \[\[brackets\]\] stay"
+    assert _collapse_redundant_spans(md) == md
+
+
+def test_collapse_spans_preserves_reference_links() -> None:
+    md = "ref [a][b]\n\n[b]: http://x"
+    assert _collapse_redundant_spans(md) == md
+
+
+def test_collapse_spans_preserves_task_lists() -> None:
+    md = "- [ ] todo\n- [x] done"
+    assert _collapse_redundant_spans(md) == md
+
+
+def test_collapse_spans_skips_inline_code() -> None:
+    """`a[i][j]` is real content in a programming course."""
+    md = "index with `a[i][j]` and `m[[0]]` intact"
+    assert _collapse_redundant_spans(md) == md
+
+
+def test_collapse_spans_skips_fenced_code() -> None:
+    md = "```\nint x = a[[0]][[1]];\n```"
+    assert _collapse_redundant_spans(md) == md
+
+
+def test_collapse_spans_leaves_an_unbalanced_run_alone() -> None:
+    md = "[[unbalanced and never closed"
+    assert _collapse_redundant_spans(md) == md
+
+
+def test_collapse_spans_handles_a_run_spanning_a_line_break() -> None:
+    md = "[[[[[[[[[Thanks!\n--Mike]]]]]]]]]"
+    assert _collapse_redundant_spans(md) == "Thanks!\n--Mike"
+
+
+def test_collapse_spans_is_idempotent() -> None:
+    md = "[[[[[[[[[**Thu** ]]]]]]]{#id}]]"
+    once = _collapse_redundant_spans(md)
+    assert _collapse_redundant_spans(once) == once
+
+
+def test_collapse_spans_removes_the_pandoc_backtracking_blowup() -> None:
+    """The point of the pass: nested runs make pandoc take minutes."""
+    import time
+
+    from markdown_to_canvas.convert import markdown_to_html
+
+    md = "[" * 12 + "text" + "]" * 12
+    start = time.time()
+    markdown_to_html(_collapse_redundant_spans(md))
+    assert time.time() - start < 5.0

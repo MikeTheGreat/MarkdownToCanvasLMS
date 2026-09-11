@@ -16,7 +16,11 @@ work:
   off, rather than leaving it synced-but-unpublished.
 - **CLI flag overrides** — repeatable `--flag name=true/false` on
   `update`/`publish` to preview the other variant without editing the TOML
-  (with care around what gets written to `flags_used`).
+  (with care around what gets written to `flags_used`). Partly covered now:
+  a `[course_flags]` table in a `canvas.toml` overrides `course_settings.toml`
+  for runs using that config (see README "Several Canvas courses from one
+  repo"), which handles per-section values but still needs a file rather than
+  a one-off command-line switch.
 - **Richer conditions and values** — `and`/`or`/parentheses, non-boolean flag
   values with `#if flag == "value"`, `$flag$` substitution; needs a real
   expression parser, keep out until a concrete need appears.
@@ -325,9 +329,48 @@ limitation is written down rather than rediscovered.
 
 The fix would be to parse the quiz `.md` + question files for local `<a>`/`<img>` refs in `_get_file_refs()` and return them so BFS can follow them. This is lower priority since `rewrite_links()` already handles stub-creation for missing manifest entries at upload time.
 
+## Orphan detection: transitive reachability
+
+`find-local-orphans` and `find-canvas-orphans` are both non-transitive: a
+resource counts as referenced if *anything* links to it, even a referrer that
+is itself an orphan. So an image linked only from an unreferenced page is not
+reported, and finding it takes a second run after the page is dealt with.
+
+A reachability version would instead walk out from the roots — the modules,
+`front_page`, the syllabus, and any published-by-other-means entry point — and
+report everything not reached. That is strictly more useful and strictly more
+dangerous: it depends on having the root set exactly right, and getting it
+wrong reports live content as dead.
+
+Deferred by the user on 2026-09-10 when the non-transitive version was
+specified, explicitly to be revisited later.
+
+Design notes if picked up: `local_orphans.collect_local_refs()` already returns
+the outbound edges for every source type, so the graph is in hand — what is
+missing is the root set and a BFS over it. `publish.collect_reachable()` already
+does exactly this walk for the static-site build and is the obvious thing to
+reuse or generalize.
+
+## `find-canvas-orphans` never reports unreferenced Canvas files
+
+`orphans.py` collects Canvas **files** as reference *targets*
+(`ResourceKey("file", id)`, from `/courses/<id>/files/<id>` links) but never
+enumerates them as candidates — `find_orphans()` fetches pages, assignments,
+discussions and quizzes, and no files at all. So a file uploaded to the course
+that nothing links to is invisible to the report.
+
+Fixing it means adding a `course.get_files()` pass to build file candidates.
+Worth checking first how noisy that is: Canvas auto-creates files for things
+like profile pictures and submission attachments, which would need filtering
+out before the report is usable.
+
+Note `find-local-orphans` does cover the repo-side equivalent (unreferenced
+files under `assets/`), so this gap only affects files that reached Canvas some
+other way.
+
 ## `--rebuild-manifest`: re-sync manifest from Canvas
 
-If the manifest file is lost, corrupted, or drifts out of sync with Canvas, a `--rebuild-manifest` flag would walk the live Canvas course and reconstruct `.canvas-manifest.toml` from what actually exists there.
+If the manifest file is lost, corrupted, or drifts out of sync with Canvas, a `--rebuild-manifest` flag would walk the live Canvas course and reconstruct the manifest from what actually exists there.
 
 How it would work:
 
@@ -349,7 +392,7 @@ How it would work:
 - Write each item as a `.md` file in the appropriate local directory (`pages/`, `assignments/`, etc.), with Canvas metadata written as YAML frontmatter
 - Download files to `assets/`, preserving Canvas folder structure
 - Write module definitions as module `.md` files with links to the downloaded content files
-- Populate `.canvas-manifest.toml` with the Canvas IDs of all downloaded items
+- Populate the manifest with the Canvas IDs of all downloaded items
 
 Useful for bootstrapping a repo from a course that was originally built directly in Canvas, or for creating a local backup.
 
@@ -573,7 +616,7 @@ Do **not** "improve" these without an explicit user request:
 7. **`fill_in_blank`/`pattern_match` → `short_answer_question` mapping and
    `patterns[0]`-only upload** (`quiz.py:174-196`) — known, documented in README
    and TODO.md; behavior decision belongs to the user.
-8. **Broad `except Exception: pass` in prune/find-orphans support paths**
+8. **Broad `except Exception: pass` in prune/find-canvas-orphans support paths**
    (`sync.py:596, 702, 990, 998`; `orphans.py:136, 158, 170`) — intentional
    degrade-gracefully behavior for optional data. Converting to logging would be
    fine but is cosmetic; don't convert to raises.

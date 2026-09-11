@@ -112,6 +112,82 @@ def test_config_is_frozen(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
 
 
 # ---------------------------------------------------------------------------
+# [course_flags] in canvas.toml (per-config flag overrides)
+# ---------------------------------------------------------------------------
+
+
+def test_config_path_recorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CANVAS_API_TOKEN", "tok")
+    cfg_path = _write_toml(
+        tmp_path / "canvas-sec-a.toml",
+        'base_url = "https://school.instructure.com"\ncourse_id = 1\n',
+    )
+    assert load(cfg_path).config_path == cfg_path
+
+
+def test_no_course_flags_table(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CANVAS_API_TOKEN", "tok")
+    cfg_path = _write_toml(
+        tmp_path / "canvas.toml",
+        'base_url = "https://school.instructure.com"\ncourse_id = 1\n',
+    )
+    assert load(cfg_path).course_flags == {}
+
+
+def test_course_flags_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("CANVAS_API_TOKEN", "tok")
+    cfg_path = _write_toml(
+        tmp_path / "canvas.toml",
+        'base_url = "https://school.instructure.com"\ncourse_id = 1\n'
+        "[course_flags]\nnight_section = true\nin_person_class = false\n",
+    )
+    assert load(cfg_path).course_flags == {
+        "night_section": True,
+        "in_person_class": False,
+    }
+
+
+def test_course_flags_non_boolean_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CANVAS_API_TOKEN", "tok")
+    cfg_path = _write_toml(
+        tmp_path / "canvas.toml",
+        'base_url = "https://school.instructure.com"\ncourse_id = 1\n'
+        '[course_flags]\nquarter = "fall"\n',
+    )
+    with pytest.raises(ValueError, match="must be a TOML boolean"):
+        load(cfg_path)
+
+
+def test_course_flags_invalid_name_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("CANVAS_API_TOKEN", "tok")
+    cfg_path = _write_toml(
+        tmp_path / "canvas.toml",
+        'base_url = "https://school.instructure.com"\ncourse_id = 1\n'
+        '[course_flags]\n"2cool" = true\n',
+    )
+    with pytest.raises(ValueError, match="invalid course flag name"):
+        load(cfg_path)
+
+
+def test_require_course_false_tolerates_missing_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """publish/list-titles read canvas.toml only for its flags."""
+    monkeypatch.delenv("CANVAS_API_TOKEN", raising=False)
+    cfg_path = _write_toml(
+        tmp_path / "canvas.toml", "[course_flags]\nnight_section = true\n"
+    )
+    cfg = load(cfg_path, require_token=False, require_course=False)
+    assert cfg.course_flags == {"night_section": True}
+    assert cfg.base_url == ""
+    assert cfg.course_id == 0
+
+
+# ---------------------------------------------------------------------------
 # _resolve_repo: optional REPO argument for update/publish
 # ---------------------------------------------------------------------------
 

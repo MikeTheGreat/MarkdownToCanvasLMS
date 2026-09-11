@@ -4,7 +4,7 @@ The defining properties under test:
 - the whole pipeline runs (everything reported as it would be on a first sync
   to an empty course), ignoring any on-disk manifest;
 - Canvas is never contacted (no canvasapi object is ever constructed);
-- nothing is written (.canvas-manifest.toml untouched);
+- nothing is written (.manifest-canvas.toml untouched);
 - local problems (broken links, unknown rubric names, ...) are detected and
   flip the error exit.
 """
@@ -36,7 +36,7 @@ def _config() -> Config:
 def course_root(tmp_path: Path) -> Path:
     """Isolated copy of fixtures so tests never write into the fixtures dir."""
     root = tmp_path / "course"
-    shutil.copytree(FIXTURES, root, ignore=shutil.ignore_patterns(".canvas-manifest.toml"))
+    shutil.copytree(FIXTURES, root, ignore=shutil.ignore_patterns(".manifest-canvas.toml"))
     return root
 
 
@@ -69,13 +69,13 @@ def test_check_all_full_run_offline_and_clean(course_root, no_canvas, capsys) ->
     assert "Would upload: quizzes/a-quiz/a-quiz.md" in out
     assert "Would sync module: modules/week-1.md" in out
     # No manifest was created.
-    assert not (course_root / ".canvas-manifest.toml").exists()
+    assert not (course_root / ".manifest-canvas.toml").exists()
 
 
 def test_check_all_ignores_and_preserves_stale_manifest(course_root, no_canvas, capsys) -> None:
     """A manifest saying "everything is up to date" is ignored (fresh-course
     simulation) and is byte-identical after the run."""
-    manifest_path = course_root / ".canvas-manifest.toml"
+    manifest_path = course_root / ".manifest-canvas.toml"
     manifest_path.write_text(
         '["pages/syllabus.md"]\n'
         'canvas_id = 11111\n'
@@ -378,7 +378,7 @@ def test_cli_check_all_success_without_token(course_root, no_canvas, monkeypatch
 
     assert result.exit_code == 0, result.output
     assert "Check successful" in result.output
-    assert not (course_root / ".canvas-manifest.toml").exists()
+    assert not (course_root / ".manifest-canvas.toml").exists()
 
 
 def test_cli_check_all_exit_code_on_problems(course_root, no_canvas, monkeypatch) -> None:

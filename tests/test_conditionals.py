@@ -499,6 +499,89 @@ class TestLoadCourseFlags:
             load_course_flags(repo)
 
 
+class TestCourseFlagsFromCanvasToml:
+    """[course_flags] in canvas.toml overrides the same flag in
+    course_settings.toml; flags in only one file are kept (union)."""
+
+    def _repo(self, tmp_path: Path, settings_flags: str) -> Path:
+        cs = tmp_path / "course_settings"
+        cs.mkdir(exist_ok=True)
+        (cs / "course_settings.toml").write_text(settings_flags)
+        return tmp_path
+
+    def _config(self, tmp_path: Path, flags: dict, name: str = "canvas-sec-a.toml") -> Config:
+        return Config(
+            base_url="https://school.instructure.com",
+            course_id=222,
+            api_token="tok",
+            config_path=tmp_path / "course_settings" / name,
+            course_flags=flags,
+        )
+
+    def test_union_of_both_tables(self, tmp_path: Path) -> None:
+        repo = self._repo(tmp_path, "[course_flags]\nin_person_class = true\n")
+        flags = load_course_flags(repo, config=self._config(tmp_path, {"night_section": True}))
+        assert flags == {"in_person_class": True, "night_section": True}
+
+    def test_canvas_toml_wins_on_conflict(self, tmp_path: Path) -> None:
+        repo = self._repo(
+            tmp_path, "[course_flags]\nin_person_class = true\nhybrid = false\n"
+        )
+        flags = load_course_flags(
+            repo, config=self._config(tmp_path, {"in_person_class": False})
+        )
+        assert flags == {"in_person_class": False, "hybrid": False}
+
+    def test_no_config_leaves_settings_flags_alone(self, tmp_path: Path) -> None:
+        repo = self._repo(tmp_path, "[course_flags]\nin_person_class = true\n")
+        assert load_course_flags(repo) == {"in_person_class": True}
+
+    def test_config_flags_without_settings_file(self, tmp_path: Path) -> None:
+        """A repo with no course_settings.toml still gets the canvas.toml flags."""
+        flags = load_course_flags(tmp_path, config=self._config(tmp_path, {"sec_a": True}))
+        assert flags == {"sec_a": True}
+
+    def test_preloaded_settings_dict_still_overridden(self, tmp_path: Path) -> None:
+        flags = load_course_flags(
+            tmp_path,
+            {"course_flags": {"a": True, "b": True}},
+            self._config(tmp_path, {"b": False}),
+        )
+        assert flags == {"a": True, "b": False}
+
+    def test_invalid_value_in_canvas_toml_is_fatal(self, tmp_path: Path) -> None:
+        repo = self._repo(tmp_path, "")
+        with pytest.raises(ValueError, match="must be a TOML boolean"):
+            load_course_flags(repo, config=self._config(tmp_path, {"quarter": "fall"}))
+
+    def test_invalid_name_in_canvas_toml_is_fatal(self, tmp_path: Path) -> None:
+        repo = self._repo(tmp_path, "")
+        with pytest.raises(ValueError, match="invalid course flag name"):
+            load_course_flags(repo, config=self._config(tmp_path, {"2cool": True}))
+
+    def test_error_names_the_offending_file(self, tmp_path: Path) -> None:
+        repo = self._repo(tmp_path, "")
+        with pytest.raises(ValueError, match="canvas-sec-a.toml"):
+            load_course_flags(repo, config=self._config(tmp_path, {"quarter": "fall"}))
+
+    def test_overrides_are_reported(self, tmp_path: Path, capsys) -> None:
+        repo = self._repo(tmp_path, "[course_flags]\nin_person_class = true\n")
+        load_course_flags(
+            repo,
+            config=self._config(tmp_path, {"in_person_class": False, "night_section": True}),
+        )
+        out = capsys.readouterr().out
+        assert "in_person_class=false" in out
+        assert "night_section=true" in out
+        assert "canvas-sec-a.toml" in out
+        assert "overriding course_settings.toml: in_person_class" in out
+
+    def test_no_output_when_canvas_toml_has_no_flags(self, tmp_path: Path, capsys) -> None:
+        repo = self._repo(tmp_path, "[course_flags]\nin_person_class = true\n")
+        load_course_flags(repo, config=self._config(tmp_path, {}))
+        assert capsys.readouterr().out == ""
+
+
 # ---------------------------------------------------------------------------
 # Snippet-level conditionals (preprocess_snippets flags param)
 # ---------------------------------------------------------------------------
@@ -786,7 +869,7 @@ def test_flags_used_recorded_and_omitted(mock_course, tmp_path) -> None:
 
     run_sync(_config(), root)
 
-    manifest = manifest_lib.load(root / ".canvas-manifest.toml")
+    manifest = manifest_lib.load(root / ".manifest-canvas.toml")
     assert manifest["pages/flagged.md"]["flags_used"] == {"in_person_class": True}
     assert "flags_used" not in manifest["pages/plain.md"]
 
@@ -814,7 +897,7 @@ def test_snippet_contributed_flags_recorded_and_applied(mock_course, tmp_path) -
     body = pages["WithSnippet"]["body"]
     assert "Shared text." in body
     assert "Hybrid note." not in body  # hybrid = false
-    manifest = manifest_lib.load(root / ".canvas-manifest.toml")
+    manifest = manifest_lib.load(root / ".manifest-canvas.toml")
     assert manifest["pages/with-snippet.md"]["flags_used"] == {"hybrid": False}
 
 
@@ -850,7 +933,7 @@ def test_flag_flip_resyncs_only_referencing_files(mock_course, tmp_path, capsys)
     assert "Join the Zoom link" in body
     assert "Bring your laptop" not in body
     # flags_used refreshed to the new value.
-    manifest = manifest_lib.load(root / ".canvas-manifest.toml")
+    manifest = manifest_lib.load(root / ".manifest-canvas.toml")
     assert manifest["pages/flagged.md"]["flags_used"] == {"in_person_class": False}
 
 
@@ -897,7 +980,7 @@ def test_undefined_flag_skips_file_others_still_sync(mock_course, tmp_path, caps
     assert "Skipping upload due to errors: pages/typo.md" in out
     # The other pages synced fine.
     assert sorted(created) == ["Flagged", "Plain"]
-    manifest = manifest_lib.load(root / ".canvas-manifest.toml")
+    manifest = manifest_lib.load(root / ".manifest-canvas.toml")
     assert "pages/typo.md" not in manifest
 
 
@@ -921,7 +1004,7 @@ def test_conditional_module_item_excluded(mock_course, tmp_path) -> None:
     titles = [c[1]["module_item"].get("title") for c in item_calls]
     assert "Plain" in titles
     assert "Flagged" not in titles  # hybrid = false → item excluded
-    manifest = manifest_lib.load(root / ".canvas-manifest.toml")
+    manifest = manifest_lib.load(root / ".manifest-canvas.toml")
     assert manifest["modules/week-1.md"]["flags_used"] == {"hybrid": False}
 
 
@@ -955,7 +1038,7 @@ def test_conditional_quiz_question_excluded(mock_course, tmp_path) -> None:
         for c in quiz.create_question.call_args_list
     ]
     assert question_names == ["Always"]  # existing deletion path handles the rest
-    manifest = manifest_lib.load(root / ".canvas-manifest.toml")
+    manifest = manifest_lib.load(root / ".manifest-canvas.toml")
     # flags_used covers the quiz .md and all question files (one unit).
     assert manifest["quizzes/q1/q1.md"]["flags_used"] == {"hybrid": False}
 
@@ -1052,7 +1135,7 @@ def test_published_if_combined_with_published_is_error(mock_course, tmp_path, ca
     assert had_errors is True
     assert "cannot be combined" in out
     assert "Skipping upload due to errors: pages/bad.md" in out
-    manifest = manifest_lib.load(root / ".canvas-manifest.toml")
+    manifest = manifest_lib.load(root / ".manifest-canvas.toml")
     assert "pages/bad.md" not in manifest
     assert "pages/good.md" in manifest
 
@@ -1104,7 +1187,7 @@ def test_published_if_flags_used_recorded_and_flag_flip_republishes(
 
     run_sync(_config(), root)
 
-    manifest = manifest_lib.load(root / ".canvas-manifest.toml")
+    manifest = manifest_lib.load(root / ".manifest-canvas.toml")
     assert manifest["pages/p.md"]["flags_used"] == {"in_person_class": True}
     real_page.edit.assert_not_called()
 
@@ -1123,7 +1206,7 @@ def test_published_if_flags_used_recorded_and_flag_flip_republishes(
     out = capsys.readouterr().out
     assert "re-syncing: flag 'in_person_class' changed true → false" in out
     assert real_page.edit.call_args[1]["wiki_page"]["published"] is False
-    manifest = manifest_lib.load(root / ".canvas-manifest.toml")
+    manifest = manifest_lib.load(root / ".manifest-canvas.toml")
     assert manifest["pages/p.md"]["flags_used"] == {"in_person_class": False}
 
 
@@ -1176,7 +1259,7 @@ def test_published_if_quiz(mock_course, tmp_path) -> None:
 
 def test_mv_preserves_flags_used(tmp_path) -> None:
     root = _basic_repo(tmp_path)
-    manifest_path = root / ".canvas-manifest.toml"
+    manifest_path = root / ".manifest-canvas.toml"
     with manifest_path.open("wb") as f:
         tomli_w.dump(
             {
@@ -1281,3 +1364,69 @@ def test_publish_stage_respects_published_if(tmp_path) -> None:
     mkdocs_yml = (staging / "mkdocs.yml").read_text()
     assert "HW 2" not in mkdocs_yml
     assert "HW 1" in mkdocs_yml
+
+
+# ---------------------------------------------------------------------------
+# Integration: per-section flags via --config (canvas.toml [course_flags])
+# ---------------------------------------------------------------------------
+
+
+def _section_config(root: Path, name: str, flags: dict) -> Config:
+    return Config(
+        base_url="https://school.instructure.com",
+        course_id=COURSE_ID,
+        api_token="tok",
+        config_path=root / "course_settings" / name,
+        course_flags=flags,
+    )
+
+
+def test_sync_applies_canvas_toml_flag_override(mock_course, tmp_path) -> None:
+    """Two configs over one repo produce different page bodies from the same
+    Markdown, without touching course_settings.toml."""
+    root = _basic_repo(tmp_path)
+    pages: dict[str, dict] = {}
+
+    def _create_page(wiki_page):
+        p = _mock_page(len(pages) + 1, wiki_page["title"].lower())
+        pages[wiki_page["title"]] = wiki_page
+        return p
+
+    mock_course.create_page.side_effect = _create_page
+
+    cfg = _section_config(root, "canvas-sec-a.toml", {"in_person_class": False})
+    assert run_sync(cfg, root) is False
+
+    body = pages["Flagged"]["body"]
+    assert "Join the Zoom link" in body
+    assert "Bring your laptop to Room 302." not in body
+
+
+def test_sync_records_merged_flags_in_manifest(mock_course, tmp_path) -> None:
+    """flags_used records the value actually used, so a later run against the
+    same config sees no change and re-syncs nothing."""
+    root = _basic_repo(tmp_path)
+    mock_course.create_page.side_effect = [_mock_page(1, "flagged"), _mock_page(2, "plain")]
+
+    cfg = _section_config(root, "canvas-sec-a.toml", {"in_person_class": False})
+    run_sync(cfg, root)
+
+    manifest = manifest_lib.load(root / ".manifest-canvas-sec-a.toml")
+    assert manifest["pages/flagged.md"]["flags_used"] == {"in_person_class": False}
+    assert not (root / ".manifest-canvas.toml").exists()
+
+
+def test_publish_applies_canvas_toml_flag_override(tmp_path) -> None:
+    """The published site is built with the section's flags, not just the ones
+    in course_settings.toml."""
+    root = _publish_repo(tmp_path)
+    staging = tmp_path / "staging"
+
+    info = publish.stage(
+        root, staging, _section_config(root, "canvas-sec-a.toml", {"in_person_class": False})
+    )
+
+    assert info["errors"] == []
+    staged_hw = (staging / "docs" / "assignments" / "hw1.md").read_text()
+    assert "Submit online." in staged_hw
+    assert "Submit on paper in class." not in staged_hw

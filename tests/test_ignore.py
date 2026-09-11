@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from markdown_to_canvas.ignore import load_ignore_matcher
 
 
@@ -65,10 +67,14 @@ def test_canvasignore_applies(tmp_path: Path) -> None:
     assert matcher.is_ignored(drafts, tmp_path) is True
 
 
-def test_manifest_always_ignored(tmp_path: Path) -> None:
-    """The tool's own manifest is never treated as uploadable content."""
+@pytest.mark.parametrize(
+    "name",
+    [".manifest-canvas.toml", ".manifest-canvas-sec-a.toml", ".canvas-manifest.toml"],
+)
+def test_manifest_always_ignored(tmp_path: Path, name: str) -> None:
+    """The tool's own manifests are never treated as uploadable content."""
     matcher = load_ignore_matcher(tmp_path)
-    manifest = tmp_path / ".canvas-manifest.toml"
+    manifest = tmp_path / name
     manifest.touch()
     assert matcher.is_ignored(manifest, tmp_path) is True
 

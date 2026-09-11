@@ -670,7 +670,7 @@ def get_syllabus_body(course) -> str:
     """Fetch the course syllabus_body HTML via a raw ``include[]`` request.
 
     Returns "" if the course has no syllabus. Callers wrap this in their own
-    try/except so prune/find-orphans degrade gracefully when the request fails."""
+    try/except so prune/find-canvas-orphans degrade gracefully when the request fails."""
     response = course._requester.request(
         "GET",
         f"courses/{course.id}",

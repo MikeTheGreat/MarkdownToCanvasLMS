@@ -631,7 +631,7 @@ def test_no_course_settings_md_in_subdir(imported_dir: Path) -> None:
 
 
 def test_no_canvas_manifest_written(imported_dir: Path) -> None:
-    assert not (imported_dir / ".canvas-manifest.toml").exists()
+    assert not (imported_dir / ".manifest-canvas.toml").exists()
 
 
 # --- Rubrics ---

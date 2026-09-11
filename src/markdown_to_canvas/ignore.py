@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pathspec
 
+from . import manifest as manifest_lib
+
 _IGNORE_FILES = (".canvasignore",)
 
 
@@ -41,9 +43,10 @@ def load_ignore_matcher(repo_root: Path) -> IgnoreMatcher:
     """Build an IgnoreMatcher from `.canvasignore` at the repo root.
 
     A missing file contributes no patterns. The result always matches the
-    tool's own manifest so it is never treated as uploadable content.
+    tool's own manifests (one per canvas.toml, plus the pre-per-config name)
+    so they are never treated as uploadable content.
     """
-    lines: list[str] = [".canvas-manifest.toml"]
+    lines: list[str] = [manifest_lib.MANIFEST_GLOB, manifest_lib.LEGACY_MANIFEST_NAME]
     for name in _IGNORE_FILES:
         ignore_path = repo_root / name
         if ignore_path.exists():

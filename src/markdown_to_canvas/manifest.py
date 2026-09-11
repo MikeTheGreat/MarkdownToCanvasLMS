@@ -1,4 +1,4 @@
-"""Read and write .canvas-manifest.toml."""
+"""Read and write the per-config manifest (.manifest-<config stem>.toml)."""
 from __future__ import annotations
 
 import tomllib
@@ -10,6 +10,54 @@ from typing import Any
 
 
 ManifestDict = dict[str, dict[str, Any]]
+
+
+LEGACY_MANIFEST_NAME = ".canvas-manifest.toml"
+
+#: Glob matching every per-config manifest name produced by manifest_name_for().
+MANIFEST_GLOB = ".manifest-*.toml"
+
+DEFAULT_CONFIG_STEM = "canvas"
+
+
+def manifest_name_for(config_path: Path | None) -> str:
+    """File name of the manifest belonging to ``config_path``.
+
+    The manifest is keyed to the canvas.toml that names the Canvas course, so
+    one repo can drive several courses (e.g. one per section) without the runs
+    overwriting each other's Canvas IDs: ``course_settings/canvas.toml`` →
+    ``.manifest-canvas.toml``, ``course_settings/canvas-sec-a.toml`` →
+    ``.manifest-canvas-sec-a.toml``. ``None`` means the default config.
+    """
+    stem = config_path.stem if config_path is not None else DEFAULT_CONFIG_STEM
+    return f".manifest-{stem}.toml"
+
+
+def manifest_path_for(repo_path: Path, config_path: Path | None) -> Path:
+    """Path of the manifest belonging to ``config_path``, inside ``repo_path``."""
+    return repo_path / manifest_name_for(config_path)
+
+
+def migrate_legacy_manifest(repo_path: Path, config_path: Path | None) -> Path:
+    """Resolve the manifest path, renaming a pre-per-config manifest into place.
+
+    Repos written by an older version of the tool have a single
+    ``.canvas-manifest.toml``. That file belongs to the default config, so it
+    is renamed to ``.manifest-canvas.toml`` (once, with a printed notice) and
+    only when the run is using the default config and the new name does not
+    already exist. A run pointed at some other canvas.toml never adopts it —
+    those Canvas IDs belong to a different course.
+    """
+    path = manifest_path_for(repo_path, config_path)
+    legacy = repo_path / LEGACY_MANIFEST_NAME
+    if (
+        path.name == manifest_name_for(None)
+        and not path.exists()
+        and legacy.exists()
+    ):
+        legacy.rename(path)
+        print(f"Renamed {LEGACY_MANIFEST_NAME} → {path.name} (one manifest per canvas.toml)")
+    return path
 
 
 def flag_change(
@@ -98,7 +146,7 @@ def load(path: Path) -> ManifestDict:
 
 def flush(path: Path | None, manifest: ManifestDict) -> None:
     """Write the manifest to disk. path=None means in-memory only (used by
-    `update --check-all`, which must never touch .canvas-manifest.toml)."""
+    `update --check-all`, which must never touch the manifest file)."""
     if path is None:
         return
     with open(path, "wb") as f:
