@@ -3026,11 +3026,104 @@ def _build_frontmatter(
 # Group 9: Orchestrator
 # ---------------------------------------------------------------------------
 
+# Every top-level folder the tool recognizes (see README "How it works" and
+# ARCHITECTURE.md's `sync`/`prune` folder tables), created even when the
+# imported course has nothing to put in them so the repo layout is obvious
+# and future content has an unambiguous place to go.
+TOP_LEVEL_FOLDERS = (
+    "pages",
+    "assignments",
+    "discussions",
+    "announcements",
+    "quizzes",
+    "question_banks",
+    "modules",
+    "snippets",
+    "assets",
+    "course_settings",
+)
+
+_DEFAULT_GITIGNORE = """\
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / IDE junk
+*.swp
+*.swo
+*~
+.~lock.*#
+.vscode/
+.idea/
+
+# Secrets: only relevant if you put Canvas API tokens in course_settings/canvas.toml
+# instead of an environment variable / --token. Uncomment if you do this.
+# course_settings/canvas.toml
+
+# Copied from .gitignore #####################################################
+#
+# Created by https://www.toptal.com/developers/gitignore/api/libreoffice,microsoftoffice
+# Edit at https://www.toptal.com/developers/gitignore?templates=libreoffice,microsoftoffice
+
+### LibreOffice ###
+# LibreOffice locks (see top of file)
+
+### MicrosoftOffice ###
+*.tmp
+# Word temporary
+~$*.doc*
+# Word Auto Backup File
+Backup of *.doc*
+# Excel temporary
+~$*.xls*
+# Excel Backup File
+*.xlk
+# PowerPoint temporary
+~$*.ppt*
+# Visio autosave temporary files
+*.~vsd*
+
+# End of https://www.toptal.com/developers/gitignore/api/libreoffice,microsoftoffice
+
+# Course-specific examples (uncomment / adapt as needed):
+# not_uploaded_to_canvas/**
+# *FEEDBACK.md*
+"""
+
+_DEFAULT_CANVASIGNORE = """\
+# Patterns here are excluded from Canvas uploads only (see .gitignore for what's
+# excluded from git). Uses git's wildmatch syntax. Nothing is matched by default;
+# add patterns as your course grows draft/local-only material.
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Editor / IDE junk
+*.swp
+*~
+
+# Course-specific examples (uncomment / adapt as needed):
+# not_uploaded_to_canvas/**
+# *FEEDBACK.md*
+# announcements/specific-to-this-quarter/**
+# assets/lecture-related/**/*-notes.md
+"""
+
+
 def run_import(imscc_path: Path, output_dir: Path) -> None:
     """Run the full import pipeline from an IMSCC file or directory."""
     if output_dir.exists() and any(output_dir.iterdir()):
         raise ValueError(f"Output directory is not empty: {output_dir}")
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    for folder in TOP_LEVEL_FOLDERS:
+        (output_dir / folder).mkdir(parents=True, exist_ok=True)
+
+    (output_dir / ".gitignore").write_text(_DEFAULT_GITIGNORE, encoding="utf-8")
+    (output_dir / ".canvasignore").write_text(_DEFAULT_CANVASIGNORE, encoding="utf-8")
+    print("Writing default .gitignore and .canvasignore")
 
     imscc_dir, tmp = open_imscc(imscc_path)
     try:

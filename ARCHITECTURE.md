@@ -422,6 +422,20 @@ markdown-to-canvas import <imscc_path> <output_dir>
 
 **Implementation:** `src/markdown_to_canvas/imscc_import.py`
 
+**Scaffolding written up front, before any content conversion:** every folder in
+`TOP_LEVEL_FOLDERS` (`pages`, `assignments`, `discussions`, `announcements`,
+`quizzes`, `question_banks`, `modules`, `snippets`, `assets`, `course_settings`)
+is created even if the course has nothing to put there, so the repo layout is
+always the full shape described in README's "How it works" — an empty
+`announcements/` is as informative as a missing one would be confusing. A
+default `.gitignore` and `.canvasignore` are also written (see `_DEFAULT_GITIGNORE`
+/ `_DEFAULT_CANVASIGNORE`); both are starting points the user is expected to
+edit as the course grows, not a fixed policy — `.gitignore` covers OS/editor/
+Office junk, `.canvasignore` covers the same junk (so nothing junk-like is
+uploaded to Canvas either) plus commented course-specific examples (per-term
+material, feedback drafts). Neither lists the tool's own manifest files —
+`ignore.py`'s `load_ignore_matcher()` already excludes those unconditionally.
+
 ### IMSCC resource classification
 
 | IMSCC type | href / file location | → category |
