@@ -990,7 +990,7 @@ def test_question_bank_mcq_has_original_answer_ids(imported_dir: Path) -> None:
     text = (
         imported_dir / "question_banks" / "fixture-question-bank" / "questions" / "bank-mcq-question.md"
     ).read_text()
-    assert "original_answer_ids" in text
+    assert "# original_answer_ids" in text
     assert "1001" in text
 
 

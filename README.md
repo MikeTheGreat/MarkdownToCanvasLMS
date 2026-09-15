@@ -44,66 +44,66 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
 
 ## Contents
 
-* [markdown-to-canvas](#markdown-to-canvas)
-  * [Project Vision](#project-vision)
-    * [Goals and Benefits](#goals-and-benefits)
-  * [Important Gotch'yas](#important-gotchyas)
-  * [Contents](#contents)
-  * [How it works](#how-it-works)
-  * [Installation](#installation)
-    * [Requirements](#requirements)
-    * [Recommended: install as a `uv` tool](#recommended-install-as-a-uv-tool)
-    * [Run without installing (one-off)](#run-without-installing-one-off)
-    * [Install for development](#install-for-development)
-    * [Installing Pandoc](#installing-pandoc)
-  * [Configuration](#configuration)
-    * [`canvas.toml`](#canvastoml)
-    * [Several Canvas courses from one repo](#several-canvas-courses-from-one-repo)
-      * [Making the sections differ](#making-the-sections-differ)
-    * [API token](#api-token)
-  * [Usage](#usage)
-  * [Canvas overwrite protection](#canvas-overwrite-protection)
-    * [Full sync (default)](#full-sync-default)
-    * [Typical full-sync workflow](#typical-full-sync-workflow)
-  * [Checking a course before deploying (`--check-all`)](#checking-a-course-before-deploying---check-all)
-  * [Selective sync](#selective-sync)
-    * [`-t` — recursive (BFS)](#-t--recursive-bfs)
-    * [`-s` — single target (no traversal)](#-s--single-target-no-traversal)
-    * [Combining `-t` and `-s`](#combining--t-and--s)
-  * [Removing content (`prune`)](#removing-content-prune)
-  * [Moving and renaming files (`mv`)](#moving-and-renaming-files-mv)
-  * [Finding unreferenced content](#finding-unreferenced-content)
-    * [`find-local-orphans` — the repo](#find-local-orphans--the-repo)
-      * [`-v` / `--verbose` — showing what refers to what](#-v--verbose--showing-what-refers-to-what)
-    * [`find-canvas-orphans` — the live course](#find-canvas-orphans--the-live-course)
-  * [Content file format](#content-file-format)
-    * [`course_settings.toml`](#course_settingstoml)
-      * [Centralized due dates](#centralized-due-dates)
-      * [Pinned resources (`pinned_resources`)](#pinned-resources-pinned_resources)
-    * [Syllabus (`course_settings/syllabus.md`)](#syllabus-course_settingssyllabusmd)
-    * [Rubrics (`course_settings/rubrics.toml`)](#rubrics-course_settingsrubricstoml)
-    * [Other `course_settings/` files (import-only)](#other-course_settings-files-import-only)
-    * [Page (`pages/`)](#page-pages)
-    * [Assignment (`assignments/`)](#assignment-assignments)
-    * [Discussion (`discussions/`)](#discussion-discussions)
-    * [Announcement (`announcements/`)](#announcement-announcements)
-    * [Module (`modules/`)](#module-modules)
-      * [Ordering modules that exist only on Canvas](#ordering-modules-that-exist-only-on-canvas)
-    * [Quiz (`quizzes/`)](#quiz-quizzes)
-    * [Question banks (`question_banks/`)](#question-banks-question_banks)
-    * [Snippets](#snippets)
-      * [Inline snippets and the `CANVAS_COURSE_REFERENCE` snippet](#inline-snippets-and-the-canvas_course_reference-snippet)
-      * [Shared frontmatter via `PASTE_SNIPPET_INTO_FRONTMATTER`](#shared-frontmatter-via-paste_snippet_into_frontmatter)
-    * [Course flags — conditional content (`#if` / `#elif` / `#else` / `#endif`)](#course-flags--conditional-content-if--elif--else--endif)
-      * [`published_if`: gating a whole item by flag](#published_if-gating-a-whole-item-by-flag)
-      * [`only_if`: excluding a `due_dates` entry by flag](#only_if-excluding-a-due_dates-entry-by-flag)
-  * [Manifest file](#manifest-file)
-    * [Deleting a file in Canvas](#deleting-a-file-in-canvas)
-  * [IMSCC import](#imscc-import)
-    * [Verifying the import](#verifying-the-import)
-  * [Listing content titles (`list-titles`)](#listing-content-titles-list-titles)
-  * [Resolving external-tool labels (`create-tool-aliases`)](#resolving-external-tool-labels-create-tool-aliases)
-    * [Workflow](#workflow)
+- [markdown-to-canvas](#markdown-to-canvas)
+  - [Project Vision](#project-vision)
+    - [Goals and Benefits](#goals-and-benefits)
+  - [Important Gotch'yas](#important-gotchyas)
+  - [Contents](#contents)
+  - [How it works](#how-it-works)
+  - [Installation](#installation)
+    - [Requirements](#requirements)
+    - [Recommended: install as a `uv` tool](#recommended-install-as-a-uv-tool)
+    - [Run without installing (one-off)](#run-without-installing-one-off)
+    - [Install for development](#install-for-development)
+    - [Installing Pandoc](#installing-pandoc)
+  - [Configuration](#configuration)
+    - [`canvas.toml`](#canvastoml)
+    - [Several Canvas courses from one repo](#several-canvas-courses-from-one-repo)
+      - [Making the sections differ](#making-the-sections-differ)
+    - [API token](#api-token)
+  - [Usage](#usage)
+  - [Canvas overwrite protection](#canvas-overwrite-protection)
+    - [Full sync (default)](#full-sync-default)
+    - [Typical full-sync workflow](#typical-full-sync-workflow)
+  - [Checking a course before deploying (`--check-all`)](#checking-a-course-before-deploying---check-all)
+  - [Selective sync](#selective-sync)
+    - [`-t` — recursive (BFS)](#-t--recursive-bfs)
+    - [`-s` — single target (no traversal)](#-s--single-target-no-traversal)
+    - [Combining `-t` and `-s`](#combining--t-and--s)
+  - [Removing content (`prune`)](#removing-content-prune)
+  - [Moving and renaming files (`mv`)](#moving-and-renaming-files-mv)
+  - [Finding unreferenced content](#finding-unreferenced-content)
+    - [`find-local-orphans` — the repo](#find-local-orphans--the-repo)
+      - [`-v` / `--verbose` — showing what refers to what](#-v----verbose--showing-what-refers-to-what)
+    - [`find-canvas-orphans` — the live course](#find-canvas-orphans--the-live-course)
+  - [Content file format](#content-file-format)
+    - [`course_settings.toml`](#course_settingstoml)
+      - [Centralized due dates](#centralized-due-dates)
+      - [Pinned resources (`pinned_resources`)](#pinned-resources-pinned_resources)
+    - [Syllabus (`course_settings/syllabus.md`)](#syllabus-course_settingssyllabusmd)
+    - [Rubrics (`course_settings/rubrics.toml`)](#rubrics-course_settingsrubricstoml)
+    - [Other `course_settings/` files (import-only)](#other-course_settings-files-import-only)
+    - [Page (`pages/`)](#page-pages)
+    - [Assignment (`assignments/`)](#assignment-assignments)
+    - [Discussion (`discussions/`)](#discussion-discussions)
+    - [Announcement (`announcements/`)](#announcement-announcements)
+    - [Module (`modules/`)](#module-modules)
+      - [Ordering modules that exist only on Canvas](#ordering-modules-that-exist-only-on-canvas)
+    - [Quiz (`quizzes/`)](#quiz-quizzes)
+    - [Question banks (`question_banks/`)](#question-banks-question_banks)
+    - [Snippets](#snippets)
+      - [Inline snippets and the `CANVAS_COURSE_REFERENCE` snippet](#inline-snippets-and-the-canvas_course_reference-snippet)
+      - [Shared frontmatter via `PASTE_SNIPPET_INTO_FRONTMATTER`](#shared-frontmatter-via-paste_snippet_into_frontmatter)
+    - [Course flags — conditional content (`#if` / `#elif` / `#else` / `#endif`)](#course-flags--conditional-content-if--elif--else--endif)
+      - [`published_if`: gating a whole item by flag](#published_if-gating-a-whole-item-by-flag)
+      - [`only_if`: excluding a `due_dates` entry by flag](#only_if-excluding-a-due_dates-entry-by-flag)
+  - [Manifest file](#manifest-file)
+    - [Deleting a file in Canvas](#deleting-a-file-in-canvas)
+  - [IMSCC import](#imscc-import)
+    - [Verifying the import](#verifying-the-import)
+  - [Listing content titles (`list-titles`)](#listing-content-titles-list-titles)
+  - [Resolving external-tool labels (`create-tool-aliases`)](#resolving-external-tool-labels-create-tool-aliases)
+    - [Workflow](#workflow)
 
 ---
 
@@ -1854,7 +1854,7 @@ Example multiple-response question file (`correct` is a list of 1-based indices)
 title: "Which are prime numbers?"
 question_type: multiple_response_question
 points_possible: 2
-correct: [1, 3]                   # answers 2 and 5 are wrong
+correct: [1, 3]                   # answers 2 and 4 are wrong
 ---
 
 Select all of the prime numbers.
@@ -1920,7 +1920,7 @@ In 3–5 paragraphs, explain the concept of gravity.
 ```
 
 **Optional feedback and sample solutions** — any question type may add a
-`## Feedback` section with up to three subsections, and essay questions may add a
+`## Feedback` section with up to four subsections, and essay questions may add a
 `## Sample Solution`:
 
 ```markdown
@@ -1953,15 +1953,33 @@ Shown when the student answers correctly.
 
 Shown when the student answers incorrectly.
 
+### Per-answer
+
+For MCQ, multiple-response, and true/false questions only — feedback shown when
+the student picks one specific answer, keyed by the answer's 1-based position in
+`## Answers` (or `1`/`2` for True/False, matching `True` then `False`). The word
+`answer` is matched case-insensitively (`import` always writes it lowercase, as
+shown below):
+
+```markdown
+### Per-answer
+
+- answer 1: Feedback shown if the student picks answer 1.
+- answer 2: Feedback shown if the student picks answer 2.
+```
+
+A line after an `- answer N:` item that isn't itself a new `- answer M:` item is
+treated as a continuation of that item's feedback (a second paragraph, etc.).
+
 ## Sample Solution
 
 For essay-type questions, this text is uploaded as the question's neutral
 (general) comment. Ignored if a `## Feedback` → `### General` block is also present.
 ```
 
-> The `import` command may also emit `original_answer_ids` in a question's
-> frontmatter and a `### Per-answer` block under `## Feedback`. These are preserved
-> for round-tripping but are **not** sent to Canvas on upload.
+> The `import` command may also emit a commented-out `# original_answer_ids:`
+> line in a question's frontmatter. It's preserved for round-tripping but is
+> never sent to Canvas on upload — nothing consumes it.
 
 ### Question banks (`question_banks/`)
 

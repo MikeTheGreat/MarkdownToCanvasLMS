@@ -1730,8 +1730,7 @@ def _write_question_file(q: dict[str, Any], q_path: Path) -> None:
     }
 
     orig_ids = q.get("original_answer_ids")
-    if orig_ids:
-        fm_fields["original_answer_ids"] = orig_ids
+    commented_fields = {"original_answer_ids": orig_ids} if orig_ids else None
 
     question_md = _html_to_markdown(q["question_text"]).strip() if q.get("question_text") else ""
 
@@ -1759,7 +1758,7 @@ def _write_question_file(q: dict[str, Any], q_path: Path) -> None:
     if question_md:
         body_lines.extend(["", "## Question", "", question_md])
 
-    fm = _build_frontmatter(fm_fields)
+    fm = _build_frontmatter(fm_fields, commented_fields=commented_fields)
     body = "\n".join(body_lines).strip()
     q_path.write_text(fm + "\n\n" + body + "\n", encoding="utf-8")
 

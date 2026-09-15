@@ -19,6 +19,7 @@ _ANSWERS_HEADING_RE = re.compile(r"^##\s+Answers\s*$", re.MULTILINE)
 _ANSWER_ITEM_RE = re.compile(r"^\s*\d+\.\s+(.+)")
 _SECTION_HEADING_RE = re.compile(r"^##\s+(.+)$", re.MULTILINE)
 _SUBSECTION_HEADING_RE = re.compile(r"^###\s+(.+)$", re.MULTILINE)
+_PER_ANSWER_ITEM_RE = re.compile(r"^-\s*answer\s+(\d+):\s*(.*)$", re.IGNORECASE)
 
 
 def parse_quiz_file(
@@ -103,9 +104,33 @@ def _split_sections(body: str) -> dict[str, str]:
     return _split_on_headings(body, _SECTION_HEADING_RE)
 
 
-def _parse_feedback_section(feedback_body: str) -> dict[str, str]:
-    """Parse ### General/Correct/Incorrect subsections from a ## Feedback section."""
-    result: dict[str, str] = {}
+def _parse_per_answer_feedback(text: str) -> dict[int, str]:
+    """Parse `- answer N: text` items into {1-based index: feedback text}.
+
+    Lines after an item that aren't themselves a new `- answer N:` item are
+    treated as continuation of that item's feedback (matching how `import`
+    writes multi-paragraph feedback under a single bullet).
+    """
+    result: dict[int, str] = {}
+    current: int | None = None
+    buf: list[str] = []
+    for line, is_fenced in iter_lines_with_fence_info(text):
+        m = None if is_fenced else _PER_ANSWER_ITEM_RE.match(line)
+        if m:
+            if current is not None:
+                result[current] = "\n".join(buf).strip()
+            current = int(m.group(1))
+            buf = [m.group(2).strip()]
+        elif current is not None:
+            buf.append(line)
+    if current is not None:
+        result[current] = "\n".join(buf).strip()
+    return result
+
+
+def _parse_feedback_section(feedback_body: str) -> dict[str, Any]:
+    """Parse ### General/Correct/Incorrect/Per-answer subsections from a ## Feedback section."""
+    result: dict[str, Any] = {}
     for subheading, raw in _split_on_headings(feedback_body, _SUBSECTION_HEADING_RE).items():
         content = raw.strip()
         if subheading == "general" and content:
@@ -114,6 +139,10 @@ def _parse_feedback_section(feedback_body: str) -> dict[str, str]:
             result["correct_comments"] = content
         elif subheading == "incorrect" and content:
             result["incorrect_comments"] = content
+        elif subheading == "per-answer" and content:
+            per_answer = _parse_per_answer_feedback(content)
+            if per_answer:
+                result["per_answer_comments"] = per_answer
     return result
 
 
@@ -138,6 +167,15 @@ def _parse_answers_section(answers_text: str, correct, question_type: str) -> li
     ]
 
 
+def _apply_per_answer_comments(
+    answers: list[dict[str, Any]], per_answer_comments: dict[int, str]
+) -> None:
+    """Attach `answer_comments` to answers by their 1-based position."""
+    for i, ans in enumerate(answers, start=1):
+        if i in per_answer_comments:
+            ans["answer_comments"] = per_answer_comments[i]
+
+
 def parse_question_file(
     q_path: Path,
     snippets_dir: Path | None = None,
@@ -148,7 +186,8 @@ def parse_question_file(
     """Parse a quiz question .md file.
 
     Returns a dict with: title, question_type, points_possible, question_text (HTML),
-    answers (list of {text, weight} for MCQ/T-F/multiple_response; empty for essay),
+    answers (list of {text, weight} for MCQ/T-F/multiple_response; empty for essay;
+    each answer may also carry answer_comments for MCQ/T-F/multiple_response),
     and optionally neutral_comments, correct_comments, incorrect_comments.
     rel_path is NOT set here — callers add it.
 
@@ -175,6 +214,7 @@ def parse_question_file(
     sections = _split_sections(body)
     feedback_section = sections.get("feedback", "")
     feedback = _parse_feedback_section(feedback_section) if feedback_section.strip() else {}
+    per_answer_comments: dict[int, str] = feedback.pop("per_answer_comments", {})
 
     # Question text: prefer ## Question section, fall back to implicit first section
     desc = sections.get("question", sections.get("", "")).strip()
@@ -185,6 +225,7 @@ def parse_question_file(
             {"text": "True", "weight": 100 if correct is True else 0},
             {"text": "False", "weight": 100 if correct is False else 0},
         ]
+        _apply_per_answer_comments(answers, per_answer_comments)
         return {
             "title": title,
             "question_type": question_type,
@@ -197,6 +238,7 @@ def parse_question_file(
     if question_type in ("multiple_choice_question", "multiple_response_question"):
         answers_text = sections.get("answers", "")
         answers = _parse_answers_section(answers_text, correct, question_type)
+        _apply_per_answer_comments(answers, per_answer_comments)
         return {
             "title": title,
             "question_type": question_type,

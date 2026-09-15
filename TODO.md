@@ -147,21 +147,6 @@ These files are produced by the importer but have no upload path yet:
 
 ## Round-trip fidelity gaps (import → sync)
 
-Fields written by the importer that are silently ignored on upload:
-
-### `original_answer_ids` and `### Per-answer` feedback are never re-uploaded
-
-`imscc_import._write_question_file` emits `original_answer_ids` in YAML frontmatter
-and a `### Per-answer` block under `## Feedback`, but neither is consumed on sync:
-
-- `canvas_api._build_question_params` does not pass `original_answer_ids` to Canvas.
-- `quiz._parse_feedback_section` only reads `### General`, `### Correct`, and
-  `### Incorrect`; the `### Per-answer` block is silently ignored.
-
-These fields round-trip through the file but are never re-uploaded. Either consume
-them on upload or document clearly that they are import-only metadata (the README
-currently notes this).
-
 ### `pattern_match_question` only uploads the first pattern
 
 `quiz.py:180` uses `patterns[0]` when building the answer list for

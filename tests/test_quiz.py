@@ -345,6 +345,97 @@ def test_parse_question_no_feedback_no_comment_keys(tmp_path):
     assert "incorrect_comments" not in q
 
 
+def test_parse_question_per_answer_feedback_mcq(tmp_path):
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\n"
+        "title: A question\n"
+        "question_type: multiple_choice_question\n"
+        "points_possible: 1\n"
+        "correct: 2\n"
+        "---\n\n"
+        "What is the answer?\n\n"
+        "## Answers\n\n"
+        "1. Wrong\n"
+        "2. Right\n\n"
+        "## Feedback\n\n"
+        "### Per-answer\n\n"
+        "- answer 1: Nope, try again.\n"
+        "- answer 2: Correct!\n"
+    )
+    q = parse_question_file(md)
+    assert q["answers"][0]["answer_comments"] == "Nope, try again."
+    assert q["answers"][1]["answer_comments"] == "Correct!"
+    assert "per_answer_comments" not in q
+
+
+def test_parse_question_per_answer_feedback_case_insensitive(tmp_path):
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\n"
+        "title: A question\n"
+        "question_type: multiple_choice_question\n"
+        "points_possible: 1\n"
+        "correct: 2\n"
+        "---\n\n"
+        "What is the answer?\n\n"
+        "## Answers\n\n"
+        "1. Wrong\n"
+        "2. Right\n\n"
+        "## Feedback\n\n"
+        "### Per-answer\n\n"
+        "- Answer 1: Nope, try again.\n"
+        "- ANSWER 2: Correct!\n"
+    )
+    q = parse_question_file(md)
+    assert q["answers"][0]["answer_comments"] == "Nope, try again."
+    assert q["answers"][1]["answer_comments"] == "Correct!"
+
+
+def test_parse_question_per_answer_feedback_multiline(tmp_path):
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\n"
+        "title: A question\n"
+        "question_type: multiple_choice_question\n"
+        "points_possible: 1\n"
+        "correct: 1\n"
+        "---\n\n"
+        "What is the answer?\n\n"
+        "## Answers\n\n"
+        "1. Right\n"
+        "2. Wrong\n\n"
+        "## Feedback\n\n"
+        "### Per-answer\n\n"
+        "- answer 2: First line of feedback.\n\n"
+        "Second paragraph, still about answer 2.\n"
+    )
+    q = parse_question_file(md)
+    assert "answer_comments" not in q["answers"][0]
+    assert q["answers"][1]["answer_comments"] == (
+        "First line of feedback.\n\nSecond paragraph, still about answer 2."
+    )
+
+
+def test_parse_question_per_answer_feedback_true_false(tmp_path):
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\n"
+        "title: A question\n"
+        "question_type: true_false_question\n"
+        "points_possible: 1\n"
+        "correct: true\n"
+        "---\n\n"
+        "The sky is blue.\n\n"
+        "## Feedback\n\n"
+        "### Per-answer\n\n"
+        "- answer 1: Correct, the sky is blue.\n"
+    )
+    q = parse_question_file(md)
+    assert q["answers"][0]["answer_comments"] == "Correct, the sky is blue."
+    assert "answer_comments" not in q["answers"][1]
+
+
 # ---------------------------------------------------------------------------
 # parse_question_file — essay sample solution → neutral_comments
 # ---------------------------------------------------------------------------

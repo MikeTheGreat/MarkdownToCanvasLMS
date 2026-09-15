@@ -477,7 +477,7 @@ The `_syllabus` resource (`course_settings/syllabus.html`) → `course_settings/
 6b. **Quizzes:** read `gXXX/assessment_meta.xml` for quiz settings; parse QTI 1.2 XML (`gXXX/gXXX.xml`) for questions; write `quizzes/{slug}/{slug}.md` and one file per question under `quizzes/{slug}/questions/`; unsupported question types emit a warning and are skipped
 
 **Assignment group / rubric association:** Assignments, graded discussions, and quizzes each carry an `assignment_group_identifierref` (top-level for assignments/quizzes, nested under `<assignment>` for discussions); assignments and discussions additionally carry `rubric_identifierref` + `rubric_use_for_grading`. `_resolve_assignment_group_and_rubric()` resolves these IMSCC identifiers against identifier→title maps built once in `run_import()` from `assignment_groups.xml`/`rubrics.xml`, writing `assignment_group_id`/`rubric` frontmatter fields by title (matching how `sync.py` resolves them) and `rubric_use_for_grading` → `use_for_grading` (only when a rubric is present). Refs that don't resolve print a warning and are dropped rather than written as unresolvable raw identifiers.
-6c. **Question banks:** parse `non_cc_assessments/*.xml.qti` objectbank files; read bank metadata (bank_title, bank_context_uuid, bank_state) from `<qtimetadata>`; parse all `<item>` children as questions (same QTI format as quizzes, plus `original_answer_ids` metadata); write `question_banks/{slug}/{slug}.toml` and one question file per item under `question_banks/{slug}/questions/`
+6c. **Question banks:** parse `non_cc_assessments/*.xml.qti` objectbank files; read bank metadata (bank_title, bank_context_uuid, bank_state) from `<qtimetadata>`; parse all `<item>` children as questions (same QTI format as quizzes, plus `original_answer_ids` metadata written as a commented-out frontmatter line); write `question_banks/{slug}/{slug}.toml` and one question file per item under `question_banks/{slug}/questions/`
 7. **Modules:** read `course_settings/module_meta.xml`; emit items in position order (see below); write `modules/{slugify(title)}.md`
 8. **Course settings:** collect data from all `course_settings/*.xml` files and `imsmanifest.xml` metadata; write:
    - `course_settings/course_settings.toml` — all course-level settings (see below)
@@ -1150,7 +1150,9 @@ match_type: substring
 Name a programming language used in data science.
 ```
 
-**Question feedback** (all types): If the QTI item has `<itemfeedback>` elements, a `## Feedback` section is appended after the question text / answers with subsections `### General`, `### Correct`, `### Incorrect`, and `### Per-answer` (only those present in the source). Per-answer feedback lists each answer by 1-based index.
+**Question feedback** (all types): If the QTI item has `<itemfeedback>` elements, a `## Feedback` section is appended after the question text / answers with subsections `### General`, `### Correct`, `### Incorrect`, and `### Per-answer` (only those present in the source). Per-answer feedback lists each answer by 1-based index, written as `- answer N: text` bullets (a following line that isn't itself a `- answer M:` bullet is treated as a continuation paragraph of the same item).
+
+On the sync side, `quiz.parse_question_file()` reads all four subsections: `### General`/`### Correct`/`### Incorrect` become the question's `neutral_comments`/`correct_comments`/`incorrect_comments` (forwarded to Canvas by `canvas_api._build_question_params`), and `### Per-answer` becomes an `answer_comments` key on the matching entry in `answers` (MCQ/multiple-response/true-false only — matched by the same 1-based position used elsewhere for `correct`).
 
 **Essay sample solution**: If the QTI item has `<itemfeedback ident="solution">`, a `## Sample Solution` section is appended after the question text.
 
@@ -1211,9 +1213,15 @@ bank_context_uuid = "SRI51UyJjHbdsdzYFn1LYxMYjMYh4GITEORKR38K"
 bank_state = "active"
 ```
 
-**Bank question files** use the same format as quiz question files, with one additional frontmatter field:
+**Bank question files** use the same format as quiz question files. Both quiz and bank
+questions may carry one extra frontmatter line, written as a comment:
 
-`original_answer_ids` — Canvas-internal answer IDs needed to maintain stable answer identity on re-import. Present only on choice-based questions (MCQ, multiple-response) where Canvas assigned them.
+`# original_answer_ids` — the Canvas-internal answer IDs from the original export, kept
+as import-only fidelity metadata. Present only on choice-based questions (MCQ,
+multiple-response) where Canvas assigned them. It is written commented-out because
+nothing consumes it: `update`/`publish`/`sync` never read it, and re-uploading a
+question always gets fresh Canvas-assigned answer IDs. Uncomment it manually if you
+need to reference the original IDs for some other purpose.
 
 ```yaml
 ---
@@ -1221,7 +1229,7 @@ title: "How many exams?"
 question_type: multiple_choice_question
 points_possible: 1.0
 correct: 3
-original_answer_ids: [8230, 5348, 7678, 5601]
+# original_answer_ids: [8230, 5348, 7678, 5601]
 ---
 ```
 
