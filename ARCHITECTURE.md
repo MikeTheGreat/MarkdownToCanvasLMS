@@ -433,8 +433,12 @@ default `.gitignore` and `.canvasignore` are also written (see `_DEFAULT_GITIGNO
 edit as the course grows, not a fixed policy — `.gitignore` covers OS/editor/
 Office junk, `.canvasignore` covers the same junk (so nothing junk-like is
 uploaded to Canvas either) plus commented course-specific examples (per-term
-material, feedback drafts). Neither lists the tool's own manifest files —
-`ignore.py`'s `load_ignore_matcher()` already excludes those unconditionally.
+material, feedback drafts). `.canvasignore` also actively excludes
+`course_definition/**` — the `init_course` skill's convention for instructor
+reference material (scope-and-sequence docs, curriculum outcome guides) that
+should never reach Canvas, even before that folder exists. Neither lists the
+tool's own manifest files — `ignore.py`'s `load_ignore_matcher()` already
+excludes those unconditionally.
 
 ### IMSCC resource classification
 

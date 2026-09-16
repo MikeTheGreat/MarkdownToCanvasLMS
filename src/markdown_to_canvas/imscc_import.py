@@ -3092,8 +3092,8 @@ Backup of *.doc*
 
 _DEFAULT_CANVASIGNORE = """\
 # Patterns here are excluded from Canvas uploads only (see .gitignore for what's
-# excluded from git). Uses git's wildmatch syntax. Nothing is matched by default;
-# add patterns as your course grows draft/local-only material.
+# excluded from git). Uses git's wildmatch syntax. Add patterns as your course
+# grows draft/local-only material.
 
 # OS junk
 .DS_Store
@@ -3102,6 +3102,9 @@ Thumbs.db
 # Editor / IDE junk
 *.swp
 *~
+
+# Internal course-planning notes, not Canvas content
+course_definition/**
 
 # Course-specific examples (uncomment / adapt as needed):
 # not_uploaded_to_canvas/**
