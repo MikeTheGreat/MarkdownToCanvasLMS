@@ -21,7 +21,13 @@ _CONTENT_TYPE_DIRS = {
     "course_settings",
 }
 
-_MD_LINK_RE = re.compile(r"(!?\[[^\]]*\])\(([^)]+)\)")
+# Anchored on "](" rather than the full [text], because link text may contain
+# nested brackets (e.g. [[**[x]**]{style=...}](url)). The URL/title group skips
+# quoted titles as a unit (so "File(s)" doesn't close the link) and accepts one
+# level of balanced parens, which Pandoc allows in paths like "Folder (Old)/x".
+_MD_LINK_RE = re.compile(
+    r'(\])\(((?:[^()"\']|"[^"]*"|\'[^\']*\'|\([^()]*\))*)\)'
+)
 _INLINE_SNIPPET_RE = re.compile(r"\$([^$\n]+\.md)\$")
 _HTML_IMG_RE = re.compile(r"<img\b[^>]*/?>", re.IGNORECASE)
 _HTML_A_RE = re.compile(r"<a\b[^>]*>", re.IGNORECASE)
@@ -682,7 +688,7 @@ def _describe_changes(
             link_total += sum(1 for o, n in zip(old_lines, new_lines) if o != n)
 
     parts = []
-    parts.append(f"{prefix}{'M' if not noop else 'm'}oved {files_moved} file(s)")
+    parts.append(f"{'Would move' if noop else 'Moved'} {files_moved} file(s)")
     if manifest_names:
         where = "" if len(manifest_names) == 1 else f" in {', '.join(manifest_names)}"
         parts.append(f"updated {manifest_entries} manifest entry/entries{where}")

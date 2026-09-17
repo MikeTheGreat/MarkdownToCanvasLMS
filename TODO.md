@@ -389,8 +389,10 @@ controlled/structured formats that users don't write by hand with angle brackets
 but they could theoretically be triggered by an editor that auto-inserts `<>` for
 paths with spaces.
 
-Fix pattern (same as `mv.py` and `publish.py`): after capturing the URL group,
-check `if href.startswith("<") and href.endswith(">"):` and strip the brackets.
+Fix pattern: `mv.py:_MD_LINK_RE` and `publish.py:_MD_LINK_RE` +
+`_link_destination` show how to match the destination (anchor on `](`, allow
+quoted titles and balanced parens), strip `<>` and the title, and `unquote`
+percent-encoding such as `%20`.
 
 ## Filesystem watcher for automatic move/rename tracking
 

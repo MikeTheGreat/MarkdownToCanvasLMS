@@ -651,3 +651,21 @@ def test_find_syllabus_in_subfolder(tmp_path):
     title, path = result
     assert title == "Course Syllabus"
     assert path == "pages/admin/syllabus.md"
+
+
+def test_extract_local_refs_awkward_link_shapes(tmp_path):
+    page = tmp_path / "pages" / "a.md"
+    (tmp_path / "pages").mkdir()
+    (tmp_path / "assets" / "F (L)").mkdir(parents=True)
+    (tmp_path / "assets" / "F (L)" / "x.java").write_text("")
+    (tmp_path / "assets" / "a b.txt").write_text("")
+    (tmp_path / "assets" / "plain.txt").write_text("")
+    cases = {
+        '[x](../assets/F%20(L)/x.java "t")': "assets/F (L)/x.java",
+        "[x](<../assets/a b.txt>)": "assets/a b.txt",
+        "[x](../assets/a%20b.txt)": "assets/a b.txt",
+        '- [[**[x]**]{s=1}](../assets/plain.txt "t")': "assets/plain.txt",
+        '[x](../assets/plain.txt "File(s)")': "assets/plain.txt",
+    }
+    for text, expected in cases.items():
+        assert publish.extract_local_refs(text, page, tmp_path) == {expected}, text

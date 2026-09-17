@@ -296,6 +296,24 @@ class TestTransformLinks:
         assert "<../assets/syllabus/file-v2.docx>" in result
         assert "file.docx>" not in result.replace("file-v2.docx>", "")
 
+    def test_url_with_balanced_parens_in_folder_name(self) -> None:
+        content = '[x](../assets/Starter%20(Loose%20Files)/A/x.java "x.java")'
+        path_map = {"assets/Starter (Loose Files)/A/x.java": "assets/Starter/A/x.java"}
+        result = transform_links(content, "assignments", "assignments", path_map)
+        assert result == '[x](../assets/Starter/A/x.java "x.java")'
+
+    def test_link_text_with_nested_brackets(self) -> None:
+        content = '- [[**[x.java]**]{style="c"}](../assets/old/x.java "x.java")'
+        path_map = {"assets/old/x.java": "assets/new/x.java"}
+        result = transform_links(content, "assignments", "assignments", path_map)
+        assert result == '- [[**[x.java]**]{style="c"}](../assets/new/x.java "x.java")'
+
+    def test_link_nested_inside_styled_span(self) -> None:
+        content = '- [**[x](../assets/F%20(L)/x.java "x"){s=1}**]{s=1}'
+        path_map = {"assets/F (L)/x.java": "assets/F/x.java"}
+        result = transform_links(content, "assignments", "assignments", path_map)
+        assert result == '- [**[x](../assets/F/x.java "x"){s=1}**]{s=1}'
+
     def test_no_change_when_nothing_moved(self) -> None:
         content = "See [page](../pages/foo.md)"
         result = transform_links(content, "modules", "modules", {})
@@ -336,6 +354,31 @@ class TestTransformLinks:
         path_map = {"assets/x.pdf": "assets/y.pdf"}
         result = transform_links(content, "course_settings", "course_settings", path_map)
         assert result == content
+
+    def test_handles_title_containing_parenthesis(self) -> None:
+        """A title like 'File(s)' has a ')' that isn't the link's closing paren."""
+        content = (
+            '[How To Make Sure That You Submitted The Correct File(s) For Your Homework]'
+            '(../pages/old.md "How To Make Sure That You Submitted The Correct File(s) For Your Homework")'
+        )
+        path_map = {"pages/old.md": "pages/new.md"}
+        result = transform_links(content, "pages", "pages", path_map)
+        assert "(new.md " in result
+        assert "old.md" not in result
+        assert '"How To Make Sure That You Submitted The Correct File(s) For Your Homework"' in result
+
+    def test_handles_nested_bracket_with_parenthesized_title(self) -> None:
+        """Reproduces the real-world case: a highlighted span wrapping a link
+        whose own link text and title both contain parentheses."""
+        content = (
+            '[**See [How To Submit The Correct File(s)]'
+            '(../pages/old.md "How To Submit The Correct File(s)"){style="color:red;"}**]'
+            '{style="color:red;"}'
+        )
+        path_map = {"pages/old.md": "pages/new.md"}
+        result = transform_links(content, "pages", "pages", path_map)
+        assert "(new.md " in result
+        assert "old.md" not in result
 
 
 # ---------------------------------------------------------------------------

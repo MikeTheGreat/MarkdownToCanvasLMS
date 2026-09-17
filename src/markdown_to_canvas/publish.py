@@ -16,6 +16,7 @@ import tempfile
 import tomllib
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 import yaml
 
@@ -341,19 +342,29 @@ def _find_syllabus(
 # Reachability traversal
 # ---------------------------------------------------------------------------
 
-_MD_LINK_RE = re.compile(r"!?\[(?:[^\[\]]|\[[^\]]*\])*\]\(([^)\s]+)")
+# Same shape as mv's link regex: anchored on "](" so link text may nest
+# brackets, quoted titles skipped as a unit, one level of balanced parens
+# allowed in the destination (e.g. "Folder%20(Old)/x.java").
+_MD_LINK_RE = re.compile(r'\]\(((?:[^()"\']|"[^"]*"|\'[^\']*\'|\([^()]*\))*)\)')
+
+
+def _link_destination(raw: str) -> str:
+    """The destination of a Markdown link, minus any <> wrapper and title."""
+    raw = raw.strip()
+    if raw.startswith("<"):
+        end = raw.find(">")
+        return raw[1:end] if end > 0 else raw
+    return raw.split(maxsplit=1)[0] if raw else ""
 
 
 def extract_local_refs(text: str, source_file: Path, repo: Path) -> set[str]:
     """Extract repo-relative paths of local files referenced from Markdown."""
     refs: set[str] = set()
     for m in _MD_LINK_RE.finditer(text):
-        href = m.group(1)
+        href = _link_destination(m.group(1))
         if href.startswith(("http://", "https://", "mailto:", "#")):
             continue
-        if href.startswith("<") and href.endswith(">"):
-            href = href[1:-1]
-        href = href.split("#")[0]
+        href = unquote(href.split("#")[0])
         if not href:
             continue
         resolved = (source_file.parent / href).resolve()
