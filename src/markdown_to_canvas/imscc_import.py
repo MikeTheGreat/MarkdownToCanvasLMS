@@ -51,6 +51,9 @@ class ImportContext:
     due_dates_collector: list[dict[str, Any]] | None = None
     assignment_group_titles: dict[str, str] = field(default_factory=dict)
     rubric_titles: dict[str, str] = field(default_factory=dict)
+    # Set by convert_page when a wiki page carries <meta name="front_page"
+    # content="true"/>; create_course_settings writes it out as front_page.
+    front_page: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -619,6 +622,21 @@ def _extract_html_body(html: str) -> str:
     return m.group(1).strip() if m else html.strip()
 
 
+def _html_meta(html: str, name: str) -> str | None:
+    """Return the ``content`` of the named <meta> tag in a wiki_content page.
+
+    Canvas records per-page settings (front_page, workflow_state, ...) as meta
+    tags in the page's <head>, not in any of the course_settings XML files.
+    """
+    head = html.split("</head>", 1)[0]
+    m = re.search(
+        rf"""<meta\s+name=["']{re.escape(name)}["']\s+content=["']([^"']*)["']""",
+        head,
+        re.IGNORECASE,
+    )
+    return m.group(1) if m else None
+
+
 _IFRAME_RE = re.compile(r"<iframe\b[^>]*>.*?</iframe>", re.IGNORECASE | re.DOTALL)
 
 
@@ -924,6 +942,16 @@ def convert_page(ctx: ImportContext, entry: TempEntry) -> None:
     """Convert a wiki_content page HTML file to pages/{stem}.md."""
     html_path = ctx.imscc_dir / entry.imscc_path
     raw_html = html_path.read_text(encoding="utf-8", errors="replace")
+
+    if (_html_meta(raw_html, "front_page") or "").lower() == "true":
+        if ctx.front_page and ctx.front_page != entry.local_path:
+            print(
+                f"  WARNING: more than one page is marked front_page; keeping "
+                f"{ctx.front_page}, ignoring {entry.local_path}"
+            )
+        else:
+            ctx.front_page = entry.local_path
+
     body_html = _extract_html_body(raw_html)
     body_html = rewrite_imscc_links(body_html, ctx.temp_manifest, entry.local_path, ctx.course_id, ctx.base_url)
     markdown = _html_to_markdown(body_html)
@@ -2671,7 +2699,7 @@ def _write_course_settings_toml(
     data: dict[str, Any] = {}
 
     # Identity and key settings first (deterministic ordering)
-    for key in ("title", "course_code", "default_view", "license", "dashboard_image", "start_at", "conclude_at"):
+    for key in ("title", "course_code", "default_view", "front_page", "license", "dashboard_image", "start_at", "conclude_at"):
         if key in course_settings:
             data[key] = course_settings[key]
 
@@ -2834,6 +2862,7 @@ def create_course_settings(
     course_id: int | str | None = None,
     base_url: str | None = None,
     due_dates: list[dict[str, Any]] | None = None,
+    front_page: str | None = None,
 ) -> None:
     """Write course_settings/{course_settings.toml, syllabus.md, events.md, canvas.toml}."""
     cs_dir = output_dir / "course_settings"
@@ -2885,6 +2914,18 @@ def create_course_settings(
                 print(f"  WARNING: dashboard image file not found in IMSCC: {entry.imscc_path}")
         else:
             print(f"  WARNING: image_identifier_ref '{image_ref}' not found in IMSCC manifest")
+
+    # Front page: Canvas marks it on the page itself (a <meta> tag in
+    # wiki_content/*.html), not in course_settings.xml, so it arrives here from
+    # the page phase.  Without it the repo would say default_view = "wiki"
+    # without naming a page, and find-local-orphans would see the home page as
+    # unreferenced.
+    if front_page:
+        course_settings["front_page"] = front_page
+        print(f"Setting front page: {front_page}")
+    elif course_settings.get("default_view") == "wiki":
+        print("  WARNING: default_view is 'wiki' but no page is marked front_page; "
+              "set front_page in course_settings.toml by hand")
 
     _write_course_settings_toml(
         course_settings, manifest_meta, grading_standards, assignment_groups, late_policy,
@@ -3242,7 +3283,10 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
             print("Generating module order: course_settings/module_order.toml")
 
         # Phase 7: course settings
-        create_course_settings(imscc_dir, temp_manifest, output_dir, course_id, base_url, due_dates=due_dates)
+        create_course_settings(
+            imscc_dir, temp_manifest, output_dir, course_id, base_url,
+            due_dates=due_dates, front_page=ctx.front_page,
+        )
 
         # Phase 8: parameterize Canvas course URL via snippet
         if base_url:

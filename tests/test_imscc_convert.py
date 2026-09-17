@@ -6,12 +6,14 @@ from pathlib import Path
 import pytest
 
 from markdown_to_canvas.imscc_import import (
+    ImportContext,
     TempEntry,
     _build_frontmatter,
     _convert_tab_configuration,
     _dedup_question_slugs,
     _extract_html_body,
     _extract_iframes,
+    _html_meta,
     _html_to_markdown,
     _parse_assignment_groups,
     _parse_context,
@@ -28,6 +30,7 @@ from markdown_to_canvas.imscc_import import (
     _simplify_pandoc_attrs,
     _strip_canvas_img_attrs,
     _write_course_settings_toml,
+    convert_page,
     parse_announcement_meta,
     parse_assignment_settings,
     parse_imsmanifest,
@@ -134,6 +137,89 @@ def test_extract_body_multiline() -> None:
     result = _extract_html_body(html)
     assert "<h1>Title</h1>" in result
     assert "<html>" not in result
+
+
+# ---------------------------------------------------------------------------
+# _html_meta / front page detection
+# ---------------------------------------------------------------------------
+
+
+def _page_html(meta: str = "", body: str = "<p>hi</p>") -> str:
+    return f"<html>\n<head>\n<title>T</title>\n{meta}\n</head>\n<body>\n{body}\n</body>\n</html>"
+
+
+def test_html_meta_reads_front_page_flag() -> None:
+    html = _page_html('<meta name="front_page" content="true"/>')
+    assert _html_meta(html, "front_page") == "true"
+
+
+def test_html_meta_absent_returns_none() -> None:
+    assert _html_meta(_page_html(), "front_page") is None
+
+
+def test_html_meta_ignores_body_content() -> None:
+    """A page whose body happens to contain the same markup is not the front page."""
+    html = _page_html(body='<meta name="front_page" content="true"/>')
+    assert _html_meta(html, "front_page") is None
+
+
+def test_html_meta_single_quotes_and_mixed_case() -> None:
+    html = _page_html("<META NAME='front_page' CONTENT='true'>")
+    assert _html_meta(html, "front_page") == "true"
+
+
+def _convert(tmp_path: Path, ctx_out: Path, name: str, meta: str) -> ImportContext:
+    (tmp_path / "wiki_content").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "wiki_content" / f"{name}.html").write_text(_page_html(meta))
+    return ImportContext(imscc_dir=tmp_path, temp_manifest={}, output_dir=ctx_out)
+
+
+def _entry(name: str) -> TempEntry:
+    return TempEntry(
+        imscc_id=name,
+        category="page",
+        imscc_path=f"wiki_content/{name}.html",
+        local_path=f"pages/{name}.md",
+        title=name,
+    )
+
+
+def test_convert_page_records_front_page(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    ctx = _convert(tmp_path, out, "home", '<meta name="front_page" content="true"/>')
+    convert_page(ctx, _entry("home"))
+    assert ctx.front_page == "pages/home.md"
+
+
+def test_convert_page_without_flag_leaves_front_page_unset(tmp_path: Path) -> None:
+    out = tmp_path / "out"
+    ctx = _convert(tmp_path, out, "plain", "")
+    convert_page(ctx, _entry("plain"))
+    assert ctx.front_page is None
+
+
+def test_convert_page_second_front_page_warns_and_keeps_first(tmp_path: Path, capsys) -> None:
+    out = tmp_path / "out"
+    flag = '<meta name="front_page" content="true"/>'
+    ctx = _convert(tmp_path, out, "first", flag)
+    convert_page(ctx, _entry("first"))
+    _convert(tmp_path, out, "second", flag)
+    convert_page(ctx, _entry("second"))
+    assert ctx.front_page == "pages/first.md"
+    assert "more than one page is marked front_page" in capsys.readouterr().out
+
+
+def test_write_course_settings_toml_keeps_front_page_top_level(tmp_path: Path) -> None:
+    import tomllib
+
+    _write_course_settings_toml(
+        {"default_view": "wiki", "front_page": "pages/home.md"},
+        {}, [], [], {}, tmp_path,
+    )
+    data = tomllib.loads(
+        (tmp_path / "course_settings" / "course_settings.toml").read_text()
+    )
+    assert data["front_page"] == "pages/home.md"
 
 
 # ---------------------------------------------------------------------------

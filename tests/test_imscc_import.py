@@ -474,6 +474,16 @@ def test_course_settings_toml_has_all_basic_fields(imported_dir: Path) -> None:
     assert data["license"] == "private"
 
 
+def test_course_settings_toml_records_front_page(imported_dir: Path) -> None:
+    """Canvas marks the front page with a <meta> tag on the page itself, not in
+    course_settings.xml; import must carry it into course_settings.toml so that
+    `update` can set it and find-local-orphans doesn't see the home page as
+    unreferenced."""
+    import tomllib
+    data = tomllib.loads((imported_dir / "course_settings" / "course_settings.toml").read_text())
+    assert data["front_page"] == "pages/my-page.md"
+
+
 def test_course_settings_toml_booleans_typed(imported_dir: Path) -> None:
     import tomllib
     data = tomllib.loads((imported_dir / "course_settings" / "course_settings.toml").read_text())

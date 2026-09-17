@@ -307,6 +307,13 @@ wrong reports live content as dead.
 Deferred by the user on 2026-09-10 when the non-transitive version was
 specified, explicitly to be revisited later.
 
+Real-world case for it: on 2026-09-16 an IT-CS 142 import was missing
+`front_page` (an `import` bug, fixed since — see ARCHITECTURE.md), so the
+course landing page was reported unreferenced and removed. The page it linked
+to survived that pass and was removed by the next one, because its only
+referrer had just been deleted. Non-transitivity turned one bad root into a
+two-stage cascade.
+
 Design notes if picked up: `local_orphans.collect_local_refs()` already returns
 the outbound edges for every source type, so the graph is in hand — what is
 missing is the root set and a BFS over it. `publish.collect_reachable()` already

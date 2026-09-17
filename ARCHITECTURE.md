@@ -670,6 +670,7 @@ A TOML file written inside the `course_settings/` folder capturing all course-le
 | `assignment_groups.xml` | `[[assignment_groups]]` — title, position, group_weight, rules (drop_lowest etc.) |
 | `late_policy.xml` | `[late_policy]` — deduction enablement, deduction amounts, interval |
 | `context.xml` | `canvas_domain` → pre-fills `canvas.toml` base_url; `course_id` → pre-fills `canvas.toml` course_id |
+| `wiki_content/*.html` (`<meta>`) | `front_page` — see below |
 
 ### Additional course settings outputs
 
@@ -681,6 +682,14 @@ A TOML file written inside the `course_settings/` folder capturing all course-le
 Boolean fields (`true`/`false`) are stored as TOML booleans. Numeric fields are stored as int or float. Empty elements are omitted. The nested `default_post_policy` element is stored as a TOML inline table.
 
 `_parse_course_settings_full()` is otherwise a straight pass-through of every element in `course_settings.xml`, with one exception: keys in `_COURSE_SETTINGS_DROP` are discarded rather than round-tripped, because the exported value is an artifact of the *source* course. Currently that is just `grading_standard_id` — a Canvas id valid only where it was exported from. `update` resolves the real id by matching `[[grading_standards]]` titles against the target course and its account chain, so the imported value had no legitimate use; worse, being on the `course.update()` allowlist, it would override that resolution on any metadata-only run and silently swap the course's grading scheme. It is now also in `_COURSE_METADATA_SKIP`, so repos imported before this change stop uploading the stale value.
+
+### Front page comes from the page, not from `course_settings.xml`
+
+Canvas does not record *which* page is the home page in any course-settings XML. `course_settings.xml` carries only `default_view` (`wiki` / `modules` / `assignments` / ...); the identity of the wiki home page lives in a `<meta name="front_page" content="true"/>` tag in that page's own `wiki_content/*.html`.
+
+`convert_page()` reads that tag (`_html_meta()`, which searches only the `<head>`, so a page whose *body* quotes the same markup is not mistaken for the home page) and records the page's repo-relative path on `ImportContext.front_page`. The page phase runs before the course-settings phase, so `create_course_settings()` receives it and writes `front_page = "pages/<slug>.md"` next to `default_view`. A cartridge marking two pages keeps the first and warns; `default_view = "wiki"` with no marked page also warns, since the resulting repo cannot say what the home page is.
+
+This was missed until 2026-09: `import` wrote `default_view = "wiki"` and no `front_page`, which left the home page with **no inbound reference anywhere in the repo** — it is in no module, and nothing links to a home page. `find-local-orphans` counts `course_settings.toml`'s `front_page` as a reference (`collect_settings_refs()`), so with the key missing it reported the course's landing page as unreferenced, and `zzRemoveUnusedCanvasFiles.sh` deleted it. Anything reachable only through that page (e.g. an office-hours page) was then orphaned by the next run, cascading. Repos imported before this change need the key added by hand.
 
 ### Import-only settings are written commented out
 

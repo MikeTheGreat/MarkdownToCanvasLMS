@@ -1025,7 +1025,9 @@ course_code  = "CS 101"                        # short code shown in the UI
 start_at     = "2025-01-06T00:00:00-08:00"     # course start date
 conclude_at  = "2025-03-20T23:59:00-07:00"     # course end date
 default_view = "wiki"   # landing page: feed | wiki | modules | syllabus | assignments
-front_page   = "pages/welcome.md"  # wiki home page (only used when default_view = "wiki")
+front_page   = "pages/welcome.md"  # the wiki home page (takes effect when default_view = "wiki")
+                                   #   also marks the page as referenced, so find-local-orphans
+                                   #   does not report your landing page as unused
 license      = "private"  # private | public_domain | cc_by | cc_by_sa | cc_by_nc
                           #   | cc_by_nc_sa | cc_by_nd | cc_by_nc_nd
 dashboard_image = "assets/course-banner.png"    # image shown on the Canvas Dashboard card
@@ -2431,6 +2433,8 @@ markdown-to-canvas import course-export.imscc ./my-course-repo
 This converts pages, assignments, discussions, announcements, quizzes, question banks, modules, and course settings to local files ready for use with this tool. A `canvas.toml` skeleton is written with the Canvas domain and course ID pre-filled from the export metadata.
 
 Every top-level folder the tool recognizes (`pages/`, `assignments/`, `discussions/`, `announcements/`, `quizzes/`, `question_banks/`, `modules/`, `snippets/`, `assets/`, `course_settings/`) is created even if the course has nothing to put in it, so the repo layout always matches [How it works](#how-it-works) and there's an obvious place to add new content later. A starter `.gitignore` and `.canvasignore` are also written — both cover common OS/editor/Office junk files, plus commented-out examples of course-specific patterns (per-term-only material, feedback drafts) you can uncomment or adapt as the course grows. `.canvasignore` also actively excludes `course_definition/**` — instructor reference material (scope-and-sequence docs, curriculum outcome guides) that should never be uploaded to Canvas — and `question_banks/**`, since Canvas's API cannot create or update question banks. If the export contains any question banks, `import` prints a warning saying they cannot be re-uploaded.
+
+**Front page.** If the export marks a page as the course home page, `import` writes `front_page = "pages/<slug>.md"` into `course_settings/course_settings.toml`. Canvas stores this on the page itself rather than in its course-settings file, so `default_view` alone does not say *which* page is the home page. Keeping the key matters for more than `update`: a home page is in no module and nothing links to it, so `front_page` is the only thing marking it as referenced — without it, `find-local-orphans` reports your landing page as unused. Imports made before 2026-09 are missing the key; if your home page went missing after an orphan cleanup, recover it from git and add the key by hand.
 
 **Announcements** are imported into an `announcements/` folder, one Markdown file per announcement. Only the announcement itself is imported — any student replies, likes, or comments are not part of a Canvas export, so there is nothing to import. Each file gets `published: false`, which means `update` leaves it **staged (not posted)** until you set `published: true` — handy for re-posting announcements when the time is right (e.g. a midterm reminder the week before the midterm). The frontmatter keeps `title` and `published` as active fields; the original export's other metadata (post date, workflow state, etc.) is preserved as commented-out lines you can uncomment to apply (see [Announcement](#announcement-announcements)).
 
