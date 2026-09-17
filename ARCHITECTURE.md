@@ -147,12 +147,17 @@ The `assets/` folder hierarchy is mirrored into Canvas Files. `assets/images/fig
 - `<a href="../discussions/baz.md">` → look up or stub-create → rewrite to `/courses/:id/discussion_topics/:id`
 - `<a href="../announcements/qux.md">` → look up or stub-create → rewrite to `/courses/:id/discussion_topics/:id` (announcements are discussion topics)
 - `<a href="../quizzes/foo/foo.md">` → look up → rewrite to `/courses/:id/quizzes/:id`
+- `<a href="../modules/week-1.md">` → look up or stub-create (an empty module) → rewrite to `/courses/:id/modules#module_:id`
 - `<a href="https://...">` → leave unchanged
 - `<a href="#anchor">` → leave unchanged
 
 **Stub creation:**
 
 When a linked file has no Canvas ID yet, the tool creates a minimal placeholder in Canvas (title only, empty body, unpublished) purely to obtain the Canvas ID. The stub is overwritten with real content when that file is processed in the main loop. Content type for the stub is derived from the linked file's directory convention or its frontmatter `canvas_type` field.
+
+A stub entry is recorded without `last_synced`, and `_canvas_is_newer()` returns False for any entry lacking `last_synced`. Without that rule the stub's Canvas `updated_at` (seconds old) always beats the local file's mtime, so the file was reported as "Canvas is newer" and the stub was never filled in. Entries without `last_synced` only ever come from this tool (stubs and partially failed uploads recorded with `mark_synced=False`), so there is no Canvas-side edit to protect.
+
+`modules/` maps to `"module"` in `link_rewrite._FOLDER_TO_TYPE`. Before that mapping existed, a link to a module file fell through to the `"page"` default and stub-created a Canvas page, leaving a page entry under the module's manifest key; `_reorder_modules()` then called `get_module()` with the page id and crashed with `ResourceDoesNotExist`. For manifests already in that state, `_sync_module()` discards a non-module entry (warning the user to delete the stray page), `_reorder_modules()` treats a non-module entry as not yet synced, and a failed local reposition is reported as an error instead of aborting the run. `create_or_update_module()` re-creates a module that was deleted on Canvas, matching the other content types.
 
 **Exception — assets are uploaded, not stubbed.** `canvas_type = "file"` has no stub form: Canvas offers no placeholder file object, and `capi.create_stub()` raises `ValueError` for it. It does not need one either — unlike a page, a file's content is fully known at reference time, so there is nothing to fill in on a later pass. `_make_stub_creator()` therefore branches on `"file"` and calls `capi.upload_asset()` outright (printing `Uploading referenced asset:` instead of `Stub-creating:`). This matters because the syllabus and content phases both run *before* the asset walk, so a syllabus or page link to a not-yet-uploaded asset always arrives here first; before this branch existed it aborted the whole run. The upload records `last_synced`, so the later asset walk skips the file as already synced. `assets_root` is `<repo>/assets` — safe because `"file"` is only ever inferred from an `assets/` path (`link_rewrite._FOLDER_TO_TYPE`).
 

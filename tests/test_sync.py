@@ -5,7 +5,7 @@ import os
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, call
+from unittest.mock import ANY, MagicMock, call
 
 import pytest
 from canvasapi.exceptions import ResourceDoesNotExist
@@ -194,7 +194,7 @@ def test_first_sync_creates_all_content(mock_course, course_root, mocker) -> Non
 
     # One stub page create + no extra create_page (real page goes via edit)
     mock_course.create_page.assert_called_once()
-    assert mock_course.get_page.call_count == 2  # Canvas timestamp check + actual update
+    assert mock_course.get_page.call_count == 1  # actual update only; a stub skips the Canvas-newer check
     mock_course.create_assignment.assert_called_once()
     mock_course.create_discussion_topic.assert_called_once()
     mock_course.upload.assert_called_once()
@@ -5544,3 +5544,83 @@ def test_prune_migrates_legacy_manifest_for_default_config(tmp_path, capsys) -> 
     migrated = root / ".manifest-canvas.toml"
     assert manifest_lib.load(migrated)["pages/kept.md"]["canvas_id"] == 33
     assert ".canvas-manifest.toml → .manifest-canvas.toml" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Links to modules/*.md: module stubs, and recovery from old page stubs
+# ---------------------------------------------------------------------------
+
+
+def test_create_stub_module() -> None:
+    course = MagicMock()
+    course.create_module.return_value = SimpleNamespace(id=777)
+    entry = _capi.create_stub(course, "module", "Lecture 01")
+    course.create_module.assert_called_once_with(module={"name": "Lecture 01"})
+    assert entry == {"canvas_type": "module", "canvas_id": 777}
+
+
+def test_canvas_is_newer_ignores_unsynced_stub() -> None:
+    """A stub (no last_synced) was just created by this tool, so its Canvas
+    updated_at is always newer than the local file; it must not block the
+    upload that fills it in."""
+    from datetime import datetime, timezone
+    from markdown_to_canvas.sync import _canvas_is_newer
+
+    api = MagicMock()
+    newer: list[str] = []
+    manifest = {"pages/x.md": {"canvas_type": "page", "canvas_id": 1, "canvas_url": "x"}}
+    local_mtime = datetime(2020, 1, 1, tzinfo=timezone.utc)
+    assert _canvas_is_newer(None, "pages/x.md", local_mtime, manifest, newer, api=api) is False
+    api.get_canvas_updated_at.assert_not_called()
+    assert newer == []
+
+
+def test_reorder_modules_skips_page_entry_and_survives_failure(tmp_path, capsys) -> None:
+    """A module key holding a page entry (old stub bug) is not repositioned,
+    and a failed reposition is reported instead of aborting the run."""
+    from markdown_to_canvas.sync import _reorder_modules
+
+    (tmp_path / "modules").mkdir()
+    for name in ("a.md", "b.md"):
+        (tmp_path / "modules" / name).write_text("")
+    manifest = {
+        "modules/a.md": {"canvas_type": "page", "canvas_id": 42022301, "canvas_url": "a"},
+        "modules/b.md": {"canvas_type": "module", "canvas_id": 5},
+    }
+    api = MagicMock()
+    api.reposition_module.side_effect = ResourceDoesNotExist("Not Found")
+    errors: list[str] = []
+    _reorder_modules(
+        MagicMock(), [("a.md", True), ("b.md", True)], tmp_path, manifest, errors, api=api
+    )
+    api.reposition_module.assert_called_once_with(ANY, 5, 2)
+    assert len(errors) == 2
+    assert "has not been synced" in errors[0]
+    assert "failed to reposition module modules/b.md" in errors[1]
+
+
+def test_sync_module_replaces_page_entry_with_new_module(mock_course, mocker, tmp_path, capsys) -> None:
+    """A module whose manifest entry is a page stub gets a real module created
+    rather than a get_module() call with the page's id."""
+    root = tmp_path / "course"
+    (root / "modules").mkdir(parents=True)
+    (root / "modules" / "lecture-01.md").write_text("---\ntitle: Lecture 01\n---\n")
+    mocker.patch(
+        "markdown_to_canvas.manifest.load",
+        return_value={
+            "modules/lecture-01.md": {
+                "canvas_type": "page", "canvas_id": 42022301, "canvas_url": "lecture-01",
+            },
+        },
+    )
+    flush = mocker.patch("markdown_to_canvas.manifest.flush")
+    mock_course.create_module.return_value = _mock_module(8080)
+
+    run_sync(_config(), root)
+
+    mock_course.get_module.assert_not_called()
+    mock_course.create_module.assert_called_once()
+    written = flush.call_args[0][1]
+    assert written["modules/lecture-01.md"]["canvas_type"] == "module"
+    assert written["modules/lecture-01.md"]["canvas_id"] == 8080
+    assert "Delete that stray item in Canvas" in capsys.readouterr().out

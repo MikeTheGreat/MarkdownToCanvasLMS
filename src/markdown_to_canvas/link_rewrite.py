@@ -21,6 +21,7 @@ _FOLDER_TO_TYPE = {
     "announcements": "announcement",
     "assets": "file",
     "quizzes": "quiz",
+    "modules": "module",
 }
 
 

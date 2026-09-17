@@ -1009,6 +1009,11 @@ def create_stub(course, canvas_type: str, title: str) -> dict[str, Any]:
             title=title, message="", published=False, is_announcement=True
         )
         return {"canvas_type": "announcement", "canvas_id": topic.id}
+    if canvas_type == "module":
+        # Created the same way _sync_module creates a module, so the stub's
+        # publish state matches a module that was never linked to.
+        module = course.create_module(module={"name": title})
+        return {"canvas_type": "module", "canvas_id": module.id}
     raise ValueError(f"Cannot create stub for canvas_type: {canvas_type!r}")
 
 
@@ -1090,8 +1095,12 @@ def finalize_quiz_publish_state(quiz, published: bool) -> bool:
 def create_or_update_module(course, canvas_id: int | None, title: str, **kwargs):
     """Return the canvasapi Module object (created or updated)."""
     if canvas_id is not None:
-        module = course.get_module(canvas_id)
-        return module.edit(module={"name": title, **kwargs})
+        try:
+            module = course.get_module(canvas_id)
+        except ResourceDoesNotExist:
+            print(f"  Canvas module {canvas_id} was deleted; re-creating")
+        else:
+            return module.edit(module={"name": title, **kwargs})
     return course.create_module(module={"name": title, **kwargs})
 
 

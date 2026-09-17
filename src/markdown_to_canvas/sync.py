@@ -1037,7 +1037,11 @@ def _canvas_is_newer(
     Only called when force_overwrite is False and the item already exists in the manifest.
     """
     entry = manifest.get(local_key)
-    if entry is None:
+    # No last_synced means the Canvas object holds only what this tool wrote
+    # (a link stub, or a partially failed upload), never a finished upload, so
+    # there is no Canvas-side edit to protect. A stub is always newer than the
+    # local file, so without this check it would never be filled in.
+    if entry is None or "last_synced" not in entry:
         return False
     canvas_type = entry.get("canvas_type")
     identifier = (
@@ -2637,14 +2641,24 @@ def _reorder_modules(
                     errors.append(msg)
                 continue
             entry = manifest.get(local_key)
-            if entry is None or "canvas_id" not in entry:
+            if (
+                entry is None
+                or "canvas_id" not in entry
+                or entry.get("canvas_type") != "module"
+            ):
                 msg = f"module_order.toml lists '{value}' but it has not been synced to Canvas yet"
                 print(f"  WARNING: {msg}")
                 if errors is not None:
                     errors.append(msg)
                 continue
             print(f"Reordering module: {local_key} → position {position}")
-            api.reposition_module(course, entry["canvas_id"], position)
+            try:
+                api.reposition_module(course, entry["canvas_id"], position)
+            except Exception as exc:
+                msg = f"failed to reposition module {local_key}: {exc}"
+                print(f"  WARNING: {msg}")
+                if errors is not None:
+                    errors.append(msg)
             continue
 
         # Canvas-only module: try the cached id first, and fall back to a name
@@ -2743,6 +2757,15 @@ def _sync_module(
             )
 
     existing = manifest.get(local_key)
+    if existing is not None and existing.get("canvas_type") != "module":
+        # Older versions stub-created a *page* for links to modules/*.md, which
+        # left a page entry under a module's key. Its id is not a module id.
+        print(
+            f"  WARNING: manifest recorded {local_key} as a Canvas "
+            f"{existing.get('canvas_type')} (id {existing.get('canvas_id')}); "
+            "creating a module instead. Delete that stray item in Canvas."
+        )
+        existing = None
     title = frontmatter.get("title", md_file.stem)
 
     if frontmatter.get("published") is False:

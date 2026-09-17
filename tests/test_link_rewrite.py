@@ -64,6 +64,13 @@ def test_infer_type_file() -> None:
     assert infer_canvas_type("assets/images/fig.png") == "file"
 
 
+def test_infer_type_module() -> None:
+    """A link to a module file must stub a module, not a page — a page stub
+    left a page id under the module's manifest key, and module sync/reorder
+    then asked Canvas for a module with that id."""
+    assert infer_canvas_type("modules/lecture-01.md") == "module"
+
+
 def test_infer_type_unknown_defaults_to_page() -> None:
     assert infer_canvas_type("other/thing.md") == "page"
 
