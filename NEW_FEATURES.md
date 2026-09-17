@@ -39,3 +39,24 @@ Write the tool's version into the repo:
 - Store only "created by", or also "last synced by"?
 - Should `update` warn when the repo was created by a newer version than the one
   running, or offer migrations for known format changes from older versions?
+
+## 2. Consider `tomlkit` instead of `tomli_w` for writing `course_settings`
+
+### Problem
+
+`tomli_w` decides on its own whether an array of tables gets written in
+`[[table]]` block style or inline `[{...}, {...}]` style, based on a hardcoded
+100-character-per-row heuristic with no way to force one style or the other.
+In TOML, once a `[[table]]` block header appears, any bare top-level keys that
+follow it in the file get silently swallowed into that table instead of
+staying at the top level — so if a future edit (by us or by hand) pushes a
+row over that length threshold, `tomli_w` could switch styles on us and
+corrupt the file's structure without raising any error.
+
+### Idea
+
+Use `tomlkit` for writing `course_settings` files instead. `tomlkit` builds
+TOML documents from explicit typed objects (`tomlkit.aot()` for array-of-tables
+block style, `tomlkit.array()` + `tomlkit.inline_table()` for inline style), so
+the style is a deliberate choice at write time rather than a length-based
+guess — removing the risk entirely.
