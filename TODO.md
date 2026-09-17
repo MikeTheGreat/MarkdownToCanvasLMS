@@ -88,9 +88,10 @@ skipped because nobody implemented them, not because Canvas is known to refuse
 them.
 
 ## Group sets and group assignments
+
 Currently we don't manage this, but it would be nice
 
-## all commands must use die() for user-facing errors — no tracebacks, no raw exceptions.
+## all commands must use die() for user-facing errors — no tracebacks, no raw exceptions
 
 ## Import coverage gaps (found via pool sampling)
 
@@ -426,6 +427,7 @@ The `mv` subcommand's core logic (in `mv.py`) is designed to be called
 programmatically, so the watcher would be a thin event-detection layer on top.
 
 Caveats to address:
+
 - Dropbox sync generates spurious file events (creates/deletes/moves) that must
   be distinguished from user-initiated operations
 - Some editors implement rename as create-new + delete-old rather than atomic
@@ -434,6 +436,7 @@ Caveats to address:
 - Cross-filesystem moves decompose into copy+delete with no way to correlate
 
 ## In course_settings.toml, within due_dates, KEEP and CREATE_NONE_THEN_KEEP do the same thing
+
 Maybe remove KEEP?
 
 ## Announcements: possible follow-ups
@@ -447,6 +450,7 @@ and `mv` (see ARCHITECTURE.md → import/update). Remaining nice-to-have:
   intentionally excluded, since they are not module content).
 
 ## Publish command: include a schedule
+
 - it would be nice to include a schedule, sorted chronologically
 - maybe on the syllabus page, like in Canvas?
   - Rename to Syllabus + Schedule
@@ -563,7 +567,9 @@ Key implementation decisions that were settled:
   part that can't be automated). This was the realistic ceiling on automation
   before the user opted for Ally's AI assistant instead.
 
-# Bugs to Fix:
+# Bugs to Fix
+
+- in the 2026 Spring import of IT-CS 142, moved the assets/Syllabus and blah blah folder to just be assets/Syllabus, and it seemed to work fine (updated 1 file).  However, changing the assets/Canvas Starter Files (Loose Files) to just be assets/Canvas Starter Files did NOT fix links to any of the 21 files in it.
 
 - Within a module Markdown file: 'published' is connected to whether the underlying item is published (for example, an assignment) - maybe remove the <!-- published:false --> mechanism from modules & rely on the underlying content instead?
 
@@ -574,7 +580,9 @@ Review these files and re-upload manually if needed (use --force-overwrite to sk
   assignments/worksheets/01-b-unit-worksheets.md
 
 ---
-# Possible future improvements:
+
+# Possible future improvements
+
 (Got these from Fable, probably won't do them, but didn't want to lose them)
 Do **not** "improve" these without an explicit user request:
 
