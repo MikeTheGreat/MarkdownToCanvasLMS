@@ -162,33 +162,20 @@ distinctions (`pattern_match_question` uses substring matching; Canvas also has
 `fill_in_multiple_blanks_question`) are lost on upload. This is documented in the
 README. Confirm this is the intended mapping or add separate handling.
 
-## Re-sync is not idempotent for question banks and rubrics
+## Question banks cannot be uploaded to Canvas
 
-Unlike pages/assignments/discussions/quizzes (which look up the existing Canvas item
-by manifest `canvas_id` and update it in place), question banks have no update path
-at all, and the rubric update path is defeated by Canvas for shared rubrics:
+`update` currently validates `question_banks/` and then warns and skips the upload
+(nothing goes to Canvas, nothing is recorded in the manifest).
 
-### Question banks create a duplicate on every re-sync
-
-`canvas_api.sync_question_bank` always calls `course.create_question_bank(...)`; it
-never consults the manifest's existing `canvas_id` to update or replace the prior
-bank, and the old bank is never deleted. So whenever a bank is re-synced (its
-`.toml` is newer than `last_synced`, or `--force-uploads` is used) a **second bank
-with the same name is created in Canvas**, leaving the old one behind.
-
-Note also that `_sync_question_banks`'s `needs_sync` check only looks at the bank's
-`.toml` mtime — editing a question `.md` file alone does **not** trigger a re-sync.
-
-**Why this is hard to fix (investigated 2026-06):** unlike the other content types,
-there is no supported API to update or delete a question bank, so the usual
-"look up `canvas_id` and update in place" pattern cannot be applied.
+**Why (investigated 2026-06):** there is no supported API to create, update or delete
+a question bank.
 
 - **canvasapi (3.6.0) has no question-bank support at all.** `course.create_question_bank()`
   and `bank.create_assessment_question()` are not methods on the library's `Course`
-  object (verified: `hasattr(Course, "create_question_bank")` → `False`). The current
-  upload path therefore **cannot run against a real Canvas** — it would raise
-  `AttributeError`. The unit tests only pass because the test course is a `MagicMock`
-  that auto-fabricates any attribute, so this is invisible in CI.
+  object (verified: `hasattr(Course, "create_question_bank")` → `False`). The old
+  upload path called them and crashed with `AttributeError` on a real course
+  (2026-09, IT-CS 142); its unit tests had passed only because the course was a
+  `MagicMock`.
 - **The documented Canvas REST API for Assessment Question Banks is read-only.**
   `/doc/api/assessment_question_banks.html` documents exactly three endpoints, all GET:
   `GET /api/v1/question_banks`, `GET /api/v1/question_banks/:id`, and
@@ -210,16 +197,14 @@ there is no supported API to update or delete a question bank, so the usual
    If they do, implement delete-then-recreate via raw `course._requester.request(...)`
    calls (same pattern already used for `update_late_policy` / `update_post_policy`),
    looking up the prior bank via the manifest `canvas_id`.
-2. If the write routes are unavailable, treat question-bank upload as create-only and
-   document that re-syncing requires manually deleting the old bank in Canvas first
-   (mirrors the rubric limitation below).
+2. Otherwise leave it as is.
 
-Either way, also extend the staleness check to cover the `questions/*.md` files
-(cf. how `_quiz_needs_sync` already does this for quizzes), so question edits trigger
-a re-sync.
+If upload is implemented, also make the staleness check cover the `questions/*.md`
+files' own mtimes (cf. `_quiz_needs_sync`); `_sync_question_banks` currently checks
+only the `.toml` and referenced snippets. Import's default `.canvasignore` would
+also need to stop excluding `question_banks/**`.
 
-See the matching `KNOWN LIMITATION` note in `canvas_api.sync_question_bank` for the
-same findings at the call site.
+## Re-sync is not idempotent for rubrics
 
 ### Editing a rubric used by 2+ assignments silently does nothing
 
@@ -248,15 +233,6 @@ Note orphan `X (n)` rubrics cannot be deleted through the API as-is: with no
 association, both `GET` and `DELETE courses/:id/rubrics/:id` fail (404 / 500).
 Associating one with any assignment first makes the DELETE work — worth a small
 cleanup subcommand if these keep accumulating.
-
-## Question bank staleness doesn't check individual question file mtimes
-
-`_sync_question_banks` only compares the bank's `.toml` file's own mtime against
-`last_synced` — editing a question file's content (without touching the `.toml`)
-does not mark the bank as stale, unlike quizzes (`_quiz_needs_sync` already folds
-question file mtimes into its comparison). Snippet changes referenced by question
-files *are* caught (see ARCHITECTURE.md's "Snippet dependency staleness"); this gap
-is specifically about edits to the question file's own content.
 
 ## Grading-standard drift on Canvas is not detected when the repo is up to date
 

@@ -5122,47 +5122,57 @@ def test_module_resynced_when_referenced_snippet_updated(
     mock_course.get_module.assert_called_with(66666)
 
 
-def test_question_bank_resynced_when_referenced_snippet_updated(
-    mock_course, mocker, tmp_path
-) -> None:
-    """A question bank whose own .toml and question files are unchanged still
-    re-syncs if a snippet referenced by one of its question files was edited."""
-    root = tmp_path / "course"
+def _write_question_bank(root: Path, question_body: str = "Explain.") -> Path:
     bank_dir = root / "question_banks" / "qb"
     q_dir = bank_dir / "questions"
     q_dir.mkdir(parents=True)
     (bank_dir / "qb.toml").write_text('bank_title = "QB"\n')
-    snippets_dir = root / "snippets"
-    snippets_dir.mkdir()
-    snippet = snippets_dir / "hint.md"
-    snippet.write_text("Original hint.")
     (q_dir / "q1.md").write_text(
         "---\ntitle: Q1\nquestion_type: essay_question\npoints_possible: 1\n---\n\n"
-        "[Hint](../../../snippets/hint.md)\n\nExplain.\n"
+        + question_body + "\n"
     )
-    for f in [bank_dir / "qb.toml", q_dir / "q1.md", snippet]:
-        _make_old(f)
-    preloaded = {
-        "question_banks/qb/qb.toml": {
-            "canvas_id": 555, "canvas_type": "question_bank",
-            "last_synced": "2025-01-01T00:00:00+00:00",
-        },
-    }
-    mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
+    return bank_dir
+
+
+def test_question_bank_warns_and_skips_upload(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    """Canvas's API can't create question banks, so a bank in the repo produces a
+    warning, makes no Canvas call, records nothing in the manifest, and does not
+    fail the run."""
+    root = tmp_path / "course"
+    _write_question_bank(root)
+    mocker.patch("markdown_to_canvas.manifest.load", return_value={})
+    record_mock = mocker.patch("markdown_to_canvas.manifest.record")
     mocker.patch("markdown_to_canvas.manifest.flush")
-    sync_bank_mock = mocker.patch(
-        "markdown_to_canvas.canvas_api.sync_question_bank", return_value=555
-    )
     mock_course.get_assignment_groups.return_value = []
     mock_course.get_tabs.return_value = []
 
     run_sync(_config(), root)
-    sync_bank_mock.assert_not_called()
 
-    snippet.write_text("Updated hint.")
+    out = capsys.readouterr().out
+    assert "WARNING: Skipping question bank 'QB'" in out
+    assert "question_banks/qb/qb.toml" in out
+    assert not any(
+        c.args[2] == "question_banks/qb/qb.toml" for c in record_mock.call_args_list
+    )
+    assert not any("question_bank" in name for name, *_ in mock_course.method_calls)
+
+
+def test_question_bank_ignored_by_canvasignore_is_silent(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    root = tmp_path / "course"
+    _write_question_bank(root)
+    (root / ".canvasignore").write_text("question_banks/**\n")
+    mocker.patch("markdown_to_canvas.manifest.load", return_value={})
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    mock_course.get_assignment_groups.return_value = []
+    mock_course.get_tabs.return_value = []
+
     run_sync(_config(), root)
 
-    sync_bank_mock.assert_called_once()
+    assert "question bank" not in capsys.readouterr().out
 
 
 def test_single_target_does_not_pull_in_other_files_via_snippet_change(

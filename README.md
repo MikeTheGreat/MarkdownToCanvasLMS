@@ -136,7 +136,7 @@ On each run the tool:
 2. Uploads `course_settings/syllabus.md` as the course syllabus body
 3. Uploads everything in `assets/` to Canvas Files
 4. Converts each `.md` in `pages/`, `assignments/`, `discussions/`, `announcements/` (including subfolders) to HTML via Pandoc and uploads
-5. Syncs `quizzes/` (Classic Quizzes API) and `question_banks/`
+5. Syncs `quizzes/` (Classic Quizzes API); `question_banks/` is validated but not uploaded (see [Question banks](#question-banks-question_banks))
 6. Rewrites cross-links between files to correct Canvas URLs
 7. Syncs `modules/` last (after all content has Canvas IDs)
 
@@ -2007,9 +2007,13 @@ The question files use the **exact same format** as quiz question files (see
 [Quiz (`quizzes/`)](#quiz-quizzes) above) — all question types, the `## Answers`
 section, and the `## Feedback` / `## Sample Solution` sections all work the same way.
 
-> Each sync **creates a new question bank** in Canvas; banks are not matched or
-> updated in place. Re-syncing a changed bank will create a duplicate in Canvas —
-> delete the old one manually if needed.
+> Question banks **cannot be uploaded to Canvas**. Canvas's public API has no way
+> to create or update a question bank (its question-bank endpoints are read-only),
+> so `update` checks each bank's question files for errors, prints a warning, and
+> skips the upload. To stop the warning, add `question_banks/**` to `.canvasignore`
+> (the `.canvasignore` written by `import` already does this). Banks imported from
+> a Canvas export are useful as a local reference copy; edits to them have to be
+> made in Canvas by hand.
 
 ### Snippets
 
@@ -2309,7 +2313,7 @@ markdown-to-canvas import course-export.imscc ./my-course-repo
 
 This converts pages, assignments, discussions, announcements, quizzes, question banks, modules, and course settings to local files ready for use with this tool. A `canvas.toml` skeleton is written with the Canvas domain and course ID pre-filled from the export metadata.
 
-Every top-level folder the tool recognizes (`pages/`, `assignments/`, `discussions/`, `announcements/`, `quizzes/`, `question_banks/`, `modules/`, `snippets/`, `assets/`, `course_settings/`) is created even if the course has nothing to put in it, so the repo layout always matches [How it works](#how-it-works) and there's an obvious place to add new content later. A starter `.gitignore` and `.canvasignore` are also written — both cover common OS/editor/Office junk files, plus commented-out examples of course-specific patterns (per-term-only material, feedback drafts) you can uncomment or adapt as the course grows. `.canvasignore` also actively excludes `course_definition/**` — instructor reference material (scope-and-sequence docs, curriculum outcome guides) that should never be uploaded to Canvas.
+Every top-level folder the tool recognizes (`pages/`, `assignments/`, `discussions/`, `announcements/`, `quizzes/`, `question_banks/`, `modules/`, `snippets/`, `assets/`, `course_settings/`) is created even if the course has nothing to put in it, so the repo layout always matches [How it works](#how-it-works) and there's an obvious place to add new content later. A starter `.gitignore` and `.canvasignore` are also written — both cover common OS/editor/Office junk files, plus commented-out examples of course-specific patterns (per-term-only material, feedback drafts) you can uncomment or adapt as the course grows. `.canvasignore` also actively excludes `course_definition/**` — instructor reference material (scope-and-sequence docs, curriculum outcome guides) that should never be uploaded to Canvas — and `question_banks/**`, since Canvas's API cannot create or update question banks. If the export contains any question banks, `import` prints a warning saying they cannot be re-uploaded.
 
 **Announcements** are imported into an `announcements/` folder, one Markdown file per announcement. Only the announcement itself is imported — any student replies, likes, or comments are not part of a Canvas export, so there is nothing to import. Each file gets `published: false`, which means `update` leaves it **staged (not posted)** until you set `published: true` — handy for re-posting announcements when the time is right (e.g. a midterm reminder the week before the midterm). The frontmatter keeps `title` and `published` as active fields; the original export's other metadata (post date, workflow state, etc.) is preserved as commented-out lines you can uncomment to apply (see [Announcement](#announcement-announcements)).
 

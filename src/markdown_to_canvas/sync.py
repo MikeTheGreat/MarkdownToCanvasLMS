@@ -3016,11 +3016,9 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
 
 
 def _sync_question_banks(ctx: SyncContext) -> None:
-    """Sync all question banks from question_banks/ to Canvas."""
-    course = ctx.course
+    """Validate question banks in question_banks/ and warn that they can't be uploaded."""
     repo_root = ctx.repo_path
     manifest = ctx.manifest
-    manifest_path = ctx.manifest_path
     force_uploads = ctx.force_uploads
     matcher = ctx.matcher
     verbose = ctx.verbose
@@ -3065,11 +3063,14 @@ def _sync_question_banks(ctx: SyncContext) -> None:
         if len(ctx.errors) > error_count_before:
             print(f"  Skipping upload due to errors: {local_key}")
             continue
-        verb = "Would upload" if ctx.check_only else "Uploading"
-        print(f"  {verb} question bank: {local_key}")
-        canvas_id = ctx.api.sync_question_bank(course, bank_title, questions)
-        manifest_lib.record(
-            manifest, manifest_path, local_key, canvas_id, "question_bank"
+        # Canvas's public API has no write endpoints for question banks (and
+        # canvasapi has no methods for them), so a bank can only be validated,
+        # never uploaded. Warn and skip rather than crash; nothing is recorded
+        # in the manifest. See TODO.md "Question banks cannot be uploaded".
+        print(
+            f"  WARNING: Skipping question bank {bank_title!r} ({local_key}): "
+            "Canvas's API does not support creating or updating question banks. "
+            "Add question_banks/** to .canvasignore to silence this warning."
         )
 
 

@@ -1396,38 +1396,3 @@ def remove_rubric_from_assignment(course, assignment_id: int, rubric_id: int) ->
             ra.delete()
             deleted = True
     return deleted
-
-
-# ---------------------------------------------------------------------------
-# Question banks
-# ---------------------------------------------------------------------------
-
-def sync_question_bank(course, bank_title: str, questions: list[dict[str, Any]]) -> int:
-    """Create a question bank and populate it. Returns the Canvas bank ID.
-
-    KNOWN LIMITATION — re-syncing creates a duplicate bank instead of updating the
-    existing one, and orphans the old bank on Canvas. This cannot currently be fixed
-    cleanly because:
-      * canvasapi (3.6.0) exposes no question-bank methods at all; the
-        course.create_question_bank() / bank.create_assessment_question() calls below
-        are not part of the library and will AttributeError against a real Canvas
-        (the unit tests only pass because the course object is a MagicMock).
-      * The documented Canvas REST API for Assessment Question Banks is GET-only
-        (list banks / get bank / list questions) — there is no public POST/PUT/DELETE
-        for banks or for the assessment questions inside them. GraphQL doesn't cover
-        them either. See /doc/api/assessment_question_banks.html.
-      * The only write path is the undocumented UI controller routes
-        (POST/PUT/DELETE /courses/:id/question_banks...), which are unstable across
-        Canvas versions and may not honor bearer-token auth.
-    To support update/delete-then-recreate (mirroring the other content types) we would
-    need those undocumented routes to work on the target instance; revisit if/when that
-    is verified. Verified against canvasapi 3.6.0 and Canvas API docs, 2026-06.
-    """
-    bank = course.create_question_bank(
-        assessment_question_bank={"name": bank_title}
-    )
-    for q in questions:
-        bank.create_assessment_question(
-            assessment_question=_build_question_params(q)
-        )
-    return bank.id

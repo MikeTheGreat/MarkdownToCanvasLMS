@@ -231,9 +231,6 @@ class DryRunCanvas:
     def finalize_quiz_publish_state(self, quiz, published: bool) -> bool:
         return False  # never "already published" on an empty course
 
-    def sync_question_bank(self, course, bank_title, questions) -> int:
-        return self._new_id()
-
     # -- modules ---------------------------------------------------------------
 
     def create_or_update_module(self, course, canvas_id, title, **kwargs):

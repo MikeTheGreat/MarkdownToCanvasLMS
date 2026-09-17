@@ -940,6 +940,20 @@ def test_quiz_essay_sample_solution_present(imported_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_default_canvasignore_excludes_question_banks(imported_dir: Path) -> None:
+    lines = (imported_dir / ".canvasignore").read_text().splitlines()
+    assert "question_banks/**" in lines
+
+
+def test_import_warns_question_banks_cannot_be_uploaded(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    run_import(FIXTURE_DIR, tmp_path / "out")
+    out = capsys.readouterr().out
+    assert "WARNING: Imported 1 question bank(s)" in out
+    assert "cannot be re-uploaded to Canvas" in out
+
+
 def test_question_bank_folder_created(imported_dir: Path) -> None:
     assert (imported_dir / "question_banks" / "fixture-question-bank").is_dir()
 

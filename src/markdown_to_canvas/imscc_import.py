@@ -3106,6 +3106,10 @@ Thumbs.db
 # Internal course-planning notes, not Canvas content
 course_definition/**
 
+# Question banks can't be uploaded: Canvas's API has no way to create or update
+# them. The imported copies are kept for reference only.
+question_banks/**
+
 # Course-specific examples (uncomment / adapt as needed):
 # not_uploaded_to_canvas/**
 # *FEEDBACK.md*
@@ -3210,9 +3214,18 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
                 convert_quiz(ctx, entry)
 
         # Phase 5c: question banks
+        bank_count = 0
         for entry in temp_manifest.values():
             if entry.category == "question_bank":
                 convert_question_bank(entry, imscc_dir, output_dir)
+                bank_count += 1
+        if bank_count:
+            print(
+                f"  WARNING: Imported {bank_count} question bank(s) into question_banks/. "
+                "These cannot be re-uploaded to Canvas (Canvas's API has no way to "
+                "create or update question banks); the default .canvasignore "
+                "excludes question_banks/**."
+            )
 
         # Phase 6: modules (parsed earlier for link rewriting)
         for module in modules:

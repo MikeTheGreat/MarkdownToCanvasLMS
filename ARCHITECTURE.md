@@ -65,8 +65,13 @@ git clone (local)
 4c. for each question bank in question_banks/ alphabetically:
      → skip if bank .toml mtime ≤ manifest last_synced (unless --force-uploads)
      → parse bank metadata .toml; parse each question .md in questions/
-     → create Canvas question bank and populate with questions
-     → update manifest dict and flush to disk
+       (validation only: parse errors are reported as usual)
+     → print a WARNING and skip — never uploaded, nothing recorded in the manifest.
+       canvasapi has no question-bank methods and Canvas's public REST API for
+       assessment question banks is GET-only, so there is no write path. (The
+       old canvas_api.sync_question_bank called course.create_question_bank(),
+       which doesn't exist, and crashed with AttributeError on a real course;
+       it was removed.) Import's default .canvasignore excludes question_banks/**.
 4d. if front_page is set in course_settings.toml AND either the front_page value
      changed (its section hash) or the target page's .md was re-synced in this
      run → set_front_page (skipped otherwise, to avoid a redundant API call)
@@ -1239,7 +1244,9 @@ correct: 3
 
 Note: quizzes that draw from question banks export their questions **inline** in the quiz's own QTI file. There is no "draw N from bank X" reference in the IMSCC output. Question banks and quizzes are independent exports. Deleted banks (`bank_state = "deleted"`) are still imported in deleted state to preserve round-trip fidelity.
 
-**Question bank manifest entry:** The manifest key is the bank `.toml` path. `canvas_type = "question_bank"`.
+**Question bank manifest entry:** None is written, since banks are never uploaded. Older manifests may still contain entries keyed by the bank `.toml` path with `canvas_type = "question_bank"`.
+
+**Import warning and default ignore:** Phase 5c counts converted banks and, if any, prints a `WARNING` that they cannot be re-uploaded to Canvas. `_DEFAULT_CANVASIGNORE` includes `question_banks/**` so a freshly imported repo doesn't print the per-bank skip warning on every `update`.
 
 ### Course settings files
 
