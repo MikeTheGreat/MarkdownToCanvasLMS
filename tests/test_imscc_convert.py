@@ -27,6 +27,7 @@ from markdown_to_canvas.imscc_import import (
     _collapse_redundant_spans,
     _simplify_pandoc_attrs,
     _strip_canvas_img_attrs,
+    _write_course_settings_toml,
     parse_announcement_meta,
     parse_assignment_settings,
     parse_imsmanifest,
@@ -94,6 +95,33 @@ def test_convert_tab_configuration_unknown_numeric_id_warns(capsys) -> None:
 def test_convert_tab_configuration_invalid_json_drops(capsys) -> None:
     assert _convert_tab_configuration("not json", {}) == []
     assert "WARNING" in capsys.readouterr().out
+
+
+def test_course_settings_toml_tab_configuration_is_top_level(tmp_path: Path) -> None:
+    """A short tab_configuration is written by tomli_w as an inline array under a
+    plain key; it must not land inside [late_policy] / [default_post_policy]."""
+    import tomllib
+
+    _write_course_settings_toml(
+        {
+            "default_view": "modules",
+            "default_post_policy": {"post_manually": True},
+            "tab_configuration": [{"id": "home"}, {"id": "files", "hidden": True}],
+        },
+        {},
+        [{"title": "Scale", "data": [{"name": "A", "value": 0.9}]}],
+        [{"title": "Homework", "position": 1}],
+        {"missing_submission_deduction_enabled": False},
+        tmp_path,
+    )
+    data = tomllib.loads(
+        (tmp_path / "course_settings" / "course_settings.toml").read_text()
+    )
+    assert data["tab_configuration"] == [{"id": "home"}, {"id": "files", "hidden": True}]
+    assert "tab_configuration" not in data["default_post_policy"]
+    assert "tab_configuration" not in data["late_policy"]
+    assert data["default_post_policy"] == {"post_manually": True}
+    assert data["grading_standards"][0]["title"] == "Scale"
 
 
 def test_extract_body_no_wrapper_returns_as_is() -> None:

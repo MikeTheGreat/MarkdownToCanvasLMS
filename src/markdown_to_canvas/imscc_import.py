@@ -2734,10 +2734,13 @@ def _write_course_settings_toml(
         nested["late_policy"] = late_policy
     if "default_post_policy" in course_settings:
         nested["default_post_policy"] = course_settings["default_post_policy"]
-    if nested:
-        content += "\n" + tomli_w.dumps(nested)
 
-    # Array-of-tables sections last (tomli_w emits [[...]] for list-of-dicts)
+    # Array-of-tables sections last. tomli_w only emits [[...]] for a list of
+    # dicts when the dicts are too big to inline; a short list (typically
+    # tab_configuration) becomes an inline array under a plain key. So nested
+    # and aot go through ONE dumps() call, which writes plain keys before any
+    # header. Dumping them separately left tab_configuration nested under
+    # [default_post_policy], where update ignores it.
     aot: dict[str, Any] = {}
     if grading_standards:
         aot["grading_standards"] = grading_standards
@@ -2748,8 +2751,8 @@ def _write_course_settings_toml(
     tab_configuration = course_settings.get("tab_configuration")
     if tab_configuration:
         aot["tab_configuration"] = tab_configuration
-    if aot:
-        content += "\n" + tomli_w.dumps(aot)
+    if nested or aot:
+        content += "\n" + tomli_w.dumps({**nested, **aot})
 
     cs_dir = output_dir / "course_settings"
     cs_dir.mkdir(parents=True, exist_ok=True)
