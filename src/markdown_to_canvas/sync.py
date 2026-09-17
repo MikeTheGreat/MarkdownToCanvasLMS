@@ -1940,6 +1940,7 @@ def run_prune(config: Config, repo_path: Path, mode: str) -> bool:
         for key, entry in manifest.items()
         if not (repo_path / key).exists()
         and entry.get("canvas_type") != EXTERNAL_MODULE_TYPE
+        and not manifest_lib.is_course_key(key, entry)
     ]
     if not orphans:
         print("No orphaned manifest entries found; nothing to prune.")

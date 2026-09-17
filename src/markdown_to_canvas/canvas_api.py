@@ -666,6 +666,30 @@ def _object_key(canvas_type: str, entry: dict[str, Any]):
     return entry["canvas_url"] if canvas_type == "page" else entry["canvas_id"]
 
 
+def list_course_object_ids(course) -> dict[str, set[int]]:
+    """Every Canvas object id in the course, per manifest canvas_type.
+
+    Used by clean-manifest. Exceptions propagate on purpose: a failed listing
+    must never be mistaken for "the course has none of these".
+    """
+    topics = {t.id for t in course.get_discussion_topics()}
+    announcements = {
+        t.id for t in course.get_discussion_topics(only_announcements=True)
+    }
+    modules = {m.id for m in course.get_modules()}
+    return {
+        "page": {p.page_id for p in course.get_pages()},
+        "assignment": {a.id for a in course.get_assignments()},
+        # A topic's announcement flag can change on Canvas, so accept either list.
+        "discussion": topics | announcements,
+        "announcement": topics | announcements,
+        "quiz": {q.id for q in course.get_quizzes()},
+        "module": modules,
+        "external_module": modules,
+        "file": {f.id for f in course.get_files()},
+    }
+
+
 def get_syllabus_body(course) -> str:
     """Fetch the course syllabus_body HTML via a raw ``include[]`` request.
 

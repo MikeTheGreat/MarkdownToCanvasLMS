@@ -20,8 +20,16 @@ load_dotenv(find_dotenv(usecwd=True), override=True, verbose=True)
 
 
 from .canvas_api import get_course, read_tab_configuration
+from . import manifest as manifest_lib
+from .clean_manifest import (
+    apply_clean,
+    plan_invalidate_all,
+    print_plan,
+    run_plan,
+)
 from .config import Config, find_repo_root
 from .config import load as load_config
+from .course_guard import CourseGuardError, check_course
 from .imscc_import import run_import
 from .local_orphans import find_local_orphans
 from .local_orphans import print_report as print_local_orphan_report
@@ -53,6 +61,22 @@ def _resolve_repo(repo: Path | None) -> Path:
             "in this directory or any parent). Pass the repo path explicitly."
         )
     return found
+
+
+def _guard_course(repo: Path, cfg: Config, course, assume_yes: bool) -> None:
+    """Stop unless the manifest's Canvas IDs belong to the configured course."""
+    manifest_path = manifest_lib.migrate_legacy_manifest(repo, cfg.config_path)
+    try:
+        check_course(manifest_path, cfg, course.name, assume_yes=assume_yes)
+    except CourseGuardError as e:
+        die(str(e))
+
+
+_YES_HELP = (
+    "Answer yes to the course confirmation prompt — recording the course on a "
+    "first sync, or changing it (which clears the manifest's Canvas IDs). Needed "
+    "when there is no terminal to ask."
+)
 
 
 def _ensure_pandoc() -> None:
@@ -349,8 +373,9 @@ def emit_workflow_cmd(course_dir: Path) -> None:
     flag_value="manifest",
     help="Remove orphaned entries from the local manifest only; never touch Canvas.",
 )
+@click.option("--yes", "-y", "assume_yes", is_flag=True, default=False, help=_YES_HELP)
 @_handle_cli_errors
-def prune(repo: Path, config: Path | None, mode: str | None) -> None:
+def prune(repo: Path, config: Path | None, mode: str | None, assume_yes: bool) -> None:
     """Delete or unpublish Canvas items whose local source file no longer exists.
 
     REPO is the course content repo. An item is pruned when its manifest entry's
@@ -370,6 +395,7 @@ def prune(repo: Path, config: Path | None, mode: str | None) -> None:
     if mode != "manifest":
         course = get_course(cfg)
         click.echo(f"Course:    {course.name}")
+        _guard_course(repo, cfg, course, assume_yes)
 
     had_errors = run_prune(cfg, repo, mode)
 
@@ -456,6 +482,131 @@ def find_local_orphans_cmd(repo: Path, verbose: bool) -> None:
     click.echo()
 
     print_local_orphan_report(find_local_orphans(repo), verbose=verbose)
+
+
+@main.command(name="clean-manifest")
+@click.argument(
+    "repo",
+    required=False,
+    default=None,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.option(
+    "--config",
+    default=None,
+    type=click.Path(path_type=Path),
+    help="Path to canvas.toml (default: <repo>/course_settings/canvas.toml)",
+)
+@click.option(
+    "--apply",
+    is_flag=True,
+    default=False,
+    help="Make the changes. Without it, only report what would change.",
+)
+@click.option(
+    "--no-canvas-check",
+    "no_canvas_check",
+    is_flag=True,
+    default=False,
+    help=(
+        "Do not check Canvas; treat every entry as invalid. For a deliberate course "
+        "switch, where no ID can match anyway."
+    ),
+)
+@click.option(
+    "--yes",
+    "-y",
+    "assume_yes",
+    is_flag=True,
+    default=False,
+    help="With --apply, skip the confirmation when the manifest records a different course.",
+)
+@_handle_cli_errors
+def clean_manifest_cmd(
+    repo: Path | None,
+    config: Path | None,
+    apply: bool,
+    no_canvas_check: bool,
+    assume_yes: bool,
+) -> None:
+    """Remove manifest entries whose Canvas object is not in the configured course.
+
+    Checks every manifest entry's Canvas ID against the live course (by type),
+    and reports entries that point at something missing: deleted in Canvas,
+    belonging to a different course (canvas.toml's course_id was changed), or
+    recorded as the wrong type. Files that link to a removed entry are marked
+    for re-sync so the next update re-renders their links. Canvas is only read,
+    never changed.
+
+    Without --apply this is a report. --apply edits the manifest and records the
+    configured course as the manifest's course (see update's course check).
+
+    --no-canvas-check skips the Canvas lookups and treats every entry as invalid,
+    which is what a deliberate move to a different course means: Canvas object IDs
+    are unique per object, so none of the recorded IDs can exist in the new course.
+
+    REPO is the course content repo. If omitted, the enclosing repo is found by
+    walking up from the current directory.
+    """
+    if not no_canvas_check:
+        _ensure_pandoc()
+    repo = _resolve_repo(repo).resolve()
+    if config is None:
+        config = repo / "course_settings" / "canvas.toml"
+    cfg = load_config(config)
+
+    click.echo(f"Repo:      {repo}")
+    click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})")
+    course = get_course(cfg)
+    click.echo(f"Course:    {course.name}")
+
+    if no_canvas_check:
+        manifest_path = manifest_lib.migrate_legacy_manifest(repo, cfg.config_path)
+        manifest = manifest_lib.load(manifest_path)
+        plan = plan_invalidate_all(manifest)
+    else:
+        try:
+            manifest, manifest_path, plan = run_plan(cfg, repo, course)
+        except requests.exceptions.ConnectionError:
+            raise
+        except Exception as e:
+            die(f"could not list the course's contents on Canvas ({e}); nothing was changed.")
+    stored = manifest_lib.get_course_identity(manifest)
+    switching = stored is not None and not manifest_lib.same_course(
+        stored, cfg.base_url, cfg.course_id
+    )
+
+    if not apply:
+        print_plan(plan, applied=False)
+        click.echo()
+        if plan.has_changes or switching or stored is None:
+            click.echo(f"Nothing changed. Re-run with --apply to update {manifest_path.name}.")
+        return
+
+    if switching and not assume_yes:
+        if not sys.stdin.isatty():
+            die(
+                f"{manifest_path.name} records course {stored['course_id']} "
+                f"('{stored.get('course_name', '')}'); re-run with --yes to switch it "
+                f"to {cfg.course_id} ('{course.name}')."
+            )
+        print_plan(plan, applied=False)
+        click.echo()
+        if not click.confirm(
+            f"Switch {manifest_path.name} from course {stored['course_id']} "
+            f"('{stored.get('course_name', '')}') to {cfg.course_id} ('{course.name}')?",
+            default=False,
+        ):
+            die("Stopped; nothing was changed.")
+
+    apply_clean(manifest, manifest_path, plan, cfg, course.name)
+    print_plan(plan, applied=True)
+    click.echo()
+    click.secho(
+        f"{manifest_path.name} updated; it now records course {cfg.course_id} "
+        f"('{course.name}'). Run update to upload what was removed.",
+        fg="green",
+    )
 
 
 def _parse_canvas_url(url: str) -> tuple[str, int]:
@@ -685,6 +836,7 @@ def _format_concise_date(iso_date: str) -> str:
         "needed. Exits nonzero if any problems are found."
     ),
 )
+@click.option("--yes", "-y", "assume_yes", is_flag=True, default=False, help=_YES_HELP)
 @_handle_cli_errors
 def update(
     repo: Path | None,
@@ -695,6 +847,7 @@ def update(
     single_target: str | None,
     verbose: bool,
     check_all: bool,
+    assume_yes: bool,
 ) -> None:
     """Sync a Markdown course repo to Canvas LMS.
 
@@ -726,6 +879,7 @@ def update(
 
     course = get_course(cfg)
     click.echo(f"Course:    {course.name}")
+    _guard_course(repo, cfg, course, assume_yes)
 
     if target_recursively or single_target:
         recursive_list = (

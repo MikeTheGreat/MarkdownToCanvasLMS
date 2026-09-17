@@ -188,6 +188,11 @@ Usage: markdown-to-canvas update [OPTIONS] [REPO]
 `REPO` is a positional path to the course content repo; there is no `--repo` flag. It is
 optional — see [Repo-root resolution](#repo-root-resolution) below.
 
+After `get_course()` and before either `run_sync` or `run_targeted_sync`, the CLI runs
+the stored-course check (`cli._guard_course` → `course_guard.check_course`; see
+"Stored course (`_canvas_course`)" under the manifest file). `-y/--yes` answers its prompt
+(needed with no TTY). `--check-all` skips the check.
+
 ### Repo-root resolution
 
 `update` and `publish` both resolve their repo argument through `_resolve_repo()` in
@@ -311,7 +316,13 @@ Usage: markdown-to-canvas prune [OPTIONS] REPO
   --manifest-only  Remove orphaned entries from the local manifest only; never
                    touch Canvas.
   --config PATH    Path to canvas.toml (default: <repo>/course_settings/canvas.toml)
+  -y, --yes        Record the course for a manifest that has none without asking
 ```
+
+`--delete`/`--unpublish` run the stored-course check (`cli._guard_course`, see
+"Stored course (`_canvas_course`)" under the manifest file) after connecting;
+`--manifest-only` does not, since it never contacts Canvas. `run_prune`'s orphan
+scan skips the reserved course entry (its key is not a repo path).
 
 Removes Canvas items whose local source file no longer exists. Because the
 manifest is the only record of what the tool created, an entry is treated as an
@@ -418,6 +429,84 @@ As with local modules, Canvas-only modules are repositioned only when
 `module_order.toml` itself is stale (or targeted, or `--force-uploads`).
 Canvas's insert-and-shift positioning keeps a correctly placed module in place
 while other modules are re-synced around it.
+
+## `clean-manifest` Subcommand
+
+```text
+Usage: markdown-to-canvas clean-manifest [OPTIONS] [REPO]
+
+  --config PATH  Path to canvas.toml (default: <repo>/course_settings/canvas.toml)
+  --apply           Make the changes. Without it, only report what would change.
+  --no-canvas-check Do not check Canvas; treat every entry as invalid.
+  -y, --yes         With --apply, skip the confirmation when switching courses.
+```
+
+`--no-canvas-check` runs `plan_invalidate_all` instead of steps 1–3 below (no
+listing, no referrer scan, so Pandoc is not required either). It is the same path
+the stored-course check takes for a confirmed course change.
+
+Implemented in `clean_manifest.py`; the CLI wrapper is `cli.clean_manifest_cmd`.
+Removes manifest entries whose Canvas object is not in the configured course,
+without any title/slug matching (each entry already names its Canvas ID). This is
+the repair path for three failure modes `update` cannot see because
+`last_synced` says the entry is current: `course_id` changed after a sync, an item
+deleted directly in Canvas, and a wrong type recorded by an older version (links to
+`modules/*.md` once stub-created pages). It is also the only way to switch a
+manifest that records one course to another (see the stored-course check).
+
+Canvas is only read. Pandoc is required (the referrer scan converts Markdown).
+
+1. `capi.list_course_object_ids(course)` makes one paginated list call per type
+   and returns `{canvas_type: set(ids)}`: pages by `page_id`, assignments,
+   discussion topics ∪ announcements (used for both `discussion` and
+   `announcement`, since a topic's announcement flag can change), classic quizzes,
+   modules (also used for `external_module`), files. Exceptions propagate; the CLI
+   turns any failure into `die()` before anything is written, so a failed listing
+   is never read as "the course has none".
+2. `check_entries(manifest, canvas_ids, config)` is pure:
+   - skips the reserved course entry;
+   - fixed-type folders (`_FOLDER_TYPES`: `modules/` → module, `assets/` → file,
+     `quizzes/` → quiz) remove an entry of any other type. Content folders are not
+     type-checked by folder;
+   - `syllabus`: its `canvas_id` is the course id (`sync_syllabus` records it that
+     way); a mismatch removes it and counts as *foreign evidence*;
+   - `COURSE_LEVEL_TYPES` (`course_settings`, `rubrics`, `module_order`) have no
+     checkable id (recorded as 0). They are removed only when there is foreign
+     evidence (the stored course differs, or the syllabus mismatch above);
+     otherwise listed as unchecked. Removing them is equivalent to
+     `--force-uploads` for those files (all sections, rubrics and positions are
+     re-sent), which the sync code already supports;
+   - any type in `canvas_ids`: removed when `int(canvas_id)` is not in the set.
+     Pages are compared by `page_id`, never by `canvas_url`, because slugs repeat
+     across courses (a Spring and a Fall copy both have `lecture-01`);
+   - anything else (e.g. `question_bank`) is listed as unchecked.
+3. `plan_clean` runs only when something is removed: `find_referrers` reuses
+   `local_orphans.collect_sources` / `collect_local_refs` (snippet-expanded,
+   course-flag branches not applied, so the result is a superset) plus the
+   `front_page` / `dashboard_image` keys of `course_settings.toml`. Each surviving
+   manifest entry that references a removed key goes into `plan.resync`; a
+   `course_settings.toml` reference goes into `plan.settings_sections`.
+4. `apply_clean` (only with `--apply`) deletes the removed keys, pops
+   `last_synced` from each `resync` entry, pops the named section hashes (and
+   `last_synced`) from the settings entry, records the configured course with
+   `set_course_identity`, and flushes once.
+
+Why re-sync marking drops `last_synced` instead of back-dating it: a back-dated
+`last_synced` would make `needs_sync` true, but `_canvas_is_newer` would then
+compare Canvas's `updated_at` (set by the previous render) with the local mtime
+(older) and skip the file as "Canvas is newer". An entry without `last_synced`
+bypasses that check (see "Stub creation"). The cost is that edits made directly in
+Canvas to a marked file are overwritten, which is why the report lists them.
+
+With `--apply`, when the manifest records a different course, the CLI prints the
+plan and asks for confirmation (`--yes` skips it; no TTY and no `--yes` → `die()`).
+Without `--apply` nothing is written, not even the course record.
+
+Not handled: a page renamed on Canvas keeps its old `canvas_url` in the manifest
+(checked by id, so the entry is kept); stray Canvas objects are never deleted
+(use `find-canvas-orphans`); links already rendered to an object that still exists
+but is the wrong one (e.g. a discussion linking to a stray page stub) are not
+detected, since the referenced entry itself is valid.
 
 ## `import` Subcommand
 
@@ -762,7 +851,9 @@ check, which is correct — only typed input carries the intent.
    keys for moved files, and `canvas_item_ids` sub-tables inside module
    entries. `mv` has no `--config` and a rename is a repo-wide fact, so all of
    the repo's courses are updated in one go; the summary line names the files
-   when more than one changed.
+   when more than one changed. The reserved stored-course entry
+   (`_canvas_course`) is carried over unchanged. `mv` never contacts Canvas, so
+   it does not run the stored-course check.
 3. **All `.md` files in the repo** — rewrites relative Markdown links
    (`[text](path)`, `![alt](path)`) and inline snippet references
    (`$path.md$`) that point to moved files. Also adjusts outbound links inside
@@ -1371,6 +1462,16 @@ published: true
 The tool maintains a manifest in the course repo that maps local file paths to their Canvas IDs. The tool reads this file to decide whether to create or update, and writes to it after each successful publish.
 
 **One manifest per `canvas.toml`.** The file name is derived from the config in use (`manifest.manifest_name_for(config_path)`): `course_settings/canvas.toml` → `.manifest-canvas.toml`, `course_settings/canvas-sec-a.toml` → `.manifest-canvas-sec-a.toml`. `Config.config_path` carries the path `config.load()` read, and `run_sync`/`run_targeted_sync`/`run_prune` derive the manifest path from it, so pointing `--config` at a second course (another section, a sandbox) keeps two independent sets of Canvas IDs and `last_synced` times in one repo. `find-canvas-orphans` takes `--config` too but reads no manifest; `publish` and `import` touch none.
+
+**Stored course (`_canvas_course`).** The manifest name tracks the config file, not the course inside it, so editing `course_id` in `canvas.toml` silently keeps every old Canvas ID (observed: 83 assets uploaded to a Spring course kept their Spring ids after `canvas.toml` moved to Fall, so they were never uploaded to Fall and 24 pages kept linking to the Spring copies). The manifest therefore holds a reserved entry `manifest.COURSE_KEY = "_canvas_course"` with `canvas_type = "course_identity"` (`COURSE_TYPE`), `base_url`, `course_id`, `course_name`, `recorded_at`. Helpers in `manifest.py`: `is_course_key`, `get_course_identity`, `set_course_identity` (writes and flushes), `same_course` (base_url compared case-insensitively without trailing slash), `has_content_entries`. Only three places walk the whole manifest: `run_prune` skips the entry explicitly, `mv.compute_manifest_updates` passes it through (its key is not in `path_map`), and `_phase_due_dates` ignores it (no `resolved_dates`).
+
+`course_guard.check_course(manifest_path, config, course_name, assume_yes, confirm, interactive)` is called from `cli._guard_course` after `get_course()` in `update` (full and `-t`/`-s`) and `prune --delete/--unpublish`; not in `update --check-all` or `prune --manifest-only` (no Canvas contact). It lives in the CLI layer, so `run_sync` and friends (and their tests) are unaffected. Outcomes (every prompt defaults to no; the CLI has already printed the repo, course id, base URL and course name, which is what the person is being asked to check):
+
+- same course → return, silently;
+- nothing stored → explain (first sync, or a manifest from an older version) and ask before recording. Both cases ask, so a wrong `course_id` on a first sync is caught before anything is uploaded;
+- different course stored → print recorded vs requested plus the entry count and the duplicate-content warning, ask, and on yes hand the manifest to `clean_manifest.plan_invalidate_all` + `apply_clean`, which drops every entry and records the new course. The run then continues into the sync, which re-creates the content in the new course. Invalidating without asking Canvas is sound because Canvas object ids are unique per object: nothing in the new course can hold an id recorded against the old one, so a listing could only confirm that every entry is dead.
+
+`assume_yes` answers any of these; with `interactive()` false and no `assume_yes`, `CourseGuardError` names `--yes`. Declining also raises it. The CLI turns `CourseGuardError` into `die()`. The legacy-manifest rename runs before the check (`migrate_legacy_manifest` is idempotent), so the check reads the same file the sync will.
 
 **Legacy migration:** repos written before per-config manifests have a single `.canvas-manifest.toml`. `manifest.migrate_legacy_manifest(repo_path, config_path)` renames it to `.manifest-canvas.toml` on the next `update`/`prune` run and prints a one-line notice. It fires only for the default config and only when the new name doesn't already exist — a run pointed at some other `canvas.toml` must not adopt the default course's Canvas IDs. `ignore.py` always ignores both `.manifest-*.toml` and the legacy name, so no manifest is ever treated as uploadable content.
 

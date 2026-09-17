@@ -343,6 +343,8 @@ How it would work:
 
 This is a recovery/diagnostic tool, not part of the normal sync flow.
 
+`clean-manifest` already covers the common repair case (entries whose Canvas ID is not in the configured course are removed, and the next `update` re-creates them). A rebuild would still be needed to recover a lost manifest without creating duplicates in Canvas.
+
 ## `download` subcommand: download Canvas course to local Markdown structure
 
 A `download` subcommand would do the reverse of the main sync: pull content from an existing Canvas course and write it out as a local Markdown repo, suitable for then being managed by this tool.

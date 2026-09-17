@@ -19,6 +19,11 @@ MANIFEST_GLOB = ".manifest-*.toml"
 
 DEFAULT_CONFIG_STEM = "canvas"
 
+#: Reserved manifest key holding the Canvas course the manifest's IDs belong to.
+#: Not a repo path: code that walks every entry must skip it (see is_course_key).
+COURSE_KEY = "_canvas_course"
+COURSE_TYPE = "course_identity"
+
 
 def manifest_name_for(config_path: Path | None) -> str:
     """File name of the manifest belonging to ``config_path``.
@@ -180,3 +185,47 @@ def record(
         entry.update(extra)
     manifest[local_path] = entry
     flush(manifest_path, manifest)
+
+
+def is_course_key(key: str, entry: dict[str, Any] | None = None) -> bool:
+    """True for the reserved stored-course entry (not a repo file)."""
+    return key == COURSE_KEY or (entry or {}).get("canvas_type") == COURSE_TYPE
+
+
+def get_course_identity(manifest: ManifestDict) -> dict[str, Any] | None:
+    """The stored course (base_url, course_id, course_name), or None if unrecorded."""
+    entry = manifest.get(COURSE_KEY)
+    if not entry or "course_id" not in entry or "base_url" not in entry:
+        return None
+    return entry
+
+
+def set_course_identity(
+    manifest: ManifestDict,
+    manifest_path: Path | None,
+    base_url: str,
+    course_id: int,
+    course_name: str,
+) -> None:
+    """Record which Canvas course the manifest's IDs belong to, and flush."""
+    manifest[COURSE_KEY] = {
+        "canvas_type": COURSE_TYPE,
+        "base_url": base_url.rstrip("/"),
+        "course_id": int(course_id),
+        "course_name": course_name,
+        "recorded_at": datetime.now(timezone.utc).isoformat(),
+    }
+    flush(manifest_path, manifest)
+
+
+def same_course(identity: dict[str, Any], base_url: str, course_id: int) -> bool:
+    return (
+        str(identity.get("base_url", "")).rstrip("/").lower()
+        == base_url.rstrip("/").lower()
+        and int(identity.get("course_id", -1)) == int(course_id)
+    )
+
+
+def has_content_entries(manifest: ManifestDict) -> bool:
+    """True if the manifest holds any entry other than the stored course."""
+    return any(not is_course_key(k, v) for k, v in manifest.items())

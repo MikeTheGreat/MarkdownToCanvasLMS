@@ -60,6 +60,7 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
     - [`canvas.toml`](#canvastoml)
     - [Several Canvas courses from one repo](#several-canvas-courses-from-one-repo)
       - [Making the sections differ](#making-the-sections-differ)
+    - [Which course a manifest belongs to](#which-course-a-manifest-belongs-to)
     - [API token](#api-token)
   - [Usage](#usage)
   - [Canvas overwrite protection](#canvas-overwrite-protection)
@@ -71,6 +72,7 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
     - [`-s` — single target (no traversal)](#-s--single-target-no-traversal)
     - [Combining `-t` and `-s`](#combining--t-and--s)
   - [Removing content (`prune`)](#removing-content-prune)
+  - [Checking the manifest against the course (`clean-manifest`)](#checking-the-manifest-against-the-course-clean-manifest)
   - [Moving and renaming files (`mv`)](#moving-and-renaming-files-mv)
   - [Finding unreferenced content](#finding-unreferenced-content)
     - [`find-local-orphans` — the repo](#find-local-orphans--the-repo)
@@ -268,7 +270,7 @@ runs independent — Canvas IDs and `last_synced` times are per course, so
 syncing section B does not make section A look up to date, and a `-t`/`-s`
 run against one section never touches the other's IDs. Commit all of them.
 
-`--config` is accepted by `update`, `prune`, and `find-canvas-orphans`. `mv`
+`--config` is accepted by `update`, `prune`, `clean-manifest`, and `find-canvas-orphans`. `mv`
 has no `--config`: a rename is a repo-wide fact, so it rewrites every
 `.manifest-*.toml` it finds in the repo root.
 
@@ -311,6 +313,49 @@ the file only for its `[course_flags]` table, so no API token (and no
 everything else in `course_settings.toml`: course name, grading standards,
 assignment groups, late policy, tab configuration. Those are one set of values
 per repo.
+
+### Which course a manifest belongs to
+
+The manifest is named after the `canvas.toml` file, not after the course inside
+it, so changing `course_id` in `canvas.toml` keeps using the same manifest — and
+all of its Canvas IDs still point into the old course. To catch that, the
+manifest records the course it belongs to (a `_canvas_course` entry holding
+`base_url`, `course_id` and the course name), and `update`, `prune --delete` and
+`prune --unpublish` check it after connecting to Canvas.
+
+These commands already print the repo, the course id and base URL, and the
+course's name as it comes back from Canvas:
+
+```text
+Repo:      /home/you/Courses/my-course
+Course ID: 2735395  (https://cascadia.instructure.com)
+Course:    IT-CS 142 (2026 Fall)
+```
+
+The prompts below come right after those lines, so you can check the course name
+before anything is uploaded to it.
+
+- **Same course recorded** — the run continues with no prompt.
+- **No course recorded** — you are asked to confirm before it is recorded. This
+  covers a first sync (a new manifest) and a manifest written before this check
+  existed. In the second case, answer no and run `clean-manifest` first if the
+  manifest may have been used with another course.
+- **A different course recorded** — the recorded and requested courses are
+  printed together and you are asked whether to change. Answering yes clears
+  every Canvas ID from the manifest and records the new course, then the run
+  continues and re-creates this repo's content in it. Every recorded ID belongs
+  to the old course — Canvas IDs are unique per object, so none of them can exist
+  in the new one. **If the new course already holds a copy of this content (for
+  example it was copied from the old course inside Canvas), this leaves
+  duplicates.** Answering no changes nothing, which is what you want if
+  `canvas.toml` is simply wrong.
+
+`-y`/`--yes` answers yes to any of these prompts, which is needed when there is
+no terminal (a script or CI job). Without a terminal and without `--yes`, the run
+stops and changes nothing.
+
+`update --check-all` and `prune --manifest-only` never contact Canvas and do not
+check.
 
 ### API token
 
@@ -359,6 +404,9 @@ Options:
                                   first time to a brand-new empty Canvas course. Contacts
                                   Canvas for nothing and writes nothing. Exits nonzero if any
                                   problems are found.
+  -y, --yes                       Record the course for a manifest that has none
+                                  without asking (see "Which course a manifest
+                                  belongs to"). Never overrides a different course.
   --help                          Show this message and exit.
 ```
 
@@ -547,6 +595,7 @@ Options:
   --unpublish      Unpublish (set published=False) the orphaned items on Canvas
   --manifest-only  Remove orphaned entries from the local manifest only; never
                    touch Canvas
+  -y, --yes        Record the course for a manifest that has none without asking
   --help           Show this message and exit.
 ```
 
@@ -586,6 +635,76 @@ needed). Use it to clear entries the other modes leave behind — items you alre
 removed from Canvas manually, unsupported types, or in-use protected resources. It
 ignores the in-use protection and type rules above because it never changes
 anything on Canvas; it only forgets the local bookkeeping.
+
+---
+
+## Checking the manifest against the course (`clean-manifest`)
+
+The manifest trusts its Canvas IDs indefinitely. An ID stops being valid when
+`canvas.toml` is pointed at a different course after a sync, when the item is
+deleted directly in Canvas, or when an older version of the tool recorded the
+wrong type. `update` does not notice: the entry's `last_synced` says it is up to
+date, so the item is skipped and every page that links to it keeps linking to the
+bad ID. `clean-manifest` finds and removes those entries.
+
+```text
+Usage: markdown-to-canvas clean-manifest [OPTIONS] [REPO]
+
+Options:
+  --config PATH  Path to canvas.toml  [default: <repo>/course_settings/canvas.toml]
+  --apply           Make the changes. Without it, only report what would change.
+  --no-canvas-check Do not check Canvas; treat every entry as invalid.
+  -y, --yes         With --apply, skip the confirmation when the manifest records
+                    a different course.
+  --help            Show this message and exit.
+```
+
+```bash
+# Report only: nothing is changed
+markdown-to-canvas clean-manifest
+
+# Remove the bad entries and mark what links to them for re-sync
+markdown-to-canvas clean-manifest --apply
+
+# Then upload what was removed
+markdown-to-canvas update
+```
+
+It lists the course's pages, assignments, discussions, announcements, quizzes,
+modules and files once each, then checks every manifest entry:
+
+- **Entries with a Canvas ID** are removed when that ID is not in the course as
+  that type. Pages are checked by page ID, not by URL slug, because two courses
+  often have pages with the same slug.
+- **Wrong type**: a file under `modules/` recorded as anything other than a
+  module (and likewise `assets/` → file, `quizzes/` → quiz) is removed.
+- **Syllabus**: removed when it was last synced to a different course.
+- **Course settings, rubrics and module order** have no ID to check. They are
+  removed only when the manifest was demonstrably used with another course (it
+  records a different course, or the syllabus was synced to one), so the next
+  `update` re-sends all of them.
+- Anything else (for example question banks) is listed as not checked.
+
+Removing an entry does not by itself fix the pages that link to it, because
+those files are unchanged locally. So every file that links to a removed entry
+(found the same way `find-local-orphans` finds links, including links that come
+from snippets) is marked for re-sync, and `course_settings.toml`'s `front_page` /
+`dashboard_image` sections are marked if they name one. The next `update`
+re-renders those files. They are listed in the report because any edits made to
+them directly in Canvas will be overwritten.
+
+If listing the course fails, nothing is changed. Canvas itself is only read,
+never changed: removed items that still exist in some other course stay there.
+
+After `--apply`, the manifest records the configured course (see "Which course a
+manifest belongs to"). If it recorded a different course, you are asked to
+confirm the switch first.
+
+`--no-canvas-check` skips every Canvas lookup and treats all entries as invalid.
+That is what moving a repo to a different course means, so `update` uses the same
+shortcut when you confirm a course change: no recorded ID can exist in the new
+course, so there is nothing to look up. Use it directly when you want the
+manifest emptied without waiting for the listings.
 
 ---
 
@@ -2288,20 +2407,18 @@ If the manifest is lost you can re-run the tool against a fresh Canvas course, o
 
 ### Deleting a file in Canvas
 
-The tool does **not** detect Canvas-side deletions. If you delete a file in Canvas (e.g. an image in Canvas Files) but the local file is unchanged, the next `update` run will silently skip it — the local mtime is still older than `last_synced`, so `needs_sync` returns false and no upload occurs. The manifest entry remains, pointing at a now-dead Canvas ID. Any pages that embed the deleted file will show broken links.
+The tool does **not** detect Canvas-side deletions during `update`. If you delete an item in Canvas (e.g. an image in Canvas Files) but the local file is unchanged, the next `update` run will silently skip it — the local mtime is still older than `last_synced`, so `needs_sync` returns false and no upload occurs. The manifest entry remains, pointing at a now-dead Canvas ID. Any pages that embed the deleted file will show broken links.
 
-To fix this, re-upload the affected file using one of:
+To fix this, run `clean-manifest --apply` and then `update` (see "Checking the manifest against the course"). That removes the dead entry, marks the pages that link to it for re-sync, and the `update` uploads the file again and re-renders those pages with its new ID.
+
+For a single known file you can also touch it and the files that link to it, then run `update`:
 
 ```bash
-# Re-upload everything
-markdown-to-canvas update . --force-uploads
-
-# Re-upload just the one file (touch updates mtime so the tool treats it as changed)
-touch assets/Images/path/to/file.png
+touch assets/Images/path/to/file.png pages/page-that-shows-it.md
 markdown-to-canvas update .
 ```
 
-After a forced re-upload the file receives a **new** Canvas ID. Pages that reference the image must then be re-synced so their embedded URLs are rewritten to the new ID.
+`--force-uploads` alone is not enough for this: for a file that is unchanged locally, the Canvas copy's `updated_at` is later than the local mtime, so the Canvas overwrite protection skips it unless `--force-overwrite` is also given.
 
 ## IMSCC import
 
