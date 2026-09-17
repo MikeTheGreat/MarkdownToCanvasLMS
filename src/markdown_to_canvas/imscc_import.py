@@ -2646,6 +2646,24 @@ _COMMENTED_BY_DEFAULT = (
 # course. See publish.load_site_name().
 _PUBLISH_TITLE_KEY = "title_for_publish_to_website"
 
+# Settings `update` would upload, but that Canvas commonly reserves to admins:
+# visibility, the course's own date window, enrollment, and usage rights. Which
+# ones a teacher may set depends on the school's role configuration, and Canvas
+# rejects the *whole* course.update() call — with a bare 403 naming no field —
+# when the body contains one the account may not touch. They are also settings
+# the institution normally owns per section, like title/course_code above, so
+# import writes them commented out rather than making every sync probe them.
+_COMMENTED_ADMIN_ONLY = (
+    "start_at",
+    "conclude_at",
+    "restrict_enrollments_to_course_dates",
+    "is_public",
+    "is_public_to_auth_users",
+    "open_enrollment",
+    "self_enrollment",
+    "usage_rights_required",
+)
+
 # Canvas will not accept these: derived cartridge metadata or read-only fields.
 _IMPORT_ONLY_READ_ONLY = (
     "last_modified",
@@ -2718,6 +2736,7 @@ def _write_course_settings_toml(
     # shows what `update` will and will not upload.
     overridable = {k: data.pop(k) for k in _COMMENTED_BY_DEFAULT if k in data}
     publish_title = overridable.get("title")
+    admin_only = {k: data.pop(k) for k in _COMMENTED_ADMIN_ONLY if k in data}
     read_only = {k: data.pop(k) for k in _IMPORT_ONLY_READ_ONLY if k in data}
     not_uploaded = {k: data.pop(k) for k in _IMPORT_ONLY_NOT_UPLOADED if k in data}
 
@@ -2739,6 +2758,14 @@ def _write_course_settings_toml(
             "\n# --- Optional overrides; uncomment to replace what your school set ---\n"
         )
         content += _commented_toml(overridable)
+
+    if admin_only:
+        content += (
+            "\n# --- Usually admin-only; uncomment only if your Canvas role may set them ---\n"
+            "# Canvas reserves these to admins at many schools. If your account isn't\n"
+            "# allowed to change one, Canvas rejects it and `update` reports which.\n"
+        )
+        content += _commented_toml(admin_only)
 
     if read_only or not_uploaded:
         content += "\n# --- Import-only settings, kept for round-trip fidelity ---\n"

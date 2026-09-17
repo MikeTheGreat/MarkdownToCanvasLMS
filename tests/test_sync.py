@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, call
 
 import pytest
-from canvasapi.exceptions import ResourceDoesNotExist
+from canvasapi.exceptions import Forbidden, ResourceDoesNotExist
 
 from markdown_to_canvas.config import Config
 from markdown_to_canvas.sync import (
@@ -2663,6 +2663,39 @@ def test_explicit_scheme_overrides_group_weights() -> None:
 
     params = course.update.call_args[1]["course"]
     assert params["apply_assignment_group_weights"] is False
+
+
+def test_forbidden_metadata_field_retried_one_at_a_time() -> None:
+    """A 403 on the bulk PUT falls back to per-field updates, applying what it
+    can and naming the fields Canvas refused."""
+    course = MagicMock()
+    gated = {"is_public", "start_at"}
+
+    def update(course=None, **kwargs):
+        if gated & set(course):
+            raise Forbidden('{"status":"unauthorized"}')
+
+    course.update.side_effect = update
+
+    refused = _capi.update_course_metadata(
+        course, {"title": "T", "is_public": False, "start_at": "2026-01-01", "license": "private"}
+    )
+
+    assert sorted(refused) == ["is_public", "start_at"]
+    applied = [
+        c[1]["course"] for c in course.update.call_args_list if len(c[1]["course"]) == 1
+    ]
+    assert {"name": "T"} in applied and {"license": "private"} in applied
+
+
+def test_forbidden_on_every_field_reraises() -> None:
+    """When no field gets through, the account can't edit the course at all —
+    that is a real error, not a per-field permission gate."""
+    course = MagicMock()
+    course.update.side_effect = Forbidden('{"status":"unauthorized"}')
+
+    with pytest.raises(Forbidden):
+        _capi.update_course_metadata(course, {"title": "T", "license": "private"})
 
 
 def test_existing_group_edited_with_flat_params() -> None:

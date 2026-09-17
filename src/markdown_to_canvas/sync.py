@@ -1338,8 +1338,26 @@ def sync_course_settings(
         # §1a: core course metadata. When only metadata changed, gs_id is None
         # and update_course_metadata leaves the course's grading standard alone.
         if "metadata" in stale_sections:
-            api.update_course_metadata(course, settings, grading_standard_id=gs_id)
-            _section_done("metadata")
+            try:
+                refused = api.update_course_metadata(
+                    course, settings, grading_standard_id=gs_id
+                )
+            except Exception as exc:
+                _section_failed("metadata", exc)
+            else:
+                if refused:
+                    # The rest of the section was applied; these fields are
+                    # gated by the account's role permissions and will keep
+                    # being refused, so the section is still marked done rather
+                    # than re-probed on every run.
+                    warn(
+                        "WARNING: Canvas refused these course_settings fields "
+                        f"({', '.join(refused)}) — your Canvas account lacks "
+                        "permission to change them on this course. Comment them "
+                        "out in course_settings.toml, or ask a Canvas admin.",
+                        errors,
+                    )
+                _section_done("metadata")
 
         # Dashboard image
         if "dashboard_image" in stale_sections:

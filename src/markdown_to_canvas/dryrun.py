@@ -93,8 +93,8 @@ class DryRunCanvas:
         # No live course to compare schemes against, so never a mismatch here.
         return GradingStandardSync(self._new_id() if standards else None, [])
 
-    def update_course_metadata(self, course, settings, grading_standard_id=None) -> None:
-        pass
+    def update_course_metadata(self, course, settings, grading_standard_id=None) -> list[str]:
+        return []
 
     def upload_course_image(self, course, local_path: Path) -> int:
         return self._new_id()

@@ -470,8 +470,23 @@ def test_course_settings_toml_has_all_basic_fields(imported_dir: Path) -> None:
     assert '# course_code = "TEST101"' in text
     assert "course_code" not in data
     assert data["default_view"] == "modules"
-    assert data["is_public"] is False
     assert data["license"] == "private"
+
+
+def test_course_settings_toml_comments_out_admin_only_fields(imported_dir: Path) -> None:
+    """Canvas reserves visibility/enrollment/date-window fields to admins at many
+    schools, and rejects the whole course.update() when one is present, so import
+    writes them commented rather than making every sync probe them."""
+    import tomllib
+    text = (imported_dir / "course_settings" / "course_settings.toml").read_text()
+    data = tomllib.loads(text)
+    assert "# is_public = false" in text
+    for key in (
+        "start_at", "conclude_at", "restrict_enrollments_to_course_dates", "is_public",
+        "is_public_to_auth_users", "open_enrollment", "self_enrollment",
+        "usage_rights_required",
+    ):
+        assert key not in data
 
 
 def test_course_settings_toml_records_front_page(imported_dir: Path) -> None:

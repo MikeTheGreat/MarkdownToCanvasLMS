@@ -695,16 +695,17 @@ This was missed until 2026-09: `import` wrote `default_view = "wiki"` and no `fr
 
 Import is a generic pass-through; upload is an allowlist (`_COURSE_METADATA_KEYS` minus `_COURSE_METADATA_SKIP`, plus the sections `sync_course_settings()` handles by hand). Anything imported but outside the allowlist used to be written as an ordinary-looking key that `update` silently dropped, with nothing in the file to distinguish it from a live setting. Those keys are now written **commented out**.
 
-Three module-level tables in `imscc_import.py` drive this:
+Four module-level tables in `imscc_import.py` drive this:
 
 | Constant | Applies to | Comment header emitted |
 | --- | --- | --- |
 | `_COMMENTED_BY_DEFAULT` | `title`, `course_code` | "Optional overrides; uncomment to replace what your school set" |
+| `_COMMENTED_ADMIN_ONLY` | `start_at`, `conclude_at`, `restrict_enrollments_to_course_dates`, `is_public`, `is_public_to_auth_users`, `open_enrollment`, `self_enrollment`, `usage_rights_required` | "Usually admin-only; uncomment only if your Canvas role may set them" |
 | `_IMPORT_ONLY_READ_ONLY` | `last_modified`, `root_account_uuid` | "Read-only in Canvas; these cannot be changed." (a bare `#` line separates it from the next group) |
 | `_IMPORT_ONLY_NOT_UPLOADED` | `copyright_*`, `storage_quota`, the five Canvas feature flags, and the five keys in neither key set (`default_wiki_editing_roles`, `allow_student_organized_groups`, `show_total_grade_as_points`, `filter_speed_grader_by_student_group`, `indexed`) | "Not uploaded by markdown-to-canvas; editing these has no effect." |
 | `_RUBRIC_IMPORT_ONLY_KEYS` | rubric `identifier`, `public`, `points_possible`, `hide_score_total`, `free_form_criterion_comments`, `rating_order`; criterion `criterion_id` | file-level header in `rubrics.toml` |
 
-`_COMMENTED_BY_DEFAULT` is the odd one out: those two keys *are* on the upload allowlist and take effect the moment a user uncomments them. They are commented because institutions populate them per section (the value carries section number and term), so a sync that re-sent the cartridge's stale value would clobber something useful.
+`_COMMENTED_BY_DEFAULT` and `_COMMENTED_ADMIN_ONLY` are the odd ones out: those keys *are* on the upload allowlist and take effect the moment a user uncomments them. `_COMMENTED_BY_DEFAULT` is commented because institutions populate `title`/`course_code` per section (the value carries section number and term), so a sync that re-sent the cartridge's stale value would clobber something useful. `_COMMENTED_ADMIN_ONLY` is commented because Canvas gates those fields on account-level role permissions: which of them a teacher may set varies by school, and Canvas rejects the *entire* `course.update()` with a bare 403 when the body holds one the account may not touch. `update` recovers (see "Permission-gated metadata fields" under course settings), but at the cost of one PUT per field, and the values are institution-owned anyway. A user whose role does have the permission can uncomment them and they upload normally.
 
 Commenting `title` out would have degraded `publish`, which used it for the website title and would otherwise have fallen back to the repo directory name. So `_write_course_settings_toml()` also emits `_PUBLISH_TITLE_KEY` (`title_for_publish_to_website`), **uncommented**, holding the same value. It is a markdown-to-canvas key rather than a Canvas one — it is on no upload path, so editing it cannot reach the course — and it is emitted as a flat key before any section header, like everything else at that level. `publish.load_site_name()` now resolves `title` → `title_for_publish_to_website` → `name` → `course_code` → repo directory name; `name`/`course_code` stay in the chain for hand-written repos that predate this.
 
@@ -1366,6 +1367,8 @@ These files are never uploaded as Canvas Pages. Each has a dedicated upload path
 | `course_settings/files_meta.toml` | Not yet uploaded (requires matching Canvas file IDs after asset upload) |
 
 **`course_settings/course_settings.toml` upload detail:**
+
+**Permission-gated metadata fields.** Canvas gates individual course fields on account-level role permissions (course visibility, term dates, self-enrollment and similar are commonly withheld from teachers). When the `PUT courses/:id` body contains even one such field, Canvas rejects the *entire* call with a blanket `403 {"status":"unauthorized"}` and no indication of which field caused it — previously an uncaught `canvasapi.exceptions.Forbidden` traceback that killed the run before any content synced. `update_course_metadata()` now catches that 403 and re-sends the fields one at a time, so every field the account *may* set is still applied, and it returns the list of refused API field names. `sync_course_settings()` warns with that list (recorded in `errors`, so the run reports failure) and names the fields so the instructor can comment them out. The section is still marked done: the refusal is a standing account-permission fact, not a transient error, so re-probing on every run would cost one PUT per field forever. If *no* field gets through, the account cannot edit the course at all; the `Forbidden` is re-raised and handled as an ordinary section failure (warned, hash not recorded, retried next run).
 
 The following sections are handled separately from the flat `course.update()` call:
 

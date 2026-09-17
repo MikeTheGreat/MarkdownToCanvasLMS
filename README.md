@@ -985,6 +985,13 @@ TOML — *does* re-upload it.)
 > # title = "IT-CS142 OL1 6563 - SU26 - Intermediate Programming"
 > # course_code = "IT-CS142 OL1 6563"
 >
+> # --- Usually admin-only; uncomment only if your Canvas role may set them ---
+> # Canvas reserves these to admins at many schools. If your account isn't
+> # allowed to change one, Canvas rejects it and `update` reports which.
+> # start_at = "2026-04-06T07:00:00"
+> # conclude_at = "2026-08-27T07:00:00"
+> # is_public = false
+>
 > # --- Import-only settings, kept for round-trip fidelity ---
 > # Read-only in Canvas; these cannot be changed.
 > # last_modified = "2025-08-01"
@@ -995,13 +1002,19 @@ TOML — *does* re-upload it.)
 > # show_total_grade_as_points = false
 > ```
 >
-> The two groups behave differently:
+> The three groups behave differently:
 >
 > * **Optional overrides** (`title`, `course_code`) *are* uploaded if you
 >   uncomment them. Schools normally populate these per section, and their
 >   values carry the section number and term, so `import` leaves them commented
 >   so a sync cannot overwrite that. Uncomment only if you want this tool to own
 >   the field.
+> * **Usually admin-only** (`start_at`, `conclude_at`,
+>   `restrict_enrollments_to_course_dates`, `is_public`,
+>   `is_public_to_auth_users`, `open_enrollment`, `self_enrollment`,
+>   `usage_rights_required`) are also uploaded if you uncomment them, but Canvas
+>   often reserves them to admins — see "Settings your Canvas account isn't
+>   allowed to change" above. Uncomment one only if your role can set it.
 > * **Import-only settings** do nothing when uncommented — they are ignored on
 >   upload. Some of them are settings Canvas would probably accept; they are
 >   unimplemented rather than impossible. See `TODO.md`.
@@ -1015,6 +1028,24 @@ TOML — *does* re-upload it.)
 >
 > Re-running `import` over an existing repo rewrites the file, so edits to these
 > commented lines are not preserved.
+
+> **Settings your Canvas account isn't allowed to change.** Canvas restricts
+> some course fields to admins — which ones depends on how your school
+> configured the teacher role. Common examples are the visibility flags
+> (`is_public`, `is_public_to_auth_users`), the course dates (`start_at`,
+> `conclude_at`, `restrict_enrollments_to_course_dates`), and the enrollment
+> flags (`open_enrollment`, `self_enrollment`). Canvas rejects the whole update
+> if it contains even one of them, without saying which, so `update` retries the
+> fields one at a time: everything you *are* allowed to set still gets applied,
+> and the run warns with the exact list it was refused, e.g.
+>
+> ```
+>   WARNING: Canvas refused these course_settings fields (is_public, start_at) —
+>   your Canvas account lacks permission to change them on this course. …
+> ```
+>
+> Comment those keys out of `course_settings.toml` to silence the warning, or
+> ask a Canvas admin to set them (or to grant your role the permission).
 
 ```toml
 # course_settings/course_settings.toml — TOML syntax. Every key is optional.

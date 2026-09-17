@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from canvasapi import Canvas
-from canvasapi.exceptions import BadRequest, ResourceDoesNotExist
+from canvasapi.exceptions import BadRequest, Forbidden, ResourceDoesNotExist
 from canvasapi.rubric import RubricAssociation
 from canvasapi.util import combine_kwargs
 
@@ -73,8 +73,18 @@ _COURSE_METADATA_SKIP = {
 }
 
 
-def update_course_metadata(course, settings: dict[str, Any], grading_standard_id: int | None = None) -> None:
-    """Apply flat course settings to Canvas via course.update()."""
+def update_course_metadata(
+    course, settings: dict[str, Any], grading_standard_id: int | None = None
+) -> list[str]:
+    """Apply flat course settings to Canvas via course.update().
+
+    Returns the API field names Canvas refused on permission grounds (empty on a
+    clean run). Canvas gates individual course fields on account-level role
+    permissions -- a teacher who may not change, say, course visibility or term
+    dates gets a blanket 403 for the whole PUT, with no indication of which field
+    caused it. So on a 403 we re-send the fields one at a time: everything the
+    account may set still gets applied, and the caller can name the rest.
+    """
     params: dict[str, Any] = {}
     for toml_key, api_key in _COURSE_METADATA_KEYS.items():
         if toml_key in settings and toml_key not in _COURSE_METADATA_SKIP:
@@ -93,8 +103,24 @@ def update_course_metadata(course, settings: dict[str, Any], grading_standard_id
         params["apply_assignment_group_weights"] = True
     if grading_standard_id is not None:
         params["grading_standard_id"] = grading_standard_id
-    if params:
+    if not params:
+        return []
+    try:
         course.update(course=params)
+    except Forbidden:
+        refused: list[str] = []
+        applied = 0
+        for key, value in params.items():
+            try:
+                course.update(course={key: value})
+                applied += 1
+            except Forbidden:
+                refused.append(key)
+        if applied == 0:
+            # Not a per-field gate: the account cannot edit this course at all.
+            raise
+        return refused
+    return []
 
 
 def _grading_scheme_entries(data_raw: list[Any]) -> list[dict[str, Any]]:
