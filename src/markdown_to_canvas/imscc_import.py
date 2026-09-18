@@ -3131,6 +3131,9 @@ desktop.ini
 # instead of an environment variable / --token. Uncomment if you do this.
 # course_settings/canvas.toml
 
+# Per-course-target sync manifests (e.g. .manifest-canvas.toml, .manifest-canvas-ol3.toml)
+.manifest-*.toml
+
 # Copied from .gitignore #####################################################
 #
 # Created by https://www.toptal.com/developers/gitignore/api/libreoffice,microsoftoffice

@@ -99,16 +99,24 @@ def rewrite_links(
         if local_key is None:
             return None, None
         local_file = course_root / local_key
-        if not local_file.exists():
-            print(f"  ERROR: local file not found, removing tag: {local_key}")
+        if not local_file.exists() or local_file.is_dir():
+            # A directory match almost always means a markdown link with a
+            # blank/missing URL (e.g. `[text]( "title")`), which resolves to
+            # the source file's own folder rather than a real target — treat
+            # it the same as a missing file rather than stub-creating a
+            # nonsense Canvas item named after the folder.
+            reason = (
+                "local path is a directory, not a file (check for a link with a missing URL)"
+                if local_file.is_dir()
+                else "local file not found"
+            )
+            print(f"  ERROR: {reason}, removing tag: {local_key}")
             if errors is not None:
                 try:
                     src = source_file.relative_to(course_root)
                 except ValueError:
                     src = source_file
-                errors.append(
-                    f"  {src}: local file not found, removing tag: {local_key}"
-                )
+                errors.append(f"  {src}: {reason}, removing tag: {local_key}")
             return local_key, None  # signals removal
         if local_key not in manifest:
             entry = stub_creator(local_key, infer_canvas_type(local_key))

@@ -206,6 +206,21 @@ def test_a_href_missing_local_file_removed(tmp_path: Path, capsys: pytest.Captur
     assert "ERROR" in capsys.readouterr().out
 
 
+def test_a_href_blank_url_resolving_to_directory_removed(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """A markdown link with a missing URL, e.g. `[text]( "title")`, produces
+    an empty href that resolves to the source file's own folder. This must
+    not be treated as a referenced-but-unsynced file (which would stub-create
+    a bogus Canvas item named after the folder) — it should be dropped like
+    any other missing-file reference."""
+    course_root, source_file = _setup(tmp_path)
+    html = '<a href="" title="How would you like to be graded?">How would you like to be graded?</a>'
+    result = rewrite_links(html, source_file, course_root, {}, COURSE_ID, _no_stub)
+    assert "<a " not in result
+    assert "ERROR" in capsys.readouterr().out
+
+
 # ---------------------------------------------------------------------------
 # rewrite_links — stub creation
 # ---------------------------------------------------------------------------
