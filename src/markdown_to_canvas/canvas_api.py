@@ -1059,6 +1059,11 @@ def create_stub(course, canvas_type: str, title: str) -> dict[str, Any]:
             title=title, message="", published=False, is_announcement=True
         )
         return {"canvas_type": "announcement", "canvas_id": topic.id}
+    if canvas_type == "quiz":
+        # Title only; _do_quiz() edits this stub by id when the quiz file is
+        # processed, filling in quiz_type, settings and questions.
+        quiz = course.create_quiz(quiz={"title": title, "published": False})
+        return {"canvas_type": "quiz", "canvas_id": quiz.id}
     if canvas_type == "module":
         # Created the same way _sync_module creates a module, so the stub's
         # publish state matches a module that was never linked to.

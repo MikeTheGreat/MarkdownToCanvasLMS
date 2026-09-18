@@ -201,7 +201,7 @@ class DryRunCanvas:
                 "canvas_id": canvas_id,
                 "canvas_url": _page_slug(title),
             }
-        if canvas_type in ("assignment", "discussion", "announcement", "module"):
+        if canvas_type in ("assignment", "discussion", "announcement", "quiz", "module"):
             return {"canvas_type": canvas_type, "canvas_id": canvas_id}
         # Same behavior as the real create_stub, so check-all reports exactly
         # what a real fresh sync would die on.

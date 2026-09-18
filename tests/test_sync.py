@@ -5592,6 +5592,14 @@ def test_create_stub_module() -> None:
     assert entry == {"canvas_type": "module", "canvas_id": 777}
 
 
+def test_create_stub_quiz() -> None:
+    course = MagicMock()
+    course.create_quiz.return_value = SimpleNamespace(id=888)
+    entry = _capi.create_stub(course, "quiz", "Survey")
+    course.create_quiz.assert_called_once_with(quiz={"title": "Survey", "published": False})
+    assert entry == {"canvas_type": "quiz", "canvas_id": 888}
+
+
 def test_canvas_is_newer_ignores_unsynced_stub() -> None:
     """A stub (no last_synced) was just created by this tool, so its Canvas
     updated_at is always newer than the local file; it must not block the

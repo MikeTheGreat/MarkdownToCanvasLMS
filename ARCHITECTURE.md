@@ -153,7 +153,7 @@ The `assets/` folder hierarchy is mirrored into Canvas Files. `assets/images/fig
 
 **Stub creation:**
 
-When a linked file has no Canvas ID yet, the tool creates a minimal placeholder in Canvas (title only, empty body, unpublished) purely to obtain the Canvas ID. The stub is overwritten with real content when that file is processed in the main loop. Content type for the stub is derived from the linked file's directory convention or its frontmatter `canvas_type` field.
+When a linked file has no Canvas ID yet, the tool creates a minimal placeholder in Canvas (title only, empty body, unpublished) purely to obtain the Canvas ID. The stub is overwritten with real content when that file is processed in the main loop. Stubs exist for pages, assignments, discussions, announcements, quizzes (title only, unpublished; `_do_quiz()` later edits it by id) and modules. Content type for the stub is derived from the linked file's directory convention or its frontmatter `canvas_type` field.
 
 A stub entry is recorded without `last_synced`, and `_canvas_is_newer()` returns False for any entry lacking `last_synced`. Without that rule the stub's Canvas `updated_at` (seconds old) always beats the local file's mtime, so the file was reported as "Canvas is newer" and the stub was never filled in. Entries without `last_synced` only ever come from this tool (stubs and partially failed uploads recorded with `mark_synced=False`), so there is no Canvas-side edit to protect.
 
