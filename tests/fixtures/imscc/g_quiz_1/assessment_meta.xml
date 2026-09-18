@@ -12,4 +12,7 @@
   <shuffle_answers>false</shuffle_answers>
   <show_correct_answers>true</show_correct_answers>
   <assignment_group_identifierref>g_ag_2</assignment_group_identifierref>
+  <assignment identifier="g_quiz_1_assignment">
+    <title>A Quiz</title>
+  </assignment>
 </quiz>

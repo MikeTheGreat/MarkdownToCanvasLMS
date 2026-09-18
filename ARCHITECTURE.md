@@ -602,11 +602,15 @@ Applied to raw HTML before calling Pandoc (phases 4–6):
 | `$CANVAS_OBJECT_REFERENCE$/assignments/gXXX` | `../assignments/foo.md` |
 | `$CANVAS_OBJECT_REFERENCE$/pages/gXXX` | `../pages/foo.md` |
 | `$CANVAS_OBJECT_REFERENCE$/discussion_topics/gXXX` | `../discussions/foo.md` |
-| `$CANVAS_OBJECT_REFERENCE$/modules/gXXX` | warn + leave as plain text (no href) |
+| `$CANVAS_OBJECT_REFERENCE$/modules/gXXX` | `../modules/foo.md` (modules are registered in `temp_manifest` before content conversion) |
+| `$CANVAS_OBJECT_REFERENCE$/assignments/gYYY` where `gYYY` is a graded quiz's or graded discussion's embedded `<assignment identifier>` | `../quizzes/foo/foo.md` / `../discussions/foo.md` |
+| `$WIKI_REFERENCE$/pages/some-slug` (older RCE links name the page by URL slug) | `../pages/some-slug.md`, matched against the `wiki_content/` file stem |
 | `$IMS-CC-FILEBASE$/path/to/file` | `../assets/path/to/file` |
 | `https://...` | unchanged |
 
-Unknown `gXXX` not in resource map → warn and remove href, keep link text.
+Graded quizzes (`assessment_meta.xml`) and graded discussions (topicMeta) each embed an `<assignment identifier="...">` whose id differs from the quiz/topic resource id and appears nowhere in `imsmanifest.xml`. Canvas's RCE links to those items through that assignment id. `_register_assignment_aliases()` (called at the end of `parse_imsmanifest()`) adds a `TempEntry` with `category="assignment_alias"` for each one, sharing the target's `local_path`. No converter phase selects that category, so the quiz/discussion is still converted once.
+
+An id that resolves to nothing (typically a link copied from an older course whose target was never brought over; Canvas's own `data-api-endpoint` on these points at the old course) → the whole `<a>` is unwrapped, keeping only its inner content, and a warning names the output file and link text. Removing only the href would make pandoc emit `[text]( "title")`, which `update` resolves to the file's own directory and reports as "local path is a directory". The rewriter substitutes the sentinel `_UNRESOLVED_HREF` first and unwraps anchors carrying it with `_UNRESOLVED_ANCHOR_RE`.
 
 ### Heading level handling
 

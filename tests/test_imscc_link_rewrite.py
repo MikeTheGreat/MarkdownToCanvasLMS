@@ -73,11 +73,44 @@ def test_module_ref_unknown_warns_and_removes(capsys: pytest.CaptureFixture) -> 
     assert "WARNING" in capsys.readouterr().out
 
 
-def test_unknown_id_warns_and_removes_href(capsys: pytest.CaptureFixture) -> None:
-    html = '<a href="$CANVAS_OBJECT_REFERENCE$/assignments/g_unknown">X</a>'
+def test_unknown_id_warns_and_unwraps_link(capsys: pytest.CaptureFixture) -> None:
+    """A link to an object missing from the export keeps its text but loses the <a>.
+
+    An empty href would become `[X]( "title")` in Markdown, which `update`
+    resolves to the file's own directory.
+    """
+    html = ('<p>See <a title="Lecture 07" href="$CANVAS_OBJECT_REFERENCE$/assignments/g_unknown" '
+            'data-course-type="assignments"><strong>X</strong></a> now</p>')
     result = rewrite_imscc_links(html, {}, "pages/p.md")
-    assert "$CANVAS_OBJECT_REFERENCE$" not in result
-    assert "WARNING" in capsys.readouterr().out
+    assert result == "<p>See <strong>X</strong> now</p>"
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert "pages/p.md" in out and "'X'" in out
+
+
+def test_unknown_id_unwrap_leaves_other_links_alone(capsys: pytest.CaptureFixture) -> None:
+    m = _manifest(_assignment("g_a1", "assignments/hw.md"))
+    html = ('<a href="$CANVAS_OBJECT_REFERENCE$/assignments/g_gone">Gone</a> '
+            '<a href="$CANVAS_OBJECT_REFERENCE$/assignments/g_a1">HW</a>')
+    result = rewrite_imscc_links(html, m, "pages/p.md")
+    assert result == 'Gone <a href="../assignments/hw.md">HW</a>'
+
+
+def test_wiki_reference_by_page_slug_resolved() -> None:
+    m = _manifest(TempEntry(imscc_id="g_p1", category="page",
+                            imscc_path="wiki_content/course-orientation.html",
+                            local_path="pages/course-orientation.md"))
+    html = '<a href="$WIKI_REFERENCE$/pages/course-orientation">Orientation</a>'
+    result = rewrite_imscc_links(html, m, "pages/p.md")
+    assert result == '<a href="../pages/course-orientation.md">Orientation</a>'
+
+
+def test_assignment_alias_resolves_to_quiz_file() -> None:
+    m = _manifest(TempEntry(imscc_id="g_qa", category="assignment_alias",
+                            imscc_path="", local_path="quizzes/q/q.md"))
+    html = '<a href="$CANVAS_OBJECT_REFERENCE$/assignments/g_qa">Quiz</a>'
+    result = rewrite_imscc_links(html, m, "pages/p.md")
+    assert '<a href="../quizzes/q/q.md">Quiz</a>' == result
 
 
 # ---------------------------------------------------------------------------

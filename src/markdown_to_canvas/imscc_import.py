@@ -500,7 +500,52 @@ def parse_imsmanifest(imscc_dir: Path) -> dict[str, TempEntry]:
         elif identifier not in dependency_ids and res_type:
             print(f"  WARNING: Unknown resource type '{res_type}' for {identifier!r} — skipping")
 
+    _register_assignment_aliases(result, imscc_dir)
     return result
+
+
+def _embedded_assignment_id(meta_path: Path) -> str:
+    """Return the identifier of the <assignment> embedded in a quiz/topic meta file.
+
+    Graded quizzes (assessment_meta.xml) and graded discussions (topicMeta)
+    carry their own Canvas assignment, with an IMSCC identifier distinct from
+    the quiz/topic resource.  Canvas's RCE links to them as
+    ``$CANVAS_OBJECT_REFERENCE$/assignments/<that id>``.  Returns '' if the
+    file has no such element or cannot be read.
+    """
+    try:
+        root = ET.parse(meta_path).getroot()
+    except (OSError, ET.ParseError):
+        return ""
+    for child in root:
+        if _strip_ns(child.tag) == "assignment":
+            return child.get("identifier", "")
+    return ""
+
+
+def _register_assignment_aliases(result: dict[str, TempEntry], imscc_dir: Path) -> None:
+    """Add 'assignment_alias' entries so links to a quiz's/discussion's assignment resolve.
+
+    The alias shares its target's local_path.  Its category is not one any
+    converter phase selects, so the target is still converted only once.
+    """
+    aliases: dict[str, TempEntry] = {}
+    for entry in result.values():
+        if entry.category not in ("quiz", "discussion"):
+            continue
+        meta_path = entry.metadata.get("meta_path", "")
+        if not meta_path:
+            continue
+        alias_id = _embedded_assignment_id(imscc_dir / meta_path)
+        if alias_id and alias_id not in result:
+            aliases[alias_id] = TempEntry(
+                imscc_id=alias_id,
+                category="assignment_alias",
+                imscc_path=entry.imscc_path,
+                local_path=entry.local_path,
+                title=entry.title,
+            )
+    result.update(aliases)
 
 
 # ---------------------------------------------------------------------------
@@ -533,6 +578,13 @@ _CANVAS_REF_RE = re.compile(
 )
 _FILEBASE_RE = re.compile(
     r'\$IMS-CC-FILEBASE\$/([^"\'?\s]+?)(?:\?[^"\']*)?(?=["\'\s])',
+)
+# Sentinel substituted for a $CANVAS_OBJECT_REFERENCE$ whose id is not in the
+# export, so the enclosing <a> can be found and unwrapped afterwards.
+_UNRESOLVED_HREF = "MD2CANVAS_UNRESOLVED_REF"
+_UNRESOLVED_ANCHOR_RE = re.compile(
+    rf"<a\b[^>]*?\bhref=([\"']){_UNRESOLVED_HREF}\1[^>]*>(.*?)</a>",
+    re.IGNORECASE | re.DOTALL,
 )
 # Canvas placeholder tokens used in navigation link hrefs
 _CANVAS_COURSE_ID_TOKEN_RE = re.compile(r'\$CANVAS_COURSE_ID\$')
@@ -581,17 +633,37 @@ def rewrite_imscc_links(
         imscc_id = m.group(2)       # e.g. "g_assignment_1"
 
         entry = temp_manifest.get(imscc_id)
+        if entry is None and m.group(1) == "pages":
+            # Older RCE links name the page by its URL slug instead of its
+            # IMSCC id; the slug is the wiki_content/ file's stem.
+            entry = next(
+                (e for e in temp_manifest.values()
+                 if e.category == "page" and Path(e.imscc_path).stem == imscc_id),
+                None,
+            )
         if entry is None:
-            print(f"  WARNING: Unknown IMSCC id {imscc_id!r} in link — removing href")
-            return ""
-
+            return _UNRESOLVED_HREF
         return f"{prefix}{entry.local_path}"
+
+    def _unlink(m: re.Match) -> str:
+        text = m.group(2)
+        plain = re.sub(r"<[^>]+>", "", text).strip()
+        print(
+            f"  WARNING: {output_local_path}: link {plain!r} points at a Canvas object "
+            "that is not in this export — keeping the text, removing the link"
+        )
+        return text
 
     def _replace_filebase(m: re.Match) -> str:
         rel_path = unquote(m.group(1))
         return f"{prefix}assets/{rel_path}"
 
     html = _CANVAS_REF_RE.sub(_replace_canvas_ref, html)
+    # Unwrap anchors whose target couldn't be resolved.  Leaving an empty href
+    # would make pandoc emit `[text]( "title")`, which `update` then reads as a
+    # link to the file's own directory.
+    html = _UNRESOLVED_ANCHOR_RE.sub(_unlink, html)
+    html = html.replace(_UNRESOLVED_HREF, "")
     html = _FILEBASE_RE.sub(_replace_filebase, html)
     return html
 

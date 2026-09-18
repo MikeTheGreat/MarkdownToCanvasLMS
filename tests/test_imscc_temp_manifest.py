@@ -86,6 +86,21 @@ def test_quiz_resource_classified_as_quiz() -> None:
     assert manifest["g_quiz_1"].category == "quiz"
 
 
+def test_quiz_embedded_assignment_id_aliases_quiz_file() -> None:
+    """Canvas links to a graded quiz via its embedded assignment's id."""
+    manifest = parse_imsmanifest(FIXTURE_DIR)
+    alias = manifest["g_quiz_1_assignment"]
+    assert alias.category == "assignment_alias"
+    assert alias.local_path == manifest["g_quiz_1"].local_path
+
+
+def test_graded_discussion_assignment_id_aliases_discussion_file() -> None:
+    manifest = parse_imsmanifest(FIXTURE_DIR)
+    alias = manifest["g_discussion_1_assignment"]
+    assert alias.category == "assignment_alias"
+    assert alias.local_path == manifest["g_discussion_1"].local_path
+
+
 def test_external_url_resource_classified() -> None:
     manifest = parse_imsmanifest(FIXTURE_DIR)
     assert manifest["g_exturl_1"].category == "external_url"
