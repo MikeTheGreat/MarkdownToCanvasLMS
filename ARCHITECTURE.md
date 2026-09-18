@@ -929,16 +929,19 @@ the manifest uses).
 | Source | Key |
 | --- | --- |
 | `assets/**` | every file, recursively |
-| content folders (repo root dirs minus `{assets, modules, quizzes, snippets, course_settings, question_banks}` and dotdirs) | every `.md`, recursively |
-| `quizzes/<name>/` | `quizzes/<name>/<name>.md` — one candidate per quiz |
+| content folders (repo root dirs minus `{assets, modules, quizzes, snippets, course_settings, question_banks, announcements}` and dotdirs) | every `.md`, recursively |
 
-Never candidates, and each for its own reason: `snippets/` (a library file;
+Never candidates, and each for its own reason: `quizzes/` and `announcements/`
+(nothing links to an announcement and a quiz is reached from a module or
+directly in Canvas, so "unreferenced" is no deletion signal; both remain
+reference *sources*, so their links still protect assets — `announcements` is
+excluded via `_NEVER_REPORTED_DIRS` in `collect_candidates`, and quizzes simply
+have no candidate loop), `snippets/` (a library file;
 "unused this term" is not a deletion signal — the user's explicit call),
 `modules/` and `course_settings/` (the roots — nothing in a repo links *to*
 them), and `question_banks/` (quizzes embed their questions inline; the format
 has no "draw N from bank X" reference, so every bank would be reported every
-run). A quiz is one unit keyed by its main file rather than per question file,
-matching how `load_pinned_resources` validates quiz pins.
+run). Quizzes were candidates (one unit keyed by its main file) until 2026-09-18.
 
 **Reference sources** (`collect_sources` → `collect_local_refs`) — what is
 scanned, dispatched on the top-level folder:

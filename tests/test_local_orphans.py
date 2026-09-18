@@ -200,21 +200,20 @@ class TestCollectCandidates:
         _write(repo, "question_banks/b1/questions/q1.md", "q\n")
         assert collect_candidates(repo, load_ignore_matcher(repo)) == set()
 
-    def test_quiz_is_one_candidate_keyed_by_its_main_file(self, repo):
+    def test_quizzes_and_announcements_are_never_candidates(self, repo):
         _write(repo, "quizzes/q1/q1.md", "1. [Q](question-1.md)\n")
         _write(repo, "quizzes/q1/question-1.md", "q\n")
-        assert collect_candidates(repo, load_ignore_matcher(repo)) == {
-            "quizzes/q1/q1.md"
-        }
+        _write(repo, "announcements/n.md", "n\n")
+        assert collect_candidates(repo, load_ignore_matcher(repo)) == set()
 
     def test_assets_and_content_are_candidates(self, repo):
         _write(repo, "assets/sub/pic.png", "x")
         _write(repo, "pages/a.md", "a\n")
-        _write(repo, "announcements/n.md", "n\n")
+        _write(repo, "discussions/d.md", "d\n")
         assert collect_candidates(repo, load_ignore_matcher(repo)) == {
             "assets/sub/pic.png",
             "pages/a.md",
-            "announcements/n.md",
+            "discussions/d.md",
         }
 
     def test_canvasignore_prunes_candidates(self, repo):
@@ -266,8 +265,13 @@ class TestFindLocalOrphans:
         assert report.orphans == [
             "assets/orphan.png",
             "pages/lonely.md",
-            "quizzes/stray-quiz/stray-quiz.md",
         ]
+
+    def test_announcement_links_still_protect_assets(self, repo):
+        _write(repo, "announcements/n.md", "![x](../assets/ann.png)\n")
+        _write(repo, "assets/ann.png", "x")
+        _write(repo, "announcements/unlinked.md", "nobody links here\n")
+        assert find_local_orphans(repo).orphans == []
 
     def test_pinned_folder_suppresses_everything_beneath_it(self, repo):
         _write(
@@ -423,13 +427,12 @@ class TestReferencedMap:
         _write(
             repo,
             "course_settings/course_settings.toml",
-            'pinned_resources = ["quizzes/live"]\n',
+            'pinned_resources = ["pages/live.md"]\n',
         )
-        _write(repo, "quizzes/live/live.md", "1. [Q](q1.md)\n")
-        _write(repo, "quizzes/live/q1.md", "q\n")
+        _write(repo, "pages/live.md", "live\n")
 
         report = find_local_orphans(repo)
-        assert report.referenced["quizzes/live/live.md"] == [
+        assert report.referenced["pages/live.md"] == [
             "course_settings/course_settings.toml (pinned_resources)"
         ]
 

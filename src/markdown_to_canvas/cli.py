@@ -463,11 +463,12 @@ def find_local_orphans_cmd(repo: Path, verbose: bool) -> None:
 
     Reads the repo on disk only — no Canvas call, no API token needed. Scans
     content files, modules, snippets, quizzes, question banks, the syllabus and
-    course_settings.toml for local links, then reports the assets, content files
-    and quizzes with zero inbound references.
+    course_settings.toml for local links, then reports the assets and content
+    files with zero inbound references.
 
-    Deliberately conservative: snippets, modules, course settings and question
-    banks are never reported, pinned resources count as referenced, and links
+    Deliberately conservative: snippets, modules, course settings, question
+    banks, quizzes and announcements are never reported (quizzes and
+    announcements are still scanned for links they contain), pinned resources count as referenced, and links
     inside inactive course-flag branches still count. See find-canvas-orphans
     for the live-course equivalent.
 

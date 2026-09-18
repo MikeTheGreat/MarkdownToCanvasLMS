@@ -793,27 +793,25 @@ markdown-to-canvas find-local-orphans path/to/course-repo
 ```
 
 ```text
-Note: snippets, modules, course settings and question banks are never
-listed here — they are excluded by design (see README).
+Note: snippets, modules, course settings, question banks, quizzes and
+announcements are never listed here — they are excluded by design (see
+README).
 
-Unreferenced local files (4):
+Unreferenced local files (3):
 
   Assets:
     - assets/handouts/2024-syllabus.pdf
     - assets/old-diagram.png
   Pages:
     - pages/draft-week9.md
-  Quizzes:
-    - quizzes/pop-quiz/pop-quiz.md
 ```
 
 Every run leads with that note, so an empty report is never mistaken for
 "everything in the repo is referenced".
 
 **What can be reported:** files under `assets/`, `.md` files in the content
-folders (`pages/`, `assignments/`, `discussions/`, `announcements/`, …), and
-quizzes. A quiz is reported as a single unit, keyed by its main `.md` — the same
-way `pinned_resources` treats it.
+folders (`pages/`, `assignments/`, `discussions/`, …). Quizzes and announcements
+are never reported (see below), though both are still scanned for links.
 
 **What is scanned for references:** content files, `modules/`, `snippets/`,
 quizzes and their question files, question banks and their question files,
@@ -829,11 +827,15 @@ entries do not — they match content by title, not by path.
   not a reason to delete it.
 * **`modules/` and `course_settings/`.** These are the roots — nothing in a repo
   ever links *to* a module file or the syllabus, so listing them would be noise.
+* **Quizzes and announcements.** Nothing links to an announcement, and a quiz is
+  usually reached from a module or taken directly in Canvas, so "unreferenced"
+  is not a deletion signal for either. Their contents still count: an asset
+  used only inside a quiz or announcement is not reported.
 * **Question banks.** Quizzes embed their questions directly; there is no "draw
   N from bank X" reference anywhere in the format, so every bank would be
   reported on every run.
 * **Anything in `pinned_resources`**, including everything under a pinned
-  folder. A pinned live quiz is never reported.
+  folder.
 * **Anything matched by `.canvasignore`.**
 
 The command errs toward saying nothing rather than saying something wrong. Links
@@ -875,8 +877,9 @@ markdown-to-canvas find-local-orphans -v path/to/course-repo
 ```
 
 ```text
-Note: snippets, modules, course settings and question banks are never
-listed here — they are excluded by design (see README).
+Note: snippets, modules, course settings, question banks, quizzes and
+announcements are never listed here — they are excluded by design (see
+README).
 
 Referenced local files (3):
 

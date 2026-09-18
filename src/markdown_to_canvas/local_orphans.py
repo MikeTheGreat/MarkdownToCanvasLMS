@@ -15,7 +15,7 @@ should be genuinely unreferenced:
 - Course-flag conditionals are NOT applied, so a link inside a currently-false
   ``#if`` branch still counts (same conservative-superset stance as
   ``sync._get_file_refs``).
-- ``pinned_resources`` entries count as references, so a pinned live quiz is
+- ``pinned_resources`` entries count as references, so a pinned resource is
   never reported.
 - ``snippets/`` files are never candidates. A snippet is a library file; "no
   page includes it right now" is not a reason to delete it.
@@ -24,6 +24,8 @@ should be genuinely unreferenced:
   links *to* them; question banks are independent uploads with no "draw N from
   bank X" reference anywhere in the format (ARCHITECTURE.md, IMSCC notes), so
   every bank would be reported on every run.
+- ``quizzes/`` and ``announcements/`` are scanned for the links they contain
+  but never reported themselves.
 """
 
 from __future__ import annotations
@@ -65,9 +67,13 @@ _SPECIAL_DIRS = {
     "question_banks",
 }
 
+# Content folders that are scanned for references but never reported: nobody
+# links to an announcement, and a quiz is normally reached from a module or
+# taken directly in Canvas, so "unreferenced" is not a deletion signal.
+_NEVER_REPORTED_DIRS = {"announcements"}
+
 _TYPE_LABELS = {
     "assets": "Assets",
-    "quizzes": "Quizzes",
 }
 
 # Hard-wrapped so the note stays readable in a narrow terminal.
@@ -77,8 +83,9 @@ _TYPE_LABELS = {
 _PANDOC_TIMEOUT_SECONDS = 20.0
 
 _SCOPE_NOTE = (
-    "Note: snippets, modules, course settings and question banks are never\n"
-    "listed here — they are excluded by design (see README)."
+    "Note: snippets, modules, course settings, question banks, quizzes and\n"
+    "announcements are never listed here — they are excluded by design (see\n"
+    "README)."
 )
 
 _SETTINGS_KEY = "course_settings/course_settings.toml"
@@ -197,11 +204,10 @@ def collect_candidates(repo_root: Path, matcher: IgnoreMatcher) -> set[str]:
             candidates.add(_rel(path, repo_root))
 
     for content_dir in _content_dirs(repo_root, matcher):
+        if content_dir.name in _NEVER_REPORTED_DIRS:
+            continue
         for path in _walk_files(content_dir, repo_root, matcher, suffix=".md"):
             candidates.add(_rel(path, repo_root))
-
-    for _folder, main in _unit_folders(repo_root, matcher, "quizzes", ".md"):
-        candidates.add(_rel(main, repo_root))
 
     return candidates
 
