@@ -3232,7 +3232,6 @@ Backup of *.doc*
 # End of https://www.toptal.com/developers/gitignore/api/libreoffice,microsoftoffice
 
 # Course-specific examples (uncomment / adapt as needed):
-# not_uploaded_to_canvas/**
 # *FEEDBACK.md*
 """
 
@@ -3257,7 +3256,7 @@ course_definition/**
 question_banks/**
 
 # Course-specific examples (uncomment / adapt as needed):
-# not_uploaded_to_canvas/**
+# **/not_uploaded_to_canvas/**
 # *FEEDBACK.md*
 # announcements/specific-to-this-quarter/**
 # assets/lecture-related/**/*-notes.md

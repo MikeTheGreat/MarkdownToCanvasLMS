@@ -16,6 +16,13 @@ about any existing command, option, or mechanism that could do the job or get
 part of the way there. Then let him decide whether to use it or build the new
 thing.
 
+"Feature work" includes writing a plan or design for a feature, not just writing
+code. Look beyond the command he names: a similar capability in a *different*
+subcommand counts (e.g. `prune` already deletes things from Canvas, so a request
+to add deletion to `find-canvas-orphans` should surface `prune` first). Report
+what you found and wait for his answer before writing the plan or the code —
+a mention at the end of finished work is too late.
+
 ## Errors caused by input files: diagnose before fixing
 
 When the user reports an error, first check whether the problem is in the user's input files (e.g., wrong relative paths in their course repo) rather than a bug in this tool's code. If the root cause is in the input files, stop and tell the user before making any code changes.
