@@ -566,6 +566,8 @@ Review these files and re-upload manually if needed (use --force-overwrite to sk
   assignments/worksheets/01-a-unit-worksheets.md
   assignments/worksheets/01-b-unit-worksheets.md
 
+- I thought that "NONE_THEN_KEEP" was redundant with "KEEP", and "NONE" means "always eliminate"?
+
 ---
 
 # Possible future improvements
