@@ -25,9 +25,10 @@ context: |
   Canvas often behaves differently from its API docs. Behavior that has not
   been measured on a live course is an assumption and must be labelled as one.
 
+  When exploring, batch clarifying questions into one message instead of asking
+  one at a time
+
 rules:
-  explore:
-    - Batch your questions
   proposal:
     - Before proposing a feature, list existing subcommands, options, or
       mechanisms (including ones in other subcommands) that already cover all

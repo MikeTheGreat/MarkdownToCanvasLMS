@@ -10,10 +10,10 @@ import uuid
 from pathlib import Path, PurePosixPath
 from urllib.parse import quote, unquote
 
-import tomli_w
+import tomlkit
 
 from . import manifest as manifest_lib
-from . import repo_format
+from . import repo_format, toml_write
 from .config import find_repo_root  # re-exported: mv's public API since before the move
 
 _CONTENT_TYPE_DIRS = {
@@ -536,13 +536,28 @@ def compute_file_updates(
     return updates
 
 
+def _updated_module_order_text(text: str, order: list[str]) -> str:
+    """module_order.toml text with `order` replaced, keeping comments and layout.
+
+    Entries are changed in place when the list keeps its length (a rename), so
+    the array's own formatting and any comments inside it survive too.
+    """
+    doc = tomlkit.parse(text)
+    current = doc.get("order")
+    if isinstance(current, list) and len(current) == len(order):
+        for i, entry in enumerate(order):
+            if current[i] != entry:
+                current[i] = entry
+    else:
+        doc["order"] = toml_write.scalar_array(order, multiline=True)
+    return tomlkit.dumps(doc)
+
+
 def _set_toml_string_value(content: str, key: str, value: str) -> str:
     """Replace a top-level `key = "..."` scalar assignment in raw TOML text.
 
-    Edits the text directly instead of round-tripping through tomllib/tomli_w,
-    so comments and existing array formatting (e.g. due_dates, which tomli_w
-    would reflow into [[due_dates]] sections once lines exceed its 100-char
-    inline-table heuristic) are left untouched.
+    Edits the text directly instead of parsing and re-dumping the file, so
+    comments and existing array formatting (e.g. due_dates) are left untouched.
     """
     escaped_value = value.replace("\\", "\\\\").replace('"', '\\"')
     pattern = re.compile(rf'^{re.escape(key)}\s*=\s*".*"$', re.MULTILINE)
@@ -779,11 +794,12 @@ def run_mv(
 
     if module_order_updates is not None:
         order_path = repo_root / "course_settings" / "module_order.toml"
-        with order_path.open("rb") as f:
-            data = tomllib.load(f)
-        data["order"] = module_order_updates
-        with order_path.open("wb") as f:
-            tomli_w.dump(data, f)
+        order_path.write_text(
+            _updated_module_order_text(
+                order_path.read_text(encoding="utf-8"), module_order_updates
+            ),
+            encoding="utf-8",
+        )
 
     if course_settings_updates or pinned_updates:
         settings_path = repo_root / "course_settings" / "course_settings.toml"

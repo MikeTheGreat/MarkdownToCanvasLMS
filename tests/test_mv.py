@@ -847,6 +847,36 @@ class TestRunMv:
             data = tomllib.load(f)
         assert data["order"] == ["intro.md", "new-mod.md", "outro.md"]
 
+    def test_module_order_comments_survive_rename(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {
+            "modules/old-mod.md": "---\ntitle: Old\n---\n",
+        })
+        order_path = repo / "course_settings" / "module_order.toml"
+        original = (
+            "# Order of modules in Canvas.\n"
+            "# Keep intro first.\n"
+            "order = [\n"
+            '    "intro.md",\n'
+            '    "old-mod.md",  # renamed soon\n'
+            '    "outro.md",\n'
+            "]\n"
+        )
+        order_path.write_text(original)
+
+        run_mv(repo / "modules/old-mod.md", repo / "modules/new-mod.md")
+
+        assert order_path.read_text() == original.replace('"old-mod.md"', '"new-mod.md"')
+
+    def test_module_order_untouched_when_moving_a_non_module(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {"pages/a.md": "# A"})
+        order_path = repo / "course_settings" / "module_order.toml"
+        original = '# hand-written\norder = ["a.md","b.md"]\n'
+        order_path.write_text(original)
+
+        run_mv(repo / "pages/a.md", repo / "pages/b.md")
+
+        assert order_path.read_text() == original
+
     def test_quiz_folder_rename_updates_pinned_resources(self, tmp_path: Path) -> None:
         """Moving a pinned quiz rewrites its pinned_resources entries so the pin
         (and the student-progress protection it provides) survives the rename."""

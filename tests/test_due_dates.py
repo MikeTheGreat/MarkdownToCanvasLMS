@@ -8,11 +8,12 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from markdown_to_canvas import toml_write
 from markdown_to_canvas.imscc_import import (
     _build_frontmatter,
     _collect_due_date,
+    _due_dates_rows,
     _extract_date_fields,
-    format_due_dates_toml,
     run_import,
 )
 from markdown_to_canvas.sync import (
@@ -199,24 +200,28 @@ class TestCollectDueDate:
         _collect_due_date(None, "HW1", "assignment", {"due_at": "2025-02-01"})
 
 
-class TestFormatDueDatesToml:
+class TestDueDatesRows:
     def test_empty(self) -> None:
-        assert format_due_dates_toml([]) == ""
+        assert _due_dates_rows([]) == []
 
     def test_single_entry(self) -> None:
         entries = [{"name": "HW1", "type": "assignment", "due_at": "2025-02-01", "unlock_at": "", "lock_at": ""}]
-        result = format_due_dates_toml(entries)
-        assert "due_dates = [" in result
-        assert 'name = "HW1"' in result
-        assert 'type = "assignment"' in result
-        assert 'due_at = "2025-02-01"' in result
+        assert _due_dates_rows(entries) == [
+            {"name": "HW1", "type": "assignment", "unlock_at": "", "due_at": "2025-02-01", "lock_at": ""}
+        ]
+
+    def test_type_omitted_and_missing_dates_filled(self) -> None:
+        assert _due_dates_rows([{"name": "HW1", "due_at": "2025-02-01"}]) == [
+            {"name": "HW1", "unlock_at": "", "due_at": "2025-02-01", "lock_at": ""}
+        ]
 
     def test_roundtrip_through_toml_parser(self) -> None:
         entries = [
             {"name": "HW1", "due_at": "2025-02-01T23:59:00", "unlock_at": "", "lock_at": "2025-02-08T23:59:00"},
             {"name": "Quiz", "type": "quiz", "due_at": "2025-03-01T23:59:00", "unlock_at": "", "lock_at": ""},
         ]
-        toml_str = format_due_dates_toml(entries)
+        toml_str = toml_write.dumps({"due_dates": _due_dates_rows(entries)})
+        assert toml_str.startswith("due_dates = [")
         parsed = tomllib.loads(toml_str)
         assert len(parsed["due_dates"]) == 2
         assert parsed["due_dates"][0]["name"] == "HW1"

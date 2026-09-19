@@ -30,6 +30,8 @@ from markdown_to_canvas.imscc_import import (
     _simplify_pandoc_attrs,
     _strip_canvas_img_attrs,
     _write_course_settings_toml,
+    _write_files_meta_toml,
+    _write_rubrics_toml,
     convert_page,
     parse_announcement_meta,
     parse_assignment_settings,
@@ -101,8 +103,8 @@ def test_convert_tab_configuration_invalid_json_drops(capsys) -> None:
 
 
 def test_course_settings_toml_tab_configuration_is_top_level(tmp_path: Path) -> None:
-    """A short tab_configuration is written by tomli_w as an inline array under a
-    plain key; it must not land inside [late_policy] / [default_post_policy]."""
+    """tab_configuration is an inline array under a plain key; it must not land
+    inside [late_policy] / [default_post_policy]."""
     import tomllib
 
     _write_course_settings_toml(
@@ -207,6 +209,108 @@ def test_convert_page_second_front_page_warns_and_keeps_first(tmp_path: Path, ca
     convert_page(ctx, _entry("second"))
     assert ctx.front_page == "pages/first.md"
     assert "more than one page is marked front_page" in capsys.readouterr().out
+
+
+def _settings_text(tmp_path: Path) -> str:
+    return (tmp_path / "course_settings" / "course_settings.toml").read_text()
+
+
+def test_course_settings_toml_layout_does_not_depend_on_row_length(tmp_path: Path) -> None:
+    """Long tab_configuration and due_dates rows stay inline; a long grading-scale
+    keeps one `[name, value]` pair per line. None may turn into a block that
+    captures the top-level keys after it."""
+    import tomllib
+
+    long_label = "L" * 300
+    tabs = [{"id": f"context_external_tool_{i}", "label": long_label} for i in range(3)]
+    dues = [
+        {"name": long_label, "type": "assignment", "unlock_at": "", "due_at": "2025-10-01T23:59:00", "lock_at": ""}
+    ]
+    pairs = [[f"Grade {i}", round(1 - i / 50, 2)] for i in range(40)]
+    _write_course_settings_toml(
+        {"default_view": "modules", "tab_configuration": tabs, "default_post_policy": {"post_manually": True}},
+        {},
+        [{"title": "Scale", "data": pairs, "points_based": False}],
+        [{"title": "Homework", "position": 1}],
+        {"late_submission_deduction_enabled": True},
+        tmp_path,
+        due_dates=dues,
+    )
+    text = _settings_text(tmp_path)
+    assert "[[tab_configuration]]" not in text
+    assert "[[due_dates]]" not in text
+    assert "[[grading_standards.data]]" not in text
+    assert text.count('    ["Grade') == 40
+    data = tomllib.loads(text)
+    assert data["tab_configuration"] == tabs
+    assert data["due_dates"] == dues
+    assert data["grading_standards"][0]["data"] == pairs
+    first_header = min(i for i, line in enumerate(text.splitlines()) if line.startswith("["))
+    for key in ("default_view", "tab_configuration", "due_dates", "format_version"):
+        line = next(i for i, ln in enumerate(text.splitlines()) if ln.startswith(f"{key} = "))
+        assert line < first_header, key
+
+
+def test_course_settings_toml_commented_keys_precede_headers_and_round_trip(tmp_path: Path) -> None:
+    import tomllib
+
+    tricky = 'has "quotes" and a \\ backslash'
+    _write_course_settings_toml(
+        {"default_view": "modules", "title": tricky, "course_code": "C1", "copyright_description": tricky, "is_public": False},
+        {},
+        [],
+        [{"title": "Homework", "position": 1}],
+        {"late_submission_deduction_enabled": True},
+        tmp_path,
+    )
+    text = _settings_text(tmp_path)
+    lines = text.splitlines()
+    first_header = next(i for i, ln in enumerate(lines) if ln.startswith("["))
+    commented = [i for i, ln in enumerate(lines) if ln.startswith("# ") and " = " in ln]
+    assert commented and max(commented) < first_header
+    # Uncommenting the escaped values yields the original strings.
+    uncommented = "\n".join(lines[i][2:] for i in commented)
+    parsed = tomllib.loads(uncommented)
+    assert parsed["title"] == tricky
+    assert parsed["copyright_description"] == tricky
+    assert parsed["is_public"] is False
+
+
+def test_rubrics_toml_ratings_stay_inline_and_import_only_keys_commented(tmp_path: Path) -> None:
+    import tomllib
+
+    ratings = [{"id": f"r{i}", "description": "D" * 300, "points": float(i)} for i in range(3)]
+    rubrics = [
+        {
+            "identifier": "rub1",
+            "title": "R",
+            "public": False,
+            "criteria": [{"criterion_id": "c1", "description": "Q", "points": 5.0, "ratings": ratings}],
+        }
+    ]
+    _write_rubrics_toml(rubrics, tmp_path)
+    text = (tmp_path / "course_settings" / "rubrics.toml").read_text()
+    assert "[[rubrics.criteria.ratings]]" not in text
+    assert '# identifier = "rub1"' in text
+    assert '# criterion_id = "c1"' in text
+    data = tomllib.loads(text)
+    assert data["rubrics"][0]["title"] == "R"
+    assert "identifier" not in data["rubrics"][0]
+    assert data["rubrics"][0]["criteria"][0]["ratings"] == ratings
+    assert "import-only" in text.splitlines()[0]
+
+
+def test_files_meta_toml_long_entries_stay_inline(tmp_path: Path) -> None:
+    import tomllib
+
+    meta = {
+        "folders": [{"path": "p" * 300, "hidden": True}],
+        "files": [{"identifier": "f1", "display_name": "n" * 300, "locked": True}],
+    }
+    _write_files_meta_toml(meta, tmp_path)
+    text = (tmp_path / "course_settings" / "files_meta.toml").read_text()
+    assert "[[files]]" not in text and "[[folders]]" not in text
+    assert tomllib.loads(text) == meta
 
 
 def test_write_course_settings_toml_keeps_front_page_top_level(tmp_path: Path) -> None:

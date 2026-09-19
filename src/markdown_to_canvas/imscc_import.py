@@ -13,8 +13,9 @@ from typing import Any
 from urllib.parse import unquote
 
 import pypandoc
-import tomli_w
+import tomlkit
 
+from . import toml_write
 from .canvas_api import NUMERIC_TAB_IDS, TOOL_TAB_PREFIX
 from .convert import apply_outside_fences
 from .repo_format import FORMAT_VERSION, tool_version
@@ -1965,7 +1966,7 @@ def convert_question_bank(
     bank_dir.mkdir(parents=True, exist_ok=True)
 
     (bank_dir / f"{slug}.toml").write_text(
-        tomli_w.dumps(bank_meta), encoding="utf-8"
+        toml_write.dumps(bank_meta), encoding="utf-8"
     )
 
     for q in questions:
@@ -2526,7 +2527,7 @@ _RUBRIC_IMPORT_ONLY_KEYS = (
     # criterion level
     "criterion_id",
 )
-# Rating-level `id` is import-only as well, but tomli_w emits ratings as inline
+# Rating-level `id` is import-only as well, but ratings are written as inline
 # tables, so it cannot be commented out without deleting the whole rating. It is
 # called out in _RUBRICS_TOML_HEADER instead.
 
@@ -2548,19 +2549,6 @@ _FILES_META_TOML_HEADER = (
 )
 
 
-def _comment_out_keys(toml_text: str, keys: tuple[str, ...]) -> str:
-    """Prefix `# ` to every assignment line whose key is in `keys`.
-
-    Safe line-by-line because tomli_w always emits single-line values (strings
-    are escaped, never multi-line), so no value can masquerade as a key line.
-    """
-    prefixes = tuple(f"{k} = " for k in keys)
-    return "".join(
-        f"# {line}\n" if line.startswith(prefixes) else f"{line}\n"
-        for line in toml_text.split("\n")[:-1]
-    )
-
-
 def _write_rubrics_toml(rubrics: list[dict[str, Any]], output_dir: Path) -> None:
     """Write course_settings/rubrics.toml from a list of rubric dicts."""
     for r in rubrics:
@@ -2568,11 +2556,13 @@ def _write_rubrics_toml(rubrics: list[dict[str, Any]], output_dir: Path) -> None
         r["reusable"] = True
     cs_dir = output_dir / "course_settings"
     cs_dir.mkdir(parents=True, exist_ok=True)
-    body = _comment_out_keys(
-        tomli_w.dumps({"rubrics": rubrics}), _RUBRIC_IMPORT_ONLY_KEYS
-    )
     (cs_dir / "rubrics.toml").write_text(
-        _RUBRICS_TOML_HEADER + body, encoding="utf-8"
+        toml_write.dumps(
+            {"rubrics": rubrics},
+            header=_RUBRICS_TOML_HEADER,
+            commented=frozenset(_RUBRIC_IMPORT_ONLY_KEYS),
+        ),
+        encoding="utf-8",
     )
     print("Writing: course_settings/rubrics.toml")
 
@@ -2582,7 +2572,7 @@ def _write_files_meta_toml(files_meta: dict[str, Any], output_dir: Path) -> None
     cs_dir = output_dir / "course_settings"
     cs_dir.mkdir(parents=True, exist_ok=True)
     (cs_dir / "files_meta.toml").write_text(
-        _FILES_META_TOML_HEADER + tomli_w.dumps(files_meta), encoding="utf-8"
+        toml_write.dumps(files_meta, header=_FILES_META_TOML_HEADER), encoding="utf-8"
     )
     print("Writing: course_settings/files_meta.toml")
 
@@ -2679,21 +2669,17 @@ def _resolve_tool_titles(
     return titles
 
 
-def format_due_dates_toml(due_dates: list[dict[str, Any]]) -> str:
-    """Format due_dates as an inline TOML array of inline tables."""
-    if not due_dates:
-        return ""
-    lines = ["due_dates = ["]
+def _due_dates_rows(due_dates: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """The `due_dates` entries as written: name, optional type, then the date keys."""
+    rows = []
     for entry in due_dates:
-        parts = [f'name = "{entry["name"]}"']
+        row = {"name": entry["name"]}
         if entry.get("type"):
-            parts.append(f'type = "{entry["type"]}"')
+            row["type"] = entry["type"]
         for k in _DATE_KEYS:
-            val = entry.get(k, "")
-            parts.append(f'{k} = "{val}"')
-        lines.append(f"    {{ {', '.join(parts)} }},")
-    lines.append("]")
-    return "\n".join(lines) + "\n"
+            row[k] = entry.get(k, "")
+        rows.append(row)
+    return rows
 
 
 # ---------------------------------------------------------------------------
@@ -2763,20 +2749,6 @@ _IMPORT_ONLY_NOT_UPLOADED = (
 )
 
 
-def _commented_toml(data: dict[str, Any]) -> str:
-    """Serialize `data` as TOML with every line commented out.
-
-    Uses tomli_w so escaping and value formatting stay correct, then prefixes
-    each line with `# `.  Only flat scalar keys should be passed in.
-    """
-    if not data:
-        return ""
-    dumped = tomli_w.dumps(data)
-    return "".join(
-        f"# {line}\n" if line else "\n" for line in dumped.split("\n")[:-1]
-    )
-
-
 def _write_course_settings_toml(
     course_settings: dict[str, Any],
     manifest_meta: dict[str, str],
@@ -2815,83 +2787,102 @@ def _write_course_settings_toml(
 
     # The repo's format version and provenance come first, before every other
     # key and comment (see repo_format), then the flat live keys — all of which
-    # must come before any [section] / [[section]] header.
-    content = tomli_w.dumps(
-        {"format_version": FORMAT_VERSION, "created_by": tool_version()}
-    )
+    # must come before any [section] / [[section]] header. Items are added in
+    # their final order because tomlkit appends.
+    doc = tomlkit.document()
+    doc.add("format_version", FORMAT_VERSION)
+    doc.add("created_by", tool_version())
     if data:
-        content += "\n" + tomli_w.dumps(data)
+        doc.add(tomlkit.nl())
+        toml_write.fill_table(doc, data)
 
     # A live flat key, so it must still land before any section header.
     if publish_title:
-        content += (
-            "\n# Website title used by `publish`. Not uploaded to Canvas; it exists\n"
-            "# because `title` below is commented out.\n"
+        doc.add(tomlkit.nl())
+        toml_write.add_comment_text(
+            doc,
+            "# Website title used by `publish`. Not uploaded to Canvas; it exists\n"
+            "# because `title` below is commented out.\n",
         )
-        content += tomli_w.dumps({_PUBLISH_TITLE_KEY: publish_title})
+        toml_write.fill_table(doc, {_PUBLISH_TITLE_KEY: publish_title})
 
     # Commented keys go with the other flat keys: a user who uncomments one must
     # not end up with a key nested under a later section.
     if overridable:
-        content += (
-            "\n# --- Optional overrides; uncomment to replace what your school set ---\n"
+        doc.add(tomlkit.nl())
+        toml_write.add_comment_text(
+            doc, "# --- Optional overrides; uncomment to replace what your school set ---\n"
         )
-        content += _commented_toml(overridable)
+        toml_write.add_commented(doc, overridable)
 
     if admin_only:
-        content += (
-            "\n# --- Usually admin-only; uncomment only if your Canvas role may set them ---\n"
+        doc.add(tomlkit.nl())
+        toml_write.add_comment_text(
+            doc,
+            "# --- Usually admin-only; uncomment only if your Canvas role may set them ---\n"
             "# Canvas reserves these to admins at many schools. If your account isn't\n"
-            "# allowed to change one, Canvas rejects it and `update` reports which.\n"
+            "# allowed to change one, Canvas rejects it and `update` reports which.\n",
         )
-        content += _commented_toml(admin_only)
+        toml_write.add_commented(doc, admin_only)
 
     if read_only or not_uploaded:
-        content += "\n# --- Import-only settings, kept for round-trip fidelity ---\n"
+        doc.add(tomlkit.nl())
+        toml_write.add_comment_text(
+            doc, "# --- Import-only settings, kept for round-trip fidelity ---\n"
+        )
         if read_only:
-            content += "# Read-only in Canvas; these cannot be changed.\n"
-            content += _commented_toml(read_only)
+            toml_write.add_comment_text(doc, "# Read-only in Canvas; these cannot be changed.\n")
+            toml_write.add_commented(doc, read_only)
         if read_only and not_uploaded:
-            content += "#\n"
+            toml_write.add_comment_text(doc, "#\n")
         if not_uploaded:
-            content += "# Not uploaded by markdown-to-canvas; editing these has no effect.\n"
-            content += _commented_toml(not_uploaded)
+            toml_write.add_comment_text(
+                doc, "# Not uploaded by markdown-to-canvas; editing these has no effect.\n"
+            )
+            toml_write.add_commented(doc, not_uploaded)
 
-    # due_dates uses hand-formatted inline tables — a top-level key, so it must
-    # come before any table header (including [late_policy] below).
+    # due_dates and tab_configuration are top-level keys (inline arrays), so they
+    # must come before any table header, including [late_policy] below. Their
+    # layout is fixed by key (toml_write), so a long row can never turn either
+    # into a [[table]] block that would capture the keys after it.
+    live_arrays: dict[str, Any] = {}
     if due_dates:
-        content += "\n" + format_due_dates_toml(due_dates)
-
-    # Inline nested sections (tomli_w emits these as [section] tables)
-    nested: dict[str, Any] = {}
-    if late_policy:
-        nested["late_policy"] = late_policy
-    if "default_post_policy" in course_settings:
-        nested["default_post_policy"] = course_settings["default_post_policy"]
-
-    # Array-of-tables sections last. tomli_w only emits [[...]] for a list of
-    # dicts when the dicts are too big to inline; a short list (typically
-    # tab_configuration) becomes an inline array under a plain key. So nested
-    # and aot go through ONE dumps() call, which writes plain keys before any
-    # header. Dumping them separately left tab_configuration nested under
-    # [default_post_policy], where update ignores it.
-    aot: dict[str, Any] = {}
-    if grading_standards:
-        aot["grading_standards"] = grading_standards
-    if assignment_groups:
-        aot["assignment_groups"] = [
-            {k: v for k, v in g.items() if k != "identifier"} for g in assignment_groups
-        ]
+        live_arrays["due_dates"] = _due_dates_rows(due_dates)
     tab_configuration = course_settings.get("tab_configuration")
     if tab_configuration:
-        aot["tab_configuration"] = tab_configuration
-    if nested or aot:
-        content += "\n" + tomli_w.dumps({**nested, **aot})
+        live_arrays["tab_configuration"] = tab_configuration
+    if live_arrays:
+        doc.add(tomlkit.nl())
+        toml_write.fill_table(doc, live_arrays)
+
+    # Sections last: inline-nested tables, then the block arrays.
+    sections: dict[str, Any] = {}
+    if late_policy:
+        sections["late_policy"] = late_policy
+    if "default_post_policy" in course_settings:
+        sections["default_post_policy"] = course_settings["default_post_policy"]
+    if grading_standards:
+        sections["grading_standards"] = grading_standards
+    if assignment_groups:
+        sections["assignment_groups"] = [
+            {k: v for k, v in g.items() if k != "identifier"} for g in assignment_groups
+        ]
+    if sections:
+        toml_write.fill_table(doc, sections)
+
+    content = tomlkit.dumps(doc)
 
     cs_dir = output_dir / "course_settings"
     cs_dir.mkdir(parents=True, exist_ok=True)
     (cs_dir / "course_settings.toml").write_text(content, encoding="utf-8")
     print("Writing: course_settings/course_settings.toml")
+
+
+def _module_order_doc(entries: list[str]) -> tomlkit.TOMLDocument:
+    """A module_order.toml document: `order`, one module file per line."""
+    doc = tomlkit.document()
+    doc.add("order", toml_write.scalar_array(entries, multiline=True))
+    return doc
 
 
 def _write_canvas_toml(context: dict[str, Any], output_dir: Path) -> None:
@@ -3383,8 +3374,9 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
         for module in modules:
             generate_module_file(module, temp_manifest, output_dir)
         if modules:
-            order_entries = [f'    "{_slugify(m.title)}.md"' for m in modules]
-            order_toml = "order = [\n" + ",\n".join(order_entries) + ",\n]\n"
+            order_toml = tomlkit.dumps(
+                _module_order_doc([f"{_slugify(m.title)}.md" for m in modules])
+            )
             cs_dir = output_dir / "course_settings"
             cs_dir.mkdir(parents=True, exist_ok=True)
             (cs_dir / "module_order.toml").write_text(order_toml, encoding="utf-8")
