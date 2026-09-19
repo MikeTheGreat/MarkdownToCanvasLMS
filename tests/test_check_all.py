@@ -19,6 +19,7 @@ from click.testing import CliRunner
 
 from markdown_to_canvas.config import Config
 from markdown_to_canvas.sync import run_sync
+from tests.conftest import make_current
 
 FIXTURES = Path(__file__).parent / "fixtures"
 COURSE_ID = 999
@@ -56,6 +57,7 @@ def no_canvas(mocker) -> None:
 
 def test_check_all_full_run_offline_and_clean(course_root, no_canvas, capsys) -> None:
     """The clean fixture repo passes a full check without touching Canvas."""
+    make_current(course_root)
     had_errors = run_sync(_config(), course_root, check_all=True)
 
     assert had_errors is False
@@ -82,9 +84,11 @@ def test_check_all_ignores_and_preserves_stale_manifest(course_root, no_canvas, 
         'canvas_type = "page"\n'
         'canvas_url = "syllabus"\n'
         'last_synced = "2999-12-31T00:00:00+00:00"\n'
+        "\n[_repo_format]\nformat_version = 1\n"
     )
     before = manifest_path.read_bytes()
 
+    make_current(course_root)
     run_sync(_config(), course_root, check_all=True)
 
     out = capsys.readouterr().out
@@ -105,6 +109,7 @@ def test_check_all_detects_broken_link(course_root, no_canvas, capsys) -> None:
         "See [missing](../pages/no-such-page.md).\n"
     )
 
+    make_current(course_root)
     had_errors = run_sync(_config(), course_root, check_all=True)
 
     assert had_errors is True
@@ -126,6 +131,7 @@ def test_check_all_detects_unknown_rubric(course_root, no_canvas, capsys) -> Non
         "---\ntitle: Rubricked\nrubric: No Such Rubric\npublished: true\n---\n\nBody.\n"
     )
 
+    make_current(course_root)
     had_errors = run_sync(_config(), course_root, check_all=True)
 
     assert had_errors is True
@@ -144,6 +150,7 @@ def test_check_all_detects_unknown_assignment_group(course_root, no_canvas, caps
         "---\ntitle: Grouped\nassignment_group_id: Labs\npublished: true\n---\n\nBody.\n"
     )
 
+    make_current(course_root)
     had_errors = run_sync(_config(), course_root, check_all=True)
 
     assert had_errors is True
@@ -159,6 +166,7 @@ def test_check_all_detects_due_dates_entry_matching_nothing(course_root, no_canv
         '[[due_dates]]\nname = "Ghost Assignment"\ndue_at = "2099-01-01T00:00:00"\n'
     )
 
+    make_current(course_root)
     run_sync(_config(), course_root, check_all=True)
 
     out = capsys.readouterr().out
@@ -171,6 +179,7 @@ def test_check_all_detects_title_collision(course_root, no_canvas, capsys) -> No
         "---\ntitle: Syllabus\n---\n\nDuplicate title.\n"
     )
 
+    make_current(course_root)
     had_errors = run_sync(_config(), course_root, check_all=True)
 
     assert had_errors is True
@@ -192,6 +201,7 @@ def test_check_all_syllabus_link_gets_stub(course_root, no_canvas, capsys) -> No
         "Welcome! Start with the [Syllabus page](../pages/syllabus.md).\n"
     )
 
+    make_current(course_root)
     had_errors = run_sync(_config(), course_root, check_all=True)
 
     assert had_errors is False
@@ -248,6 +258,7 @@ def test_check_all_syllabus_asset_link_uploads_instead_of_stubbing(
         "Read the [handout](../assets/syllabus/handout.docx).\n"
     )
 
+    make_current(course_root)
     had_errors = run_sync(_config(), course_root, check_all=True)
 
     assert had_errors is False
@@ -408,6 +419,7 @@ def test_check_all_accepts_canvas_only_module_order_entry(
         'order = ["Getting Started at Cascadia", "week-1.md"]\n'
     )
 
+    make_current(course_root)
     had_errors = run_sync(_config(), course_root, check_all=True)
 
     assert had_errors is False

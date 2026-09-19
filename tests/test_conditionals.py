@@ -26,6 +26,7 @@ from markdown_to_canvas.sync import (
     load_course_flags,
     run_sync,
 )
+from tests.conftest import make_current
 
 FLAGS = {"in_person_class": True, "hybrid": False}
 
@@ -855,6 +856,7 @@ def test_conditional_page_content_filtered(mock_course, tmp_path) -> None:
 
     mock_course.create_page.side_effect = _create_page
 
+    make_current(root)
     had_errors = run_sync(_config(), root)
 
     assert had_errors is False
@@ -867,6 +869,7 @@ def test_flags_used_recorded_and_omitted(mock_course, tmp_path) -> None:
     root = _basic_repo(tmp_path)
     mock_course.create_page.side_effect = [_mock_page(1, "flagged"), _mock_page(2, "plain")]
 
+    make_current(root)
     run_sync(_config(), root)
 
     manifest = manifest_lib.load(root / ".manifest-canvas.toml")
@@ -892,6 +895,7 @@ def test_snippet_contributed_flags_recorded_and_applied(mock_course, tmp_path) -
 
     mock_course.create_page.side_effect = _create_page
 
+    make_current(root)
     run_sync(_config(), root)
 
     body = pages["WithSnippet"]["body"]
@@ -905,6 +909,7 @@ def test_flag_flip_resyncs_only_referencing_files(mock_course, tmp_path, capsys)
     root = _basic_repo(tmp_path)
     mock_course.create_page.side_effect = [_mock_page(1, "flagged"), _mock_page(2, "plain")]
 
+    make_current(root)
     run_sync(_config(), root)
 
     # Flip the flag; make all content older than last_synced so only the
@@ -922,6 +927,7 @@ def test_flag_flip_resyncs_only_referencing_files(mock_course, tmp_path, capsys)
     mock_course.create_page.reset_mock()
 
     capsys.readouterr()  # discard first-run output
+    make_current(root)
     run_sync(_config(), root, verbose=True)
 
     out = capsys.readouterr().out
@@ -941,6 +947,7 @@ def test_deleted_flag_goes_stale_and_errors(mock_course, tmp_path, capsys) -> No
     root = _basic_repo(tmp_path)
     mock_course.create_page.side_effect = [_mock_page(1, "flagged"), _mock_page(2, "plain")]
 
+    make_current(root)
     run_sync(_config(), root)
 
     _write(root / "course_settings" / "course_settings.toml", 'title = "No flags"\n')
@@ -949,6 +956,7 @@ def test_deleted_flag_goes_stale_and_errors(mock_course, tmp_path, capsys) -> No
     mock_course.get_page.return_value = _mock_page(1, "flagged")
 
     capsys.readouterr()
+    make_current(root)
     had_errors = run_sync(_config(), root, verbose=True)
 
     out = capsys.readouterr().out
@@ -972,6 +980,7 @@ def test_undefined_flag_skips_file_others_still_sync(mock_course, tmp_path, caps
 
     mock_course.create_page.side_effect = _create_page
 
+    make_current(root)
     had_errors = run_sync(_config(), root)
 
     out = capsys.readouterr().out
@@ -998,6 +1007,7 @@ def test_conditional_module_item_excluded(mock_course, tmp_path) -> None:
     module = _mock_module(66)
     mock_course.create_module.return_value = module
 
+    make_current(root)
     run_sync(_config(), root)
 
     item_calls = module.create_module_item.call_args_list
@@ -1031,6 +1041,7 @@ def test_conditional_quiz_question_excluded(mock_course, tmp_path) -> None:
     mock_course.create_quiz.return_value = quiz
     mock_course.get_quiz.return_value = quiz
 
+    make_current(root)
     run_sync(_config(), root)
 
     question_names = [
@@ -1050,6 +1061,7 @@ def test_unused_flag_warning_in_run_sync(mock_course, tmp_path, capsys) -> None:
     )
     mock_course.create_page.side_effect = [_mock_page(1, "flagged"), _mock_page(2, "plain")]
 
+    make_current(root)
     had_errors = run_sync(_config(), root)
 
     out = capsys.readouterr().out
@@ -1075,6 +1087,7 @@ def test_published_if_true_publishes_page(mock_course, tmp_path) -> None:
         pages.__setitem__("P", wiki_page) or _mock_page(1, "p")
     )
 
+    make_current(root)
     had_errors = run_sync(_config(), root)
 
     assert had_errors is False
@@ -1093,6 +1106,7 @@ def test_published_if_false_leaves_page_unpublished(mock_course, tmp_path) -> No
         pages.__setitem__("P", wiki_page) or _mock_page(1, "p")
     )
 
+    make_current(root)
     had_errors = run_sync(_config(), root)
 
     assert had_errors is False
@@ -1111,6 +1125,7 @@ def test_published_if_not_negates(mock_course, tmp_path) -> None:
         pages.__setitem__("P", wiki_page) or _mock_page(1, "p")
     )
 
+    make_current(root)
     run_sync(_config(), root)
 
     assert pages["P"]["published"] is True
@@ -1129,6 +1144,7 @@ def test_published_if_combined_with_published_is_error(mock_course, tmp_path, ca
     )
     mock_course.create_page.side_effect = [_mock_page(1, "good")]
 
+    make_current(root)
     had_errors = run_sync(_config(), root)
 
     out = capsys.readouterr().out
@@ -1148,6 +1164,7 @@ def test_published_if_undefined_flag_is_error(mock_course, tmp_path, capsys) -> 
         "---\ntitle: Bad\npublished_if: no_such_flag\n---\n\nBody.\n",
     )
 
+    make_current(root)
     had_errors = run_sync(_config(), root)
 
     out = capsys.readouterr().out
@@ -1164,6 +1181,7 @@ def test_published_if_forbidden_for_announcements(mock_course, tmp_path, capsys)
         "---\ntitle: A\npublished_if: in_person_class\n---\n\nBody.\n",
     )
 
+    make_current(root)
     had_errors = run_sync(_config(), root)
 
     out = capsys.readouterr().out
@@ -1185,6 +1203,7 @@ def test_published_if_flags_used_recorded_and_flag_flip_republishes(
     real_page = _mock_page(1, "p")
     mock_course.create_page.return_value = real_page
 
+    make_current(root)
     run_sync(_config(), root)
 
     manifest = manifest_lib.load(root / ".manifest-canvas.toml")
@@ -1201,6 +1220,7 @@ def test_published_if_flags_used_recorded_and_flag_flip_republishes(
     mock_course.get_page.return_value = real_page
 
     capsys.readouterr()
+    make_current(root)
     run_sync(_config(), root, verbose=True)
 
     out = capsys.readouterr().out
@@ -1233,6 +1253,7 @@ def test_published_if_module_item_default(mock_course, tmp_path) -> None:
     module = _mock_module(66)
     mock_course.create_module.return_value = module
 
+    make_current(root)
     run_sync(_config(), root)
 
     item_calls = module.create_module_item.call_args_list
@@ -1252,6 +1273,7 @@ def test_published_if_quiz(mock_course, tmp_path) -> None:
     mock_course.create_quiz.return_value = quiz
     mock_course.get_quiz.return_value = quiz
 
+    make_current(root)
     run_sync(_config(), root)
 
     assert quiz.edit.call_args[1]["quiz"]["published"] is True
@@ -1263,6 +1285,7 @@ def test_mv_preserves_flags_used(tmp_path) -> None:
     with manifest_path.open("wb") as f:
         tomli_w.dump(
             {
+                "_repo_format": {"format_version": 1},
                 "pages/flagged.md": {
                     "canvas_id": 1,
                     "canvas_type": "page",
@@ -1274,6 +1297,7 @@ def test_mv_preserves_flags_used(tmp_path) -> None:
             f,
         )
 
+    make_current(root)
     run_mv(root / "pages" / "flagged.md", root / "pages" / "renamed.md")
 
     with manifest_path.open("rb") as f:
@@ -1395,6 +1419,7 @@ def test_sync_applies_canvas_toml_flag_override(mock_course, tmp_path) -> None:
     mock_course.create_page.side_effect = _create_page
 
     cfg = _section_config(root, "canvas-sec-a.toml", {"in_person_class": False})
+    make_current(root)
     assert run_sync(cfg, root) is False
 
     body = pages["Flagged"]["body"]
@@ -1409,6 +1434,7 @@ def test_sync_records_merged_flags_in_manifest(mock_course, tmp_path) -> None:
     mock_course.create_page.side_effect = [_mock_page(1, "flagged"), _mock_page(2, "plain")]
 
     cfg = _section_config(root, "canvas-sec-a.toml", {"in_person_class": False})
+    make_current(root)
     run_sync(cfg, root)
 
     manifest = manifest_lib.load(root / ".manifest-canvas-sec-a.toml")

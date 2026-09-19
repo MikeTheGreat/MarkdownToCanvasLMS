@@ -20,9 +20,14 @@ MANIFEST_GLOB = ".manifest-*.toml"
 DEFAULT_CONFIG_STEM = "canvas"
 
 #: Reserved manifest key holding the Canvas course the manifest's IDs belong to.
-#: Not a repo path: code that walks every entry must skip it (see is_course_key).
+#: Not a repo path: code that walks every entry must skip it (see is_reserved_key).
 COURSE_KEY = "_canvas_course"
 COURSE_TYPE = "course_identity"
+
+#: Reserved manifest key recording the repo format version the manifest was
+#: written in: ``_repo_format = { format_version = N }``. Not a repo path
+#: either; see is_reserved_key.
+FORMAT_KEY = "_repo_format"
 
 
 def manifest_name_for(config_path: Path | None) -> str:
@@ -143,8 +148,13 @@ def needs_sync(
 
 
 def load(path: Path) -> ManifestDict:
+    """Load a manifest. A path that does not exist yields a new manifest that
+    already carries the current format stamp, so it is stamped on first flush."""
     if not path.exists():
-        return {}
+        # Imported here because repo_format imports this module.
+        from .repo_format import FORMAT_VERSION
+
+        return {FORMAT_KEY: {"format_version": FORMAT_VERSION}}
     with open(path, "rb") as f:
         return dict(tomllib.load(f))
 
@@ -154,6 +164,12 @@ def flush(path: Path | None, manifest: ManifestDict) -> None:
     `update --check-all`, which must never touch the manifest file)."""
     if path is None:
         return
+    if FORMAT_KEY not in manifest:
+        # A manifest built in memory rather than loaded (load() stamps new ones):
+        # whatever the tool writes records the format it is written in.
+        from .repo_format import FORMAT_VERSION
+
+        manifest[FORMAT_KEY] = {"format_version": FORMAT_VERSION}
     with open(path, "wb") as f:
         tomli_w.dump(manifest, f)
 
@@ -187,9 +203,12 @@ def record(
     flush(manifest_path, manifest)
 
 
-def is_course_key(key: str, entry: dict[str, Any] | None = None) -> bool:
-    """True for the reserved stored-course entry (not a repo file)."""
-    return key == COURSE_KEY or (entry or {}).get("canvas_type") == COURSE_TYPE
+def is_reserved_key(key: str, entry: dict[str, Any] | None = None) -> bool:
+    """True for the reserved entries (stored course, format stamp): not repo files."""
+    return (
+        key in (COURSE_KEY, FORMAT_KEY)
+        or (entry or {}).get("canvas_type") == COURSE_TYPE
+    )
 
 
 def get_course_identity(manifest: ManifestDict) -> dict[str, Any] | None:
@@ -227,5 +246,5 @@ def same_course(identity: dict[str, Any], base_url: str, course_id: int) -> bool
 
 
 def has_content_entries(manifest: ManifestDict) -> bool:
-    """True if the manifest holds any entry other than the stored course."""
-    return any(not is_course_key(k, v) for k, v in manifest.items())
+    """True if the manifest holds any entry other than the reserved ones."""
+    return any(not is_reserved_key(k, v) for k, v in manifest.items())

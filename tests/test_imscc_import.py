@@ -1311,3 +1311,28 @@ def test_module_published_items_no_comment(imported_dir: Path) -> None:
     for line in text.splitlines():
         if "My Page" in line and "Hidden Draft" not in line:
             assert 'published="false"' not in line
+
+
+# ---------------------------------------------------------------------------
+# Repo format version
+# ---------------------------------------------------------------------------
+
+
+def test_course_settings_toml_starts_with_version_keys(imported_dir: Path) -> None:
+    import tomllib
+    from markdown_to_canvas.repo_format import FORMAT_VERSION, tool_version
+
+    path = imported_dir / "course_settings" / "course_settings.toml"
+    lines = path.read_text().splitlines()
+    assert lines[0] == f"format_version = {FORMAT_VERSION}"
+    assert lines[1].startswith("created_by = ")
+    data = tomllib.loads(path.read_text())
+    assert data["format_version"] == FORMAT_VERSION
+    assert data["created_by"] == tool_version()
+    assert list(data)[:2] == ["format_version", "created_by"]
+
+
+def test_imported_repo_passes_format_check_without_upgrade(imported_dir: Path) -> None:
+    from markdown_to_canvas.repo_format import check_repo_format
+
+    assert check_repo_format(imported_dir) is None

@@ -13,6 +13,7 @@ from urllib.parse import quote, unquote
 import tomli_w
 
 from . import manifest as manifest_lib
+from . import repo_format
 from .config import find_repo_root  # re-exported: mv's public API since before the move
 
 _CONTENT_TYPE_DIRS = {
@@ -372,6 +373,9 @@ def compute_manifest_updates(
     """Return a new manifest dict with updated keys and canvas_item_ids."""
     new_manifest: manifest_lib.ManifestDict = {}
     for key, entry in manifest.items():
+        if manifest_lib.is_reserved_key(key, entry):
+            new_manifest[key] = entry
+            continue
         new_key = path_map.get(key, key)
         new_entry = dict(entry)
 
@@ -625,14 +629,9 @@ def find_manifests(repo_root: Path) -> list[Path]:
 
     ``mv`` has no ``--config`` option and a rename affects every course the
     repo drives, so all of them are rewritten — including a pre-per-config
-    ``.canvas-manifest.toml`` left over from an older version of the tool
-    (renamed into place by the next ``update``/``prune`` run).
+    ``.canvas-manifest.toml`` is not included: ``upgrade`` renames it.
     """
-    paths = sorted(repo_root.glob(manifest_lib.MANIFEST_GLOB))
-    legacy = repo_root / manifest_lib.LEGACY_MANIFEST_NAME
-    if legacy.exists():
-        paths.append(legacy)
-    return paths
+    return sorted(repo_root.glob(manifest_lib.MANIFEST_GLOB))
 
 
 def compute_all_manifest_updates(
@@ -730,6 +729,8 @@ def run_mv(
             f"  {src}\n"
             "Create course_settings/course_settings.toml (it can be empty) to mark the repo root."
         )
+
+    repo_format.check_repo_format(repo_root)
 
     validate_move(src, dest, repo_root)
 

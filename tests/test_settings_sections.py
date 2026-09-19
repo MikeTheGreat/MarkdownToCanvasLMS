@@ -17,6 +17,7 @@ import tomli_w
 from markdown_to_canvas.config import Config
 from markdown_to_canvas.mv import run_mv
 from markdown_to_canvas.sync import compute_settings_section_hashes, run_sync
+from tests.conftest import make_current
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +47,16 @@ class TestComputeSettingsSectionHashes:
         assert {k: v for k, v in a.items() if k != "metadata"} == {
             k: v for k, v in b.items() if k != "metadata"
         }
+
+    def test_version_keys_are_not_metadata(self) -> None:
+        base = {"title": "X"}
+        varied = dict(
+            base,
+            format_version=1,
+            created_by="0.2.0",
+            upgraded_by=["0.2.1 on 2026-09-20: 0 -> 1"],
+        )
+        assert compute_settings_section_hashes(base) == compute_settings_section_hashes(varied)
 
     def test_section_change_touches_only_that_section(self) -> None:
         a = compute_settings_section_hashes({"title": "X", "late_policy": {"x": 1}})
@@ -129,6 +140,7 @@ def test_flag_flip_triggers_no_settings_or_dates_calls(tmp_path, mocker, capsys)
     root = _make_repo(tmp_path)
     course = _mock_canvas_course(mocker)
 
+    make_current(root)
     run_sync(_cfg(), root)
     course.reset_mock()
     capsys.readouterr()
@@ -136,6 +148,7 @@ def test_flag_flip_triggers_no_settings_or_dates_calls(tmp_path, mocker, capsys)
     settings_path = root / "course_settings" / "course_settings.toml"
     settings_path.write_text(_BASE_SETTINGS.replace("online = true", "online = false"))
 
+    make_current(root)
     run_sync(_cfg(), root)
 
     out = capsys.readouterr().out
@@ -150,6 +163,7 @@ def test_comment_only_edit_runs_no_sections(tmp_path, mocker, capsys) -> None:
     root = _make_repo(tmp_path)
     course = _mock_canvas_course(mocker)
 
+    make_current(root)
     run_sync(_cfg(), root)
     course.reset_mock()
     capsys.readouterr()
@@ -157,6 +171,7 @@ def test_comment_only_edit_runs_no_sections(tmp_path, mocker, capsys) -> None:
     settings_path = root / "course_settings" / "course_settings.toml"
     settings_path.write_text("# just a comment\n" + _BASE_SETTINGS)
 
+    make_current(root)
     run_sync(_cfg(), root)
 
     course.update.assert_not_called()
@@ -169,6 +184,7 @@ def test_title_edit_reruns_metadata_only(tmp_path, mocker) -> None:
     course = _mock_canvas_course(mocker)
     upload_image = mocker.patch("markdown_to_canvas.canvas_api.upload_course_image")
 
+    make_current(root)
     run_sync(_cfg(), root)
     course.reset_mock()
     upload_image.reset_mock()
@@ -176,6 +192,7 @@ def test_title_edit_reruns_metadata_only(tmp_path, mocker) -> None:
     settings_path = root / "course_settings" / "course_settings.toml"
     settings_path.write_text(_BASE_SETTINGS.replace('"Test Course"', '"New Title"'))
 
+    make_current(root)
     run_sync(_cfg(), root)
 
     course.update.assert_called_once()
@@ -191,6 +208,7 @@ def test_due_date_edit_makes_dates_call_but_reruns_no_sections(tmp_path, mocker)
     assignment = _mock_assignment(101)
     course.get_assignment.return_value = assignment
 
+    make_current(root)
     run_sync(_cfg(), root)
     course.reset_mock()
 
@@ -199,6 +217,7 @@ def test_due_date_edit_makes_dates_call_but_reruns_no_sections(tmp_path, mocker)
         _BASE_SETTINGS.replace("2099-12-31T23:59:00", "2088-06-30T23:59:00")
     )
 
+    make_current(root)
     run_sync(_cfg(), root)
 
     course.update.assert_not_called()
@@ -226,6 +245,7 @@ def test_dashboard_image_file_edit_reuploads_image_only(tmp_path, mocker) -> Non
     )
     upload_image = mocker.patch("markdown_to_canvas.canvas_api.upload_course_image")
 
+    make_current(root)
     run_sync(_cfg(), root)
     upload_image.assert_called_once()
     course.reset_mock()
@@ -236,11 +256,13 @@ def test_dashboard_image_file_edit_reuploads_image_only(tmp_path, mocker) -> Non
     time.sleep(0.01)
     os.utime(root / "assets" / "logo.png", None)
 
+    make_current(root)
     run_sync(_cfg(), root)
     upload_image.assert_called_once()
     course.update.assert_not_called()
     upload_image.reset_mock()
 
+    make_current(root)
     run_sync(_cfg(), root)
     upload_image.assert_not_called()
 
@@ -259,6 +281,7 @@ def test_failed_section_recorded_as_error_and_retried_alone(tmp_path, mocker, ca
         side_effect=Exception("boom"),
     )
 
+    make_current(root)
     had_errors = run_sync(_cfg(), root)
 
     assert had_errors is True
@@ -267,6 +290,7 @@ def test_failed_section_recorded_as_error_and_retried_alone(tmp_path, mocker, ca
     update_late.reset_mock()
     update_late.side_effect = None
 
+    make_current(root)
     had_errors = run_sync(_cfg(), root)
 
     assert had_errors is False
@@ -282,6 +306,7 @@ def test_manifest_without_section_hashes_migrates(tmp_path, mocker) -> None:
     with manifest_path.open("wb") as f:
         tomli_w.dump(
             {
+                "_repo_format": {"format_version": 1},
                 "course_settings/course_settings.toml": {
                     "canvas_id": 0,
                     "canvas_type": "course_settings",
@@ -292,6 +317,7 @@ def test_manifest_without_section_hashes_migrates(tmp_path, mocker) -> None:
         )
     course = _mock_canvas_course(mocker)
 
+    make_current(root)
     run_sync(_cfg(), root)
 
     course.update.assert_called_once()
@@ -309,6 +335,7 @@ def test_mv_preserves_resolved_dates(tmp_path) -> None:
     with manifest_path.open("wb") as f:
         tomli_w.dump(
             {
+                "_repo_format": {"format_version": 1},
                 "assignments/hw1.md": {
                     "canvas_id": 101,
                     "canvas_type": "assignment",
@@ -323,6 +350,7 @@ def test_mv_preserves_resolved_dates(tmp_path) -> None:
             f,
         )
 
+    make_current(root)
     run_mv(root / "assignments" / "hw1.md", root / "assignments" / "renamed.md")
 
     with manifest_path.open("rb") as f:
@@ -333,3 +361,42 @@ def test_mv_preserves_resolved_dates(tmp_path) -> None:
         "unlock_at": "NONE",
         "lock_at": "KEEP",
     }
+
+
+def test_version_keys_change_makes_no_course_update(tmp_path, mocker) -> None:
+    """upgrade only edits format_version / created_by / upgraded_by; the next
+    update must not treat that as a course-metadata change."""
+    root = _make_repo(tmp_path)
+    course = _mock_canvas_course(mocker)
+    make_current(root)
+    run_sync(_cfg(), root)
+    assert course.update.call_count == 1  # first sync sends the metadata
+    course.reset_mock()
+
+    settings_path = root / "course_settings" / "course_settings.toml"
+    text = settings_path.read_text()
+    settings_path.write_text(
+        text.replace("format_version = 1\n", 'format_version = 1\ncreated_by = "0.2.0"\n'
+                     'upgraded_by = ["0.2.1 on 2026-09-20: 0 -> 1"]\n', 1)
+    )
+    assert "upgraded_by" in settings_path.read_text()
+
+    run_sync(_cfg(), root)
+
+    course.update.assert_not_called()
+
+
+def test_version_keys_never_reach_the_metadata_payload(tmp_path, mocker) -> None:
+    root = _make_repo(
+        tmp_path,
+        'format_version = 1\ncreated_by = "0.2.0"\nupgraded_by = ["x"]\n'
+        'title = "Test Course"\n',
+    )
+    course = _mock_canvas_course(mocker)
+
+    run_sync(_cfg(), root)
+
+    params = [c.kwargs["course"] for c in course.update.call_args_list]
+    assert params and all(
+        not ({"format_version", "created_by", "upgraded_by"} & set(p)) for p in params
+    )

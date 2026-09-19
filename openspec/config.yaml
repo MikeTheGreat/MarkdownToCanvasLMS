@@ -1,32 +1,58 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+context: |
+  markdown-to-canvas (shell alias: gg) syncs a Markdown course repo to Canvas LMS.
+  The local repo is the source of truth; Canvas content not managed by the tool
+  is left alone. Python 3.11+, packaged as a uv tool; click CLI, canvasapi for
+  the Canvas REST API, Pandoc (pypandoc) for Markdown -> HTML fragments, pytest
+  + pytest-mock for tests. Source in src/markdown_to_canvas/, one module per
+  subcommand or concern (sync.py, canvas_api.py, link_rewrite.py, manifest.py,
+  imscc_import.py, mv.py, publish.py, orphans.py, ...).
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+  Read before writing any artifact:
+  - README.md: user-facing CLI, options, file formats.
+  - ARCHITECTURE.md: internals, sync algorithm, manifest format, per-subcommand notes.
+  - TESTING.md: test layers and what to assert on.
+  - TODO.md: future work only; may already describe the requested feature.
+  - RUBRIC_ISSUES.md: required reading for anything rubric-related.
 
-# Per-operation guidance (optional)
-# Add advisory guidance for how apply and archive work should be conducted.
-# This is separate from artifact rules above.
-# Example:
-#   operations:
-#     apply:
-#       guidance:
-#         - Keep test summaries concise
-#     archive:
-#       guidance:
-#         - Summarize the archive outcome before finishing
+  Core concepts: per-config manifest (.manifest-<config stem>.toml) maps repo
+  paths to Canvas IDs and is flushed after every write; mtime vs last_synced
+  decides what is uploaded; stubs are created for linked-but-unsynced content;
+  modules sync last; .canvasignore (not .gitignore) excludes files; course flags
+  drive conditional content.
+
+  Canvas often behaves differently from its API docs. Behavior that has not
+  been measured on a live course is an assumption and must be labelled as one.
+
+rules:
+  explore:
+    - Batch your questions
+  proposal:
+    - Before proposing a feature, list existing subcommands, options, or
+      mechanisms (including ones in other subcommands) that already cover all
+      or part of it, and say how the proposal relates to them.
+    - Note any TODO.md item the change implements or affects.
+    - State which of the core subcommands (update, import, mv, publish) are
+      affected, and why any of the others are not.
+  design:
+    - Every decision not explicitly confirmed by the user in conversation must
+      be listed under Open Questions, not Decisions
+    - Identify Canvas API behavior the design depends on and mark each item as
+      verified (with where) or unverified; include a live-verification step for
+      unverified behavior that could cause data loss.
+    - Any operation that deletes or overwrites Canvas content must describe its
+      confirmation and false-positive safeguards.
+    - Describe manifest format changes and how existing manifests are migrated
+      or tolerated.
+  specs:
+    - Describe observable CLI behavior (commands, options, output, Canvas
+      effects, manifest effects), not internal function structure.
+  tasks:
+    - Tests must mock Canvas; outbound HTTP is blocked in the test suite.
+    - End with documentation tasks that update README.md (user docs) and
+      ARCHITECTURE.md (internals), and remove or revise any TODO.md item the
+      change completes.
+    - Include a task to apply the change to the other core subcommands
+      (update, import, mv, publish) where applicable.
+    - Never include a git commit step.

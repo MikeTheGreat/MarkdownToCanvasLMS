@@ -4,21 +4,22 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-
 from markdown_to_canvas.manifest import (
-    LEGACY_MANIFEST_NAME,
     flush,
     load,
     manifest_name_for,
     manifest_path_for,
-    migrate_legacy_manifest,
     needs_sync,
     record,
 )
+from markdown_to_canvas.repo_format import FORMAT_VERSION
 
 
 def test_load_missing_file(tmp_path: Path) -> None:
-    assert load(tmp_path / "nonexistent.toml") == {}
+    # A new manifest is already stamped with the current format version.
+    assert load(tmp_path / "nonexistent.toml") == {
+        "_repo_format": {"format_version": FORMAT_VERSION}
+    }
 
 
 def test_load_existing_file(tmp_path: Path) -> None:
@@ -105,7 +106,9 @@ def test_record_multiple_entries_all_flushed(tmp_path: Path) -> None:
     record(manifest, manifest_path, "pages/b.md", 2, "page")
     record(manifest, manifest_path, "assignments/c.md", 3, "assignment")
     on_disk = load(manifest_path)
-    assert len(on_disk) == 3
+    assert set(on_disk) == {
+        "_repo_format", "pages/a.md", "pages/b.md", "assignments/c.md"
+    }
     assert on_disk["assignments/c.md"]["canvas_id"] == 3
 
 
@@ -226,48 +229,3 @@ def test_manifest_name_for_named_config() -> None:
 def test_manifest_path_for_is_repo_relative(tmp_path: Path) -> None:
     path = manifest_path_for(tmp_path, Path("elsewhere/canvas-sec-b.toml"))
     assert path == tmp_path / ".manifest-canvas-sec-b.toml"
-
-
-def test_migrate_legacy_manifest_renames_for_default_config(tmp_path: Path) -> None:
-    legacy = tmp_path / LEGACY_MANIFEST_NAME
-    legacy.write_bytes(b'["pages/a.md"]\ncanvas_id = 1\ncanvas_type = "page"\n')
-
-    path = migrate_legacy_manifest(tmp_path, None)
-
-    assert path == tmp_path / ".manifest-canvas.toml"
-    assert not legacy.exists()
-    assert load(path)["pages/a.md"]["canvas_id"] == 1
-
-
-def test_migrate_legacy_manifest_ignores_legacy_for_other_config(tmp_path: Path) -> None:
-    """The legacy manifest holds the default course's IDs; another config must
-    not adopt them."""
-    legacy = tmp_path / LEGACY_MANIFEST_NAME
-    legacy.write_bytes(b'["pages/a.md"]\ncanvas_id = 1\ncanvas_type = "page"\n')
-
-    path = migrate_legacy_manifest(tmp_path, Path("course_settings/canvas-sec-a.toml"))
-
-    assert path == tmp_path / ".manifest-canvas-sec-a.toml"
-    assert legacy.exists()
-    assert load(path) == {}
-
-
-def test_migrate_legacy_manifest_keeps_existing_new_name(tmp_path: Path) -> None:
-    legacy = tmp_path / LEGACY_MANIFEST_NAME
-    legacy.write_bytes(b'["pages/old.md"]\ncanvas_id = 1\ncanvas_type = "page"\n')
-    current = tmp_path / ".manifest-canvas.toml"
-    current.write_bytes(b'["pages/new.md"]\ncanvas_id = 2\ncanvas_type = "page"\n')
-
-    path = migrate_legacy_manifest(tmp_path, None)
-
-    assert path == current
-    assert load(path) == {
-        "pages/new.md": {"canvas_id": 2, "canvas_type": "page"}
-    }
-    assert legacy.exists()
-
-
-def test_migrate_legacy_manifest_no_files(tmp_path: Path) -> None:
-    path = migrate_legacy_manifest(tmp_path, None)
-    assert path == tmp_path / ".manifest-canvas.toml"
-    assert not path.exists()

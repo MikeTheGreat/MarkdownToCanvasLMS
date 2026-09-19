@@ -92,7 +92,9 @@ def _repo(tmp_path: Path) -> Path:
     (root / "pages" / "guide.md").write_text("---\ntitle: Guide\n---\n\nSee [sheet](../assets/sheet.pdf).\n")
     (root / "pages" / "other.md").write_text("---\ntitle: Other\n---\n\nNo links.\n")
     (root / "modules" / "week-1.md").write_text("---\ntitle: Week 1\n---\n\n- [Sheet](../assets/sheet.pdf)\n")
-    (root / "course_settings" / "course_settings.toml").write_text('dashboard_image = "assets/sheet.pdf"\n')
+    (root / "course_settings" / "course_settings.toml").write_text(
+        'format_version = 1\ndashboard_image = "assets/sheet.pdf"\n'
+    )
     return root
 
 
@@ -222,4 +224,4 @@ def test_invalidate_all_skips_canvas(tmp_path, mocker, monkeypatch) -> None:
 
     assert result.exit_code == 0, result.output
     listing.assert_not_called()
-    assert list(manifest_lib.load(path)) == [manifest_lib.COURSE_KEY]
+    assert set(manifest_lib.load(path)) == {manifest_lib.COURSE_KEY, manifest_lib.FORMAT_KEY}

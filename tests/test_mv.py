@@ -8,6 +8,9 @@ from pathlib import Path
 import pytest
 import tomli_w
 
+from markdown_to_canvas.repo_format import FORMAT_VERSION
+from tests.conftest import make_current
+
 from markdown_to_canvas.mv import (
     build_path_map,
     has_trailing_slash,
@@ -29,7 +32,9 @@ def _make_repo(tmp_path: Path, files: dict[str, str] | None = None) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "course_settings").mkdir()
-    (repo / "course_settings" / "course_settings.toml").write_text("")
+    (repo / "course_settings" / "course_settings.toml").write_text(
+        f"format_version = {FORMAT_VERSION}\n"
+    )
     if files:
         for rel_path, content in files.items():
             p = repo / rel_path
@@ -41,7 +46,7 @@ def _make_repo(tmp_path: Path, files: dict[str, str] | None = None) -> Path:
 def _make_manifest(repo: Path, entries: dict) -> Path:
     manifest_path = repo / ".manifest-canvas.toml"
     with manifest_path.open("wb") as f:
-        tomli_w.dump(entries, f)
+        tomli_w.dump({"_repo_format": {"format_version": FORMAT_VERSION}, **entries}, f)
     return manifest_path
 
 
@@ -854,6 +859,7 @@ class TestRunMv:
             "# keep this comment\n"
             'pinned_resources = ["quizzes/old-quiz", "quizzes/other-quiz"]\n'
         )
+        make_current(repo)
 
         run_mv(repo / "quizzes/old-quiz", repo / "quizzes/new-quiz")
 
@@ -997,7 +1003,11 @@ class TestRunMv:
         settings_path = repo / "course_settings" / "course_settings.toml"
         with settings_path.open("wb") as f:
             tomli_w.dump(
-                {"dashboard_image": "assets/course_settings/IT-CS_115_dashboard_logo.png"}, f
+                {
+                    "format_version": FORMAT_VERSION,
+                    "dashboard_image": "assets/course_settings/IT-CS_115_dashboard_logo.png",
+                },
+                f,
             )
 
         run_mv(
@@ -1015,7 +1025,14 @@ class TestRunMv:
         })
         settings_path = repo / "course_settings" / "course_settings.toml"
         with settings_path.open("wb") as f:
-            tomli_w.dump({"title": "Test", "front_page": "pages/Old Home.md"}, f)
+            tomli_w.dump(
+                {
+                    "format_version": FORMAT_VERSION,
+                    "title": "Test",
+                    "front_page": "pages/Old Home.md",
+                },
+                f,
+            )
 
         run_mv(repo / "pages/Old Home.md", repo / "pages/old-home.md")
 
@@ -1091,6 +1108,7 @@ class TestRunMvInGitRepo:
 class TestMvMultipleManifests:
     def _entry(self, canvas_id: int) -> dict:
         return {
+            "_repo_format": {"format_version": FORMAT_VERSION},
             "pages/old-page.md": {
                 "canvas_id": canvas_id,
                 "canvas_type": "page",
@@ -1105,7 +1123,6 @@ class TestMvMultipleManifests:
         for name, canvas_id in (
             (".manifest-canvas-sec-a.toml", 100),
             (".manifest-canvas-sec-b.toml", 200),
-            (".canvas-manifest.toml", 300),
         ):
             with (repo / name).open("wb") as f:
                 tomli_w.dump(self._entry(canvas_id), f)
@@ -1115,7 +1132,6 @@ class TestMvMultipleManifests:
         for name, canvas_id in (
             (".manifest-canvas-sec-a.toml", 100),
             (".manifest-canvas-sec-b.toml", 200),
-            (".canvas-manifest.toml", 300),
         ):
             with (repo / name).open("rb") as f:
                 manifest = tomllib.load(f)

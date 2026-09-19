@@ -101,6 +101,8 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
       - [`only_if`: excluding a `due_dates` entry by flag](#only_if-excluding-a-due_dates-entry-by-flag)
   - [Manifest file](#manifest-file)
     - [Deleting a file in Canvas](#deleting-a-file-in-canvas)
+  - [Upgrading a repo (`upgrade`)](#upgrading-a-repo-upgrade)
+    - [Which tool version am I running?](#which-tool-version-am-i-running)
   - [IMSCC import](#imscc-import)
     - [Verifying the import](#verifying-the-import)
   - [Listing content titles (`list-titles`)](#listing-content-titles-list-titles)
@@ -146,7 +148,7 @@ Files are skipped if their local modification time is older than the `last_synce
 
 Files matched by an optional `.canvasignore` (git's `gitignore` syntax) at the repo root are never uploaded — handy for excluding editor backups and temp files such as Word's `~$*.docx`. `.gitignore` is **not** consulted, so you can keep per-term materials out of git while still uploading them to Canvas. To exclude content from both git and Canvas, list it in both files.
 
-A manifest file named after the `canvas.toml` in use (`course_settings/canvas.toml` → `.manifest-canvas.toml`) is written to your course repo to track Canvas IDs and sync times. Commit it so collaborators share the same mapping.
+A manifest file named after the `canvas.toml` in use (`course_settings/canvas.toml` → `.manifest-canvas.toml`) is written to your course repo to track Canvas IDs and sync times. It is local to your machine and must never be committed (`import`'s default `.gitignore` excludes it). Each machine that holds a manifest also runs `upgrade` when the repo's file format changes (see [Upgrading a repo](#upgrading-a-repo-upgrade)).
 
 ---
 
@@ -475,12 +477,10 @@ cd my-course && git pull
 # 2. Sync to Canvas (only changed files are uploaded)
 CANVAS_API_TOKEN=your-token-here \
   markdown-to-canvas update .
-
-# 3. Commit the updated manifest
-git add .manifest-canvas.toml
-git commit -m "sync: update Canvas IDs"
-git push
 ```
+
+The manifest (`.manifest-canvas.toml`) that `update` writes is local. Do not
+commit it.
 
 ---
 
@@ -1053,6 +1053,12 @@ TOML — *does* re-upload it.)
 ```toml
 # course_settings/course_settings.toml — TOML syntax. Every key is optional.
 
+# ── Repo format (written by `import` and `upgrade`; do not edit) ─────────
+# These come first in the file. They are never sent to Canvas.
+format_version = 1                                 # the repo's file-format version
+created_by     = "0.2.1"                           # tool version that ran `import`
+upgraded_by    = ["0.2.2 on 2026-09-20: 0 -> 1"]   # one entry per `upgrade` run
+
 # ── Course identity & display ────────────────────────────────────────────
 title        = "Intro to Programming"          # Canvas course name
 course_code  = "CS 101"                        # short code shown in the UI
@@ -1118,8 +1124,10 @@ enable_course_paces     = false
 #
 # IMPORTANT: this is a top-level key, so it MUST appear BEFORE any [section]
 # or [[section]] header below (e.g. [late_policy], [[grading_standards]]).
-# In TOML, every key after a section header belongs to that section — put
-# tab_configuration here, above them, or it will be silently ignored.
+# In TOML, every key after a section header belongs to that section. If it ends
+# up under a section anyway (as in repos imported by older versions), `upgrade`
+# moves it to the top level once. Other commands do not move it, and a nested
+# tab_configuration is not applied.
 tab_configuration = [
     { id = "Home" },
     { id = "Modules" },
@@ -2411,13 +2419,20 @@ no `due_dates` entry, so it doesn't produce a spurious warning.
 
 The tool creates a manifest in your course repo, named after the `canvas.toml`
 it is syncing with: `course_settings/canvas.toml` → `.manifest-canvas.toml`,
-`course_settings/canvas-sec-a.toml` → `.manifest-canvas-sec-a.toml`. Commit
-this file. (Repos written by an older version have a single
-`.canvas-manifest.toml`; the first run renames it to `.manifest-canvas.toml`
-and prints a line saying so.)
+`course_settings/canvas-sec-a.toml` → `.manifest-canvas-sec-a.toml`. The
+manifest is local to your machine and must never be committed: it records the
+Canvas IDs of one Canvas course, and `import`'s default `.gitignore` excludes
+`.manifest-*.toml`. (Repos written by an older version have a single
+`.canvas-manifest.toml`; `upgrade` renames it to `.manifest-canvas.toml`.)
+
+Each manifest holds a reserved `_repo_format` entry that records the repo
+format version it was written in (see [Upgrading a repo](#upgrading-a-repo-upgrade)).
 
 ```toml
-# .manifest-canvas.toml — commit this so collaborators share Canvas IDs
+# .manifest-canvas.toml — local; never commit this file
+
+[_repo_format]
+format_version = 1
 
 ["pages/syllabus.md"]
 canvas_id   = 11111
@@ -2455,6 +2470,81 @@ markdown-to-canvas update .
 ```
 
 `--force-uploads` alone is not enough for this: for a file that is unchanged locally, the Canvas copy's `updated_at` is later than the local mtime, so the Canvas overwrite protection skips it unless `--force-overwrite` is also given.
+
+## Upgrading a repo (`upgrade`)
+
+The files in a course repo change format as the tool changes. To detect a repo
+written for a different format, `course_settings/course_settings.toml` records
+an integer `format_version` as its first key, and every manifest records the
+version it was written in. A repo with no `format_version` is version 0, which
+is every repo created before this feature existed.
+
+`update`, `mv`, `publish`, `prune`, `clean-manifest`, `find-local-orphans`,
+`find-canvas-orphans` and `list-titles` check both the repo and every
+`.manifest-*.toml` in it before they read content, write a file or change
+anything on Canvas. If a version differs from the tool's, the command stops and
+changes nothing:
+
+```text
+Error: This course repo is format version 0 but this tool (markdown-to-canvas 0.2.1) uses format version 1. Run `markdown-to-canvas upgrade` first.
+Error: course_settings/course_settings.toml is format version 2 but this tool (markdown-to-canvas 0.2.1) only understands format version 1. Update markdown-to-canvas.
+```
+
+A manifest that is older than the repo is named in the message. This happens
+when another machine upgraded the repo and you pulled it, because manifests are
+local and are not upgraded by the pull. `import`, `setup`, `emit-workflow`,
+`install-completion` and `create-tool-aliases` do not read a course repo and do
+not check.
+
+```bash
+# See what would change, without writing anything
+markdown-to-canvas upgrade --noop
+
+# Upgrade the repo you are in (or pass the path)
+markdown-to-canvas upgrade [REPO]
+```
+
+`upgrade` applies each migration from the repo's version (the lowest of
+`course_settings.toml` and all manifests) up to the tool's version, in order,
+and prints each change. It edits `course_settings.toml` in place, so comments,
+key order and layout are kept. It never contacts Canvas and runs whether or not
+the git working tree is clean. Review the result with `git diff` and commit
+`course_settings.toml`. If a migration cannot proceed it stops with an error and
+leaves `format_version` at the last step that finished; running `upgrade` again
+resumes from there.
+
+Each run that changes `format_version` appends one entry to the `upgraded_by`
+array, in the form `"<tool version> on <date>: <from> -> <to>"`. `created_by`
+records the tool version that ran `import` and is never changed. None of the
+three keys is sent to Canvas, and editing them does not make `update` resend
+course settings.
+
+Manifests are local, so run `upgrade` on every machine that has one. On a machine
+whose `course_settings.toml` is already current, it upgrades only the manifests
+and adds no `upgraded_by` entry.
+
+Migration 0 to 1 renames a legacy `.canvas-manifest.toml` to
+`.manifest-canvas.toml` (when that name is free; if both exist, it warns that
+the legacy file is unused and leaves it), and records version 1 in every
+manifest. `update`, `prune` and `clean-manifest` no longer rename the legacy
+manifest themselves.
+
+`upgrade` also checks that `tab_configuration` is a top-level key. The tool
+only reads it there, so when it is nested under a section
+(`[default_post_policy]`, for example) `upgrade` moves it to the top level,
+before the first section header, and a notice names where it came from. A key
+present in both places is an error. `upgrade --noop` reports the problem
+without editing the file. Other commands never move it: a repo at the current
+format version is taken to be set up correctly, so a `tab_configuration` you
+nest by hand later is not applied and not repaired (run `upgrade` to move it).
+
+### Which tool version am I running?
+
+`uv tool list` shows the installed version of `markdown-to-canvas`. The version
+comes from git tags (the build uses `hatch-vcs`), so a checkout or install from
+a commit after tag `v0.2.0` reports something like `0.2.1.dev3+gabc1234`.
+`created_by` and `upgraded_by` in `course_settings.toml` record the versions
+that imported and upgraded the repo.
 
 ## IMSCC import
 

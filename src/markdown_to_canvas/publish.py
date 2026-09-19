@@ -21,6 +21,7 @@ from urllib.parse import unquote
 import yaml
 
 from .conditionals import apply_conditionals, resolve_published_if
+from . import repo_format
 from .config import Config
 from .convert import (
     apply_outside_fences,
@@ -914,6 +915,7 @@ def run_publish(
     repo = Path(course_dir).resolve()
     if not repo.is_dir():
         raise ValueError(f"Course directory not found: {course_dir}")
+    repo_format.check_repo_format(repo)
 
     staging_dir = Path(tempfile.mkdtemp(prefix="g2c-publish-"))
     print(f"Staging site in: {staging_dir}")

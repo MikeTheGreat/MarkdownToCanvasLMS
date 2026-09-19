@@ -20,6 +20,7 @@ import click
 
 from . import clean_manifest
 from . import manifest as manifest_lib
+from . import repo_format
 from .config import Config
 
 
@@ -54,6 +55,7 @@ def check_course(
     """
     if confirm is None:
         confirm = lambda prompt: click.confirm(prompt, default=False)  # noqa: E731
+    repo_format.check_repo_format(manifest_path.parent)
     manifest = manifest_lib.load(manifest_path)
     configured = _describe(config.base_url, config.course_id, course_name)
     stored = manifest_lib.get_course_identity(manifest)
@@ -76,7 +78,7 @@ def check_course(
             stored["base_url"], stored["course_id"], stored.get("course_name")
         )
         count = sum(
-            1 for k, v in manifest.items() if not manifest_lib.is_course_key(k, v)
+            1 for k, v in manifest.items() if not manifest_lib.is_reserved_key(k, v)
         )
         print(
             f"\n{manifest_path.name} belongs to a different course:\n"

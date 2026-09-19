@@ -17,6 +17,7 @@ import tomli_w
 
 from .canvas_api import NUMERIC_TAB_IDS, TOOL_TAB_PREFIX
 from .convert import apply_outside_fences
+from .repo_format import FORMAT_VERSION, tool_version
 
 
 
@@ -2812,8 +2813,14 @@ def _write_course_settings_toml(
     read_only = {k: data.pop(k) for k in _IMPORT_ONLY_READ_ONLY if k in data}
     not_uploaded = {k: data.pop(k) for k in _IMPORT_ONLY_NOT_UPLOADED if k in data}
 
-    # Flat live keys first (must come before any [section] / [[section]] header)
-    content = tomli_w.dumps(data)
+    # The repo's format version and provenance come first, before every other
+    # key and comment (see repo_format), then the flat live keys — all of which
+    # must come before any [section] / [[section]] header.
+    content = tomli_w.dumps(
+        {"format_version": FORMAT_VERSION, "created_by": tool_version()}
+    )
+    if data:
+        content += "\n" + tomli_w.dumps(data)
 
     # A live flat key, so it must still land before any section header.
     if publish_title:

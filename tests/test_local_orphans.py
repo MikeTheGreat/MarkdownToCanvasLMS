@@ -15,6 +15,7 @@ from markdown_to_canvas.local_orphans import (
     find_local_orphans,
     print_report,
 )
+from tests.conftest import make_current
 
 
 def _write(root: Path, rel: str, text: str = "") -> Path:
@@ -259,6 +260,7 @@ class TestFindLocalOrphans:
             _write(repo, f"assets/{asset}", "x")
         _write(repo, "assets/orphan.png", "x")
 
+        make_current(repo)
         report = find_local_orphans(repo)
 
         assert report.errors == []
@@ -271,6 +273,7 @@ class TestFindLocalOrphans:
         _write(repo, "announcements/n.md", "![x](../assets/ann.png)\n")
         _write(repo, "assets/ann.png", "x")
         _write(repo, "announcements/unlinked.md", "nobody links here\n")
+        make_current(repo)
         assert find_local_orphans(repo).orphans == []
 
     def test_pinned_folder_suppresses_everything_beneath_it(self, repo):
@@ -281,15 +284,18 @@ class TestFindLocalOrphans:
         )
         _write(repo, "assets/handouts/one.pdf", "x")
         _write(repo, "assets/loose.pdf", "x")
+        make_current(repo)
         assert find_local_orphans(repo).orphans == ["assets/loose.pdf"]
 
     def test_snippets_are_never_reported_even_when_unused(self, repo):
         _write(repo, "snippets/unused.md", "nothing includes me\n")
+        make_current(repo)
         assert find_local_orphans(repo).orphans == []
 
     def test_clean_repo_reports_nothing(self, repo):
         _write(repo, "pages/home.md", "home\n")
         _write(repo, "modules/week1.md", "- [Home](../pages/home.md)\n")
+        make_current(repo)
         report = find_local_orphans(repo)
         assert report.orphans == []
         assert report.errors == []
@@ -297,6 +303,7 @@ class TestFindLocalOrphans:
     def test_module_item_outside_the_repo_errors_instead_of_crashing(self, repo):
         _write(repo, "pages/home.md", "home\n")
         _write(repo, "modules/week1.md", "- [Outside](../../elsewhere/x.md)\n")
+        make_current(repo)
         report = find_local_orphans(repo)
         assert report.errors == [
             (
@@ -323,6 +330,7 @@ class TestConversionFailure:
         monkeypatch.setattr(
             "markdown_to_canvas.local_orphans.markdown_to_html", _boom
         )
+        make_current(repo)
         report = find_local_orphans(repo)
 
         assert len(report.errors) == 1
@@ -342,6 +350,7 @@ class TestConversionFailure:
         monkeypatch.setattr(
             "markdown_to_canvas.local_orphans.markdown_to_html", _hang
         )
+        make_current(repo)
         report = find_local_orphans(repo)
 
         assert report.errors == [
@@ -359,6 +368,7 @@ class TestConversionFailure:
         original = mod._PANDOC_TIMEOUT_SECONDS
         mod._PANDOC_TIMEOUT_SECONDS = monkeypatched
         try:
+            make_current(repo)
             report = find_local_orphans(repo)
         finally:
             mod._PANDOC_TIMEOUT_SECONDS = original
@@ -373,6 +383,7 @@ class TestPrintErrors:
         _write(repo, "assets/orphan.png", "x")
         _write(repo, "modules/week1.md", "- [Outside](../../elsewhere/x.md)\n")
 
+        make_current(repo)
         print_report(find_local_orphans(repo))
         out = capsys.readouterr().out
 
@@ -386,6 +397,7 @@ class TestPrintErrors:
         _write(repo, "modules/week1.md", "- [Home](../pages/home.md)\n")
         _write(repo, "modules/week2.md", "- [Outside](../../elsewhere/x.md)\n")
 
+        make_current(repo)
         print_report(find_local_orphans(repo))
         out = capsys.readouterr().out
 
@@ -394,6 +406,7 @@ class TestPrintErrors:
 
     def test_no_error_section_when_everything_scanned(self, repo, capsys):
         _write(repo, "assets/orphan.png", "x")
+        make_current(repo)
         print_report(find_local_orphans(repo))
         assert "Errors" not in capsys.readouterr().out
 
@@ -404,6 +417,7 @@ class TestReferencedMap:
         _write(repo, "pages/welcome.md", "![p](../assets/pic.png)\n")
         _write(repo, "assignments/a1.md", "![p](../assets/pic.png)\n")
 
+        make_current(repo)
         report = find_local_orphans(repo)
         assert report.referenced["assets/pic.png"] == [
             "assignments/a1.md",
@@ -418,6 +432,7 @@ class TestReferencedMap:
         )
         _write(repo, "pages/home.md", "home\n")
 
+        make_current(repo)
         report = find_local_orphans(repo)
         assert report.referenced["pages/home.md"] == [
             "course_settings/course_settings.toml"
@@ -431,6 +446,7 @@ class TestReferencedMap:
         )
         _write(repo, "pages/live.md", "live\n")
 
+        make_current(repo)
         report = find_local_orphans(repo)
         assert report.referenced["pages/live.md"] == [
             "course_settings/course_settings.toml (pinned_resources)"
@@ -443,6 +459,7 @@ class TestReferencedMap:
         _write(repo, "pages/home.md", "![u](../assets/used.png)\n")
         _write(repo, "modules/week1.md", "- [Home](../pages/home.md)\n")
 
+        make_current(repo)
         report = find_local_orphans(repo)
         candidates = collect_candidates(repo, load_ignore_matcher(repo))
         assert set(report.referenced) | set(report.orphans) == candidates
@@ -459,6 +476,7 @@ class TestPrintReport:
         _write(repo, "pages/home.md", "![u](../assets/used.png)\n")
         _write(repo, "modules/week1.md", "- [Home](../pages/home.md)\n")
 
+        make_current(repo)
         print_report(find_local_orphans(repo), verbose=True)
         out = capsys.readouterr().out
 
@@ -474,6 +492,7 @@ class TestPrintReport:
         _write(repo, "pages/home.md", "![u](../assets/used.png)\n")
         _write(repo, "modules/week1.md", "- [Home](../pages/home.md)\n")
 
+        make_current(repo)
         print_report(find_local_orphans(repo), verbose=False)
         out = capsys.readouterr().out
 
@@ -484,6 +503,7 @@ class TestPrintReport:
         _write(repo, "pages/home.md", "home\n")
         _write(repo, "modules/week1.md", "- [Home](../pages/home.md)\n")
 
+        make_current(repo)
         print_report(find_local_orphans(repo), verbose=True)
         out = capsys.readouterr().out
 
@@ -493,6 +513,7 @@ class TestPrintReport:
     def test_scope_note_is_printed_before_the_findings(self, repo, capsys):
         _write(repo, "assets/orphan.png", "x")
 
+        make_current(repo)
         print_report(find_local_orphans(repo))
         out = capsys.readouterr().out
 
@@ -500,6 +521,7 @@ class TestPrintReport:
         assert out.index("Note:") < out.index("Unreferenced local files")
 
     def test_scope_note_is_printed_even_when_nothing_is_found(self, repo, capsys):
+        make_current(repo)
         print_report(find_local_orphans(repo))
         out = capsys.readouterr().out
 

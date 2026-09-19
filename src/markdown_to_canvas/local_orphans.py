@@ -50,6 +50,7 @@ from .convert import (
     parse_frontmatter,
     preprocess_snippets,
 )
+from . import repo_format
 from .ignore import IgnoreMatcher, load_ignore_matcher
 from .link_rewrite import extract_local_refs
 from .quiz import split_quiz_body
@@ -431,6 +432,7 @@ def collect_settings_refs(repo_root: Path) -> tuple[set[str], list[str]]:
 def find_local_orphans(repo_root: Path) -> LocalOrphanReport:
     """Scan a course repo and return its orphans plus the inbound-reference map."""
     repo_root = repo_root.resolve()
+    repo_format.check_repo_format(repo_root)
     matcher = load_ignore_matcher(repo_root)
     snippets_dir = repo_root / "snippets"
     errors: list[tuple[str, str]] = []

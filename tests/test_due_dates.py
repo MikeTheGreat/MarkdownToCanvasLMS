@@ -23,6 +23,7 @@ from markdown_to_canvas.sync import (
     run_sync,
 )
 from markdown_to_canvas.config import Config
+from tests.conftest import make_current
 
 FIXTURES = Path(__file__).parent / "fixtures"
 IMSCC_FIXTURES = FIXTURES / "imscc"
@@ -688,6 +689,7 @@ def test_settings_change_applies_dates_only(
     config = Config(
         base_url="https://school.instructure.com", course_id=999, api_token="tok"
     )
+    make_current(course_root)
     run_sync(config, course_root)
 
     # Content should NOT have been re-uploaded (file is up-to-date)
@@ -785,6 +787,7 @@ def test_dates_pass_skips_cached_unchanged(course_root: Path, mocker) -> None:
     }
     course = _setup_cached_dates_run(course_root, mocker, preloaded)
 
+    make_current(course_root)
     run_sync(_cfg(), course_root)
 
     course.get_assignment.assert_not_called()
@@ -829,6 +832,7 @@ def test_dates_pass_updates_only_changed_item(course_root: Path, mocker) -> None
     assignment = _mock_assignment(98765)
     course.get_assignment.return_value = assignment
 
+    make_current(course_root)
     run_sync(_cfg(), course_root)
 
     course.get_assignment.assert_called_once_with(98765)
@@ -872,6 +876,7 @@ def test_due_dates_only_if_false_entry_not_applied(course_root: Path, mocker) ->
     }
     course = _setup_cached_dates_run(course_root, mocker, preloaded)
 
+    make_current(course_root)
     run_sync(_cfg(), course_root)
 
     course.get_assignment.assert_not_called()
@@ -905,6 +910,7 @@ def test_due_dates_only_if_true_entry_applied(course_root: Path, mocker) -> None
     assignment = _mock_assignment(98765)
     course.get_assignment.return_value = assignment
 
+    make_current(course_root)
     run_sync(_cfg(), course_root)
 
     assignment.edit.assert_called_once()
@@ -924,6 +930,7 @@ def test_due_dates_only_if_undefined_flag_dies(course_root: Path, mocker, capsys
     _setup_cached_dates_run(course_root, mocker, preloaded)
 
     with pytest.raises(ValueError, match="undefined course flag 'no_such_flag'"):
+        make_current(course_root)
         run_sync(_cfg(), course_root)
 
 
@@ -951,6 +958,7 @@ def test_removed_entry_notice_and_cache_drop(course_root: Path, mocker, capsys) 
     }
     course = _setup_cached_dates_run(course_root, mocker, preloaded)
 
+    make_current(course_root)
     run_sync(_cfg(), course_root)
 
     out = capsys.readouterr().out
@@ -960,6 +968,7 @@ def test_removed_entry_notice_and_cache_drop(course_root: Path, mocker, capsys) 
     course.get_assignment.assert_not_called()
 
     # Second run: the cache is gone, so the notice does not repeat.
+    make_current(course_root)
     run_sync(_cfg(), course_root)
     assert "NOTICE: due_dates entry" not in capsys.readouterr().out
 
@@ -996,6 +1005,7 @@ def test_change_to_keep_updates_cache_without_api_call(
     }
     course = _setup_cached_dates_run(course_root, mocker, preloaded)
 
+    make_current(course_root)
     run_sync(_cfg(), course_root)
 
     course.get_assignment.assert_not_called()
@@ -1038,6 +1048,7 @@ def test_date_rejection_not_cached_retries_next_run(course_root: Path, mocker, c
     )
     course.get_assignment.return_value = assignment
 
+    make_current(course_root)
     run_sync(_cfg(), course_root)
 
     assert "Could not set due date" in capsys.readouterr().out
@@ -1046,6 +1057,7 @@ def test_date_rejection_not_cached_retries_next_run(course_root: Path, mocker, c
     assignment.edit.reset_mock()
     assignment.edit.side_effect = None
     assignment.edit.return_value = assignment
+    make_current(course_root)
     run_sync(_cfg(), course_root)
     assignment.edit.assert_called_once()
     assert "resolved_dates" in preloaded["assignments/week1.md"]
@@ -1234,6 +1246,7 @@ def test_list_titles_with_centralized_dates(tmp_path: Path) -> None:
         '    {name = "A Quiz", type = "quiz", due_at = "2099-12-31T23:59:00", unlock_at = "", lock_at = ""},\n'
         ']\n'
     )
+    make_current(root)
 
     runner = CliRunner()
     result = runner.invoke(main, ["list-titles", str(root)])
@@ -1247,6 +1260,7 @@ def test_list_titles_empty_repo(tmp_path: Path) -> None:
 
     root = tmp_path / "empty_course"
     root.mkdir()
+    make_current(root)
 
     runner = CliRunner()
     result = runner.invoke(main, ["list-titles", str(root)])

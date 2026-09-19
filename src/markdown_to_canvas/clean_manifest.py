@@ -23,6 +23,7 @@ import click
 
 from . import canvas_api as capi
 from . import manifest as manifest_lib
+from . import repo_format
 from .config import Config
 
 SETTINGS_KEY = "course_settings/course_settings.toml"
@@ -75,7 +76,7 @@ def check_entries(
 
     course_level: list[tuple[str, str]] = []
     for key, entry in manifest.items():
-        if manifest_lib.is_course_key(key, entry):
+        if manifest_lib.is_reserved_key(key, entry):
             continue
         canvas_type = entry.get("canvas_type", "")
         canvas_id = entry.get("canvas_id")
@@ -132,7 +133,7 @@ def plan_invalidate_all(manifest: manifest_lib.ManifestDict) -> CleanPlan:
     """
     plan = CleanPlan()
     for key, entry in manifest.items():
-        if manifest_lib.is_course_key(key, entry):
+        if manifest_lib.is_reserved_key(key, entry):
             continue
         plan.checked += 1
         plan.removals[key] = "belongs to the previous course"
@@ -241,11 +242,19 @@ def apply_clean(
     )
 
 
+def load_manifest(
+    repo_root: Path, config: Config
+) -> tuple[manifest_lib.ManifestDict, Path]:
+    """Check the repo's format, then load the manifest belonging to ``config``."""
+    repo_format.check_repo_format(repo_root)
+    manifest_path = manifest_lib.manifest_path_for(repo_root, config.config_path)
+    return manifest_lib.load(manifest_path), manifest_path
+
+
 def run_plan(config: Config, repo_root: Path, course) -> tuple[
     manifest_lib.ManifestDict, Path, CleanPlan
 ]:
-    manifest_path = manifest_lib.migrate_legacy_manifest(repo_root, config.config_path)
-    manifest = manifest_lib.load(manifest_path)
+    manifest, manifest_path = load_manifest(repo_root, config)
     click.echo("Listing the course's pages, assignments, discussions, quizzes, modules and files...")
     canvas_ids = capi.list_course_object_ids(course)
     plan = plan_clean(manifest, canvas_ids, config, repo_root)

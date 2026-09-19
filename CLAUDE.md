@@ -44,6 +44,19 @@ TODO.md is only for possible future work items. Once a feature is implemented, d
 
 The three most important subcommands are **update**, **import**, **mv** and **publish**. When making changes to any one of them, ensure the same change is reflected in the other two where applicable.
 
+## Changing how existing repo files are read: bump the format version
+
+A course repo records its file format as `format_version` in
+`course_settings/course_settings.toml`, and every manifest records its own in
+`_repo_format`. The tool's current version is `repo_format.FORMAT_VERSION`.
+Any change that makes the tool read an existing repo file (`course_settings/`
+files, content frontmatter, module or quiz files, manifests) differently, or
+that makes an older tool misread a file the new tool writes, is a breaking
+change: increase `repo_format.FORMAT_VERSION` by one and add a migration for
+the old version to `repo_format.MIGRATIONS`, with tests. Additive changes that
+older files already satisfy (for example a new optional key) do not need a
+bump. Nothing enforces this mechanically.
+
 ## When asked to update documentation, you should normally consider three main files
 - README.md is for notes that humans using the tool will read
 - ARCHTECTURE.md is for notes, mostly for yourself, about the internals of the tool work

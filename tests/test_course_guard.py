@@ -11,6 +11,7 @@ from markdown_to_canvas import manifest as manifest_lib
 from markdown_to_canvas.config import Config
 from markdown_to_canvas.course_guard import CourseGuardError, check_course
 from markdown_to_canvas.mv import compute_manifest_updates
+from tests.conftest import make_current
 
 BASE = "https://school.instructure.com"
 
@@ -32,6 +33,7 @@ def test_first_sync_asks_before_recording(tmp_path, capsys) -> None:
     chance to notice it is the wrong one."""
     path = tmp_path / ".manifest-canvas.toml"
     prompts: list[str] = []
+    make_current(path.parent)
     check_course(path, _config(), "Fall", confirm=lambda p: prompts.append(p) or True,
                  interactive=lambda: True)
     stored = manifest_lib.get_course_identity(manifest_lib.load(path))
@@ -43,6 +45,7 @@ def test_first_sync_asks_before_recording(tmp_path, capsys) -> None:
 def test_first_sync_declined_records_nothing(tmp_path) -> None:
     path = tmp_path / ".manifest-canvas.toml"
     with pytest.raises(CourseGuardError):
+        make_current(path.parent)
         check_course(path, _config(), "Fall", confirm=lambda _: False,
                      interactive=lambda: True)
     assert not path.exists()
@@ -52,6 +55,7 @@ def test_same_course_passes_silently(tmp_path) -> None:
     path = tmp_path / ".manifest-canvas.toml"
     manifest = {"pages/a.md": _page_entry()}
     manifest_lib.set_course_identity(manifest, path, BASE + "/", 200, "Fall")
+    make_current(path.parent)
     check_course(path, _config(), "Fall", confirm=lambda _: pytest.fail("asked"))
 
 
@@ -61,6 +65,7 @@ def test_course_change_declined_changes_nothing(tmp_path, capsys) -> None:
     manifest_lib.set_course_identity(manifest, path, BASE, 100, "Spring")
     before = path.read_bytes()
     with pytest.raises(CourseGuardError):
+        make_current(path.parent)
         check_course(path, _config(200), "Fall", confirm=lambda _: False,
                      interactive=lambda: True)
     assert path.read_bytes() == before
@@ -79,10 +84,11 @@ def test_course_change_accepted_clears_every_canvas_id(tmp_path) -> None:
     }
     manifest_lib.set_course_identity(manifest, path, BASE, 100, "Spring")
 
+    make_current(path.parent)
     check_course(path, _config(200), "Fall", confirm=lambda _: True, interactive=lambda: True)
 
     loaded = manifest_lib.load(path)
-    assert list(loaded) == [manifest_lib.COURSE_KEY]
+    assert set(loaded) == {manifest_lib.COURSE_KEY, manifest_lib.FORMAT_KEY}
     stored = manifest_lib.get_course_identity(loaded)
     assert stored["course_id"] == 200 and stored["course_name"] == "Fall"
 
@@ -93,16 +99,19 @@ def test_course_change_without_terminal_needs_yes(tmp_path) -> None:
     manifest_lib.set_course_identity(manifest, path, BASE, 100, "Spring")
     before = path.read_bytes()
     with pytest.raises(CourseGuardError, match="--yes"):
+        make_current(path.parent)
         check_course(path, _config(200), "Fall", interactive=lambda: False)
     assert path.read_bytes() == before
+    make_current(path.parent)
     check_course(path, _config(200), "Fall", assume_yes=True, interactive=lambda: False)
-    assert list(manifest_lib.load(path)) == [manifest_lib.COURSE_KEY]
+    assert set(manifest_lib.load(path)) == {manifest_lib.COURSE_KEY, manifest_lib.FORMAT_KEY}
 
 
 def test_unrecorded_manifest_with_entries_asks(tmp_path) -> None:
     path = tmp_path / ".manifest-canvas.toml"
     _write(path, {"pages/a.md": _page_entry()})
     prompts: list[str] = []
+    make_current(path.parent)
     check_course(path, _config(), "Fall", confirm=lambda p: prompts.append(p) or True,
                  interactive=lambda: True)
     assert len(prompts) == 1
@@ -115,6 +124,7 @@ def test_unrecorded_manifest_declined_changes_nothing(tmp_path) -> None:
     path = tmp_path / ".manifest-canvas.toml"
     _write(path, {"pages/a.md": _page_entry()})
     with pytest.raises(CourseGuardError):
+        make_current(path.parent)
         check_course(path, _config(), "Fall", confirm=lambda _: False, interactive=lambda: True)
     assert manifest_lib.get_course_identity(manifest_lib.load(path)) is None
 
@@ -123,7 +133,9 @@ def test_unrecorded_manifest_without_terminal_needs_yes(tmp_path) -> None:
     path = tmp_path / ".manifest-canvas.toml"
     _write(path, {"pages/a.md": _page_entry()})
     with pytest.raises(CourseGuardError, match="--yes"):
+        make_current(path.parent)
         check_course(path, _config(), "Fall", interactive=lambda: False)
+    make_current(path.parent)
     check_course(path, _config(), "Fall", assume_yes=True, interactive=lambda: False)
     assert manifest_lib.get_course_identity(manifest_lib.load(path)) is not None
 
@@ -145,6 +157,7 @@ def test_prune_manifest_only_keeps_course_identity(tmp_path) -> None:
     path = tmp_path / ".manifest-canvas.toml"
     manifest = {"pages/gone.md": _page_entry()}
     manifest_lib.set_course_identity(manifest, path, BASE, 200, "Fall")
+    make_current(tmp_path)
     run_prune(_config(), tmp_path, "manifest")
     loaded = manifest_lib.load(path)
     assert "pages/gone.md" not in loaded
@@ -154,7 +167,7 @@ def test_prune_manifest_only_keeps_course_identity(tmp_path) -> None:
 def _cli_repo(tmp_path: Path, course_id: int) -> Path:
     root = tmp_path / "course"
     (root / "course_settings").mkdir(parents=True)
-    (root / "course_settings" / "course_settings.toml").write_text("")
+    make_current(root)
     (root / "course_settings" / "canvas.toml").write_text(
         f'base_url = "{BASE}"\ncourse_id = {course_id}\n'
     )
@@ -177,7 +190,7 @@ def test_cli_update_switches_course_then_syncs_with_yes(tmp_path, mocker, monkey
 
     assert result.exit_code == 0, result.output
     assert "Course ID: 200" in result.output and "Course:    Fall" in result.output
-    assert list(manifest_lib.load(path)) == [manifest_lib.COURSE_KEY]
+    assert set(manifest_lib.load(path)) == {manifest_lib.COURSE_KEY, manifest_lib.FORMAT_KEY}
     run_sync.assert_called_once()
 
 

@@ -17,6 +17,7 @@ import yaml
 from . import canvas_api as capi
 from . import dryrun
 from . import manifest as manifest_lib
+from . import repo_format
 from .conditionals import (
     apply_conditionals,
     find_referenced_flags,
@@ -816,27 +817,6 @@ def _parse_item_attrs(comment_text: str) -> dict[str, str]:
     return {m.group(1): m.group(2) for m in _ITEM_ATTR_KV_RE.finditer(comment_text)}
 
 
-def _find_nested_key(obj: Any, target: str) -> str | None:
-    """Return a dotted path to `target` if it appears anywhere inside obj, else None.
-
-    Used to detect a top-level key (e.g. tab_configuration) that the user accidentally
-    nested under a TOML [section] header.
-    """
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            if key == target:
-                return key
-            found = _find_nested_key(value, target)
-            if found:
-                return f"{key}.{found}"
-    elif isinstance(obj, list):
-        for item in obj:
-            found = _find_nested_key(item, target)
-            if found:
-                return found
-    return None
-
-
 def parse_module_body(
     body: str, module_file: Path, course_root: Path
 ) -> list[dict[str, Any]]:
@@ -1130,6 +1110,10 @@ _NON_METADATA_SETTINGS_KEYS = _SETTINGS_SECTION_KEYS + (
     "due_dates",
     "course_flags",
     "pinned_resources",
+    # Repo-format bookkeeping written by import/upgrade; never Canvas metadata.
+    "format_version",
+    "created_by",
+    "upgraded_by",
 )
 
 
@@ -1413,20 +1397,11 @@ def sync_course_settings(
             if post_ok:
                 _section_done("default_post_policy")
 
-        # Course-navigation (left sidebar) order/visibility. The misplaced-key
-        # lint runs on every parse (not just when the section changed) — the
-        # misplaced key lives inside some *other* section's value, so its own
-        # section hash never trips.
+        # Course-navigation (left sidebar) order/visibility. A nested
+        # tab_configuration never gets here: repo_format.check_repo_format moves
+        # it to the top level (or reports it, under --check-all) before any sync.
         tab_config_raw = settings.get("tab_configuration")
         if tab_config_raw is None:
-            misplaced = _find_nested_key(settings, "tab_configuration")
-            if misplaced:
-                print(
-                    f"  WARNING: 'tab_configuration' was found nested under {misplaced!r}, "
-                    "not at the top level, so course navigation was NOT updated. In TOML a "
-                    "top-level key must come BEFORE any [section]/[[section]] headers — move "
-                    "the tab_configuration block above the first section in course_settings.toml."
-                )
             if "tab_configuration" in stale_sections:
                 _section_done("tab_configuration")
         elif "tab_configuration" in stale_sections:
@@ -1752,6 +1727,7 @@ def run_sync(
     ``manifest.manifest_name_for``), so two canvas.toml files in one repo keep
     two independent sets of Canvas IDs.
     """
+    repo_format.check_repo_format(repo_path)
     manifest_path: Path | None
     if check_all:
         manifest_name = manifest_lib.manifest_name_for(config.config_path)
@@ -1766,9 +1742,7 @@ def run_sync(
         manifest_path = None
     else:
         api = capi
-        manifest_path = manifest_lib.migrate_legacy_manifest(
-            repo_path, config.config_path
-        )
+        manifest_path = manifest_lib.manifest_path_for(repo_path, config.config_path)
         manifest = manifest_lib.load(manifest_path)
         course = capi.get_course(config)
     matcher = load_ignore_matcher(repo_path)
@@ -1933,6 +1907,29 @@ def _in_use_resources(course) -> dict[ResourceKey, str]:
     return in_use
 
 
+def collect_title_items(
+    repo_path: Path, config: Config | None = None
+) -> list[tuple[str | None, str, str]]:
+    """(due_at, title, local_key) for every assignment, discussion and quiz.
+
+    The library side of `list-titles`. ``config`` supplies the [course_flags]
+    overrides that decide which due_dates ``only_if`` entries apply. The ignore
+    matcher is deliberately not applied.
+    """
+    repo_format.check_repo_format(repo_path)
+    due_dates = filter_due_dates_by_flags(
+        load_due_dates(repo_path), load_course_flags(repo_path, config=config)
+    )
+    items: list[tuple[str | None, str, str]] = []
+    for local_key, md_path, ctype in iter_gradeable_content(repo_path, matcher=None):
+        fm, _ = parse_frontmatter(md_path.read_text())
+        title = fm.get("title", md_path.stem)
+        override = find_due_date_override(due_dates, title, ctype)
+        due_at = (override or {}).get("due_at") or fm.get("due_at") or None
+        items.append((due_at if due_at else None, title, local_key))
+    return items
+
+
 def run_prune(config: Config, repo_path: Path, mode: str) -> bool:
     """Delete or unpublish Canvas items whose local source file no longer exists.
 
@@ -1947,7 +1944,8 @@ def run_prune(config: Config, repo_path: Path, mode: str) -> bool:
     object (and question banks, which have no unpublish concept) are skipped with a
     warning and keep their manifest entry. Returns True if any errors occurred.
     """
-    manifest_path = manifest_lib.migrate_legacy_manifest(repo_path, config.config_path)
+    repo_format.check_repo_format(repo_path)
+    manifest_path = manifest_lib.manifest_path_for(repo_path, config.config_path)
     manifest = manifest_lib.load(manifest_path)
 
     # Canvas-only modules (module_order.toml entries cached under
@@ -1958,7 +1956,7 @@ def run_prune(config: Config, repo_path: Path, mode: str) -> bool:
         for key, entry in manifest.items()
         if not (repo_path / key).exists()
         and entry.get("canvas_type") != EXTERNAL_MODULE_TYPE
-        and not manifest_lib.is_course_key(key, entry)
+        and not manifest_lib.is_reserved_key(key, entry)
     ]
     if not orphans:
         print("No orphaned manifest entries found; nothing to prune.")
@@ -3249,7 +3247,8 @@ def run_targeted_sync(
     -s (single_targets) runs second, independently: no BFS, no dependency on -t's visited set.
     If -t already uploaded a file and updated its manifest timestamp, -s will skip it via needs_sync.
     """
-    manifest_path = manifest_lib.migrate_legacy_manifest(repo_path, config.config_path)
+    repo_format.check_repo_format(repo_path)
+    manifest_path = manifest_lib.manifest_path_for(repo_path, config.config_path)
     manifest = manifest_lib.load(manifest_path)
     course = capi.get_course(config)
     snippets_dir = repo_path / "snippets"

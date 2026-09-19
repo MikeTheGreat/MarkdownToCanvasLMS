@@ -21,8 +21,10 @@ load_dotenv(find_dotenv(usecwd=True), override=True, verbose=True)
 
 from .canvas_api import get_course, read_tab_configuration
 from . import manifest as manifest_lib
+from . import repo_format
 from .clean_manifest import (
     apply_clean,
+    load_manifest,
     plan_invalidate_all,
     print_plan,
     run_plan,
@@ -36,7 +38,8 @@ from .local_orphans import print_report as print_local_orphan_report
 from .mv import run_mv
 from .orphans import find_orphans, print_report
 from .publish import run_publish
-from .sync import run_prune, run_sync, run_targeted_sync
+from .repo_format import RepoFormatError, run_upgrade
+from .sync import collect_title_items, run_prune, run_sync, run_targeted_sync
 
 
 # all commands must use die() for user-facing errors — no tracebacks, no raw exceptions.
@@ -65,7 +68,7 @@ def _resolve_repo(repo: Path | None) -> Path:
 
 def _guard_course(repo: Path, cfg: Config, course, assume_yes: bool) -> None:
     """Stop unless the manifest's Canvas IDs belong to the configured course."""
-    manifest_path = manifest_lib.migrate_legacy_manifest(repo, cfg.config_path)
+    manifest_path = manifest_lib.manifest_path_for(repo, cfg.config_path)
     try:
         check_course(manifest_path, cfg, course.name, assume_yes=assume_yes)
     except CourseGuardError as e:
@@ -96,6 +99,8 @@ def _handle_cli_errors(func):
             die(f"Config file not found: {e.filename}")
         except tomllib.TOMLDecodeError as e:
             die(f"Invalid canvas.toml: {e}")
+        except RepoFormatError as e:
+            die(str(e))
         except (ValueError, KeyError) as e:
             die("KeyError or ValueError:" + str(e))
         except requests.exceptions.ConnectionError:
@@ -433,6 +438,8 @@ def find_canvas_orphans_cmd(repo: Path, config: Path | None) -> None:
     if config is None:
         config = repo / "course_settings" / "canvas.toml"
     cfg = load_config(config)
+    # find_orphans() only reads Canvas, so the repo format is checked here.
+    repo_format.check_repo_format(repo)
 
     click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})")
 
@@ -562,8 +569,7 @@ def clean_manifest_cmd(
     click.echo(f"Course:    {course.name}")
 
     if no_canvas_check:
-        manifest_path = manifest_lib.migrate_legacy_manifest(repo, cfg.config_path)
-        manifest = manifest_lib.load(manifest_path)
+        manifest, manifest_path = load_manifest(repo, cfg)
         plan = plan_invalidate_all(manifest)
     else:
         try:
@@ -683,6 +689,44 @@ def create_tool_aliases(course_url: str) -> None:
     click.echo(_format_tab_configuration(tab_config))
 
 
+@main.command(name="upgrade")
+@click.argument(
+    "repo",
+    required=False,
+    default=None,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.option(
+    "--noop",
+    "-n",
+    is_flag=True,
+    default=False,
+    help="Show what would change without writing any file.",
+)
+def upgrade_cmd(repo: Path | None, noop: bool) -> None:
+    """Upgrade a course repo (and its manifests) to this tool's file format.
+
+    Every other command refuses to run on a repo written for a different
+    format version. upgrade applies each migration from the repo's version to
+    the tool's, edits course_settings.toml in place (comments and layout are
+    kept), records the run in `upgraded_by`, and moves a misplaced
+    tab_configuration to the top level. It never contacts Canvas and runs
+    whether or not the git working tree is clean.
+
+    Manifests are local files, so run upgrade on every machine that holds one.
+
+    REPO is the course content repo. If omitted, the enclosing repo is found by
+    walking up from the current directory. When the repo has no
+    course_settings.toml yet, pass its path explicitly.
+    """
+    repo = _resolve_repo(repo).resolve()
+    click.echo(f"Repo:      {repo}")
+    try:
+        run_upgrade(repo, noop=noop)
+    except RepoFormatError as e:
+        die(str(e))
+
+
 @main.command(name="list-titles")
 @click.argument(
     "repo",
@@ -706,33 +750,12 @@ def list_titles(repo: Path, config: Path | None) -> None:
     a due date are listed alphabetically by title. --config selects which
     section's course flags apply to due_dates `only_if` entries.
     """
-    from .sync import (
-        filter_due_dates_by_flags,
-        find_due_date_override,
-        iter_gradeable_content,
-        load_course_flags,
-        load_due_dates,
-        parse_frontmatter,
-    )
-
     repo = repo.resolve()
     cfg = _flags_config(repo, config)
     try:
-        due_dates = filter_due_dates_by_flags(
-            load_due_dates(repo), load_course_flags(repo, config=cfg)
-        )
-    except ValueError as e:
+        items = collect_title_items(repo, cfg)  # (due_at, title, path)
+    except (ValueError, RepoFormatError) as e:
         die(str(e))
-
-    items: list[tuple[str | None, str, str]] = []  # (due_at, title, path)
-
-    # list-titles deliberately does not apply the ignore matcher (matcher=None).
-    for local_key, md_path, ctype in iter_gradeable_content(repo, matcher=None):
-        fm, _ = parse_frontmatter(md_path.read_text())
-        title = fm.get("title", md_path.stem)
-        override = find_due_date_override(due_dates, title, ctype)
-        due_at = (override or {}).get("due_at") or fm.get("due_at") or None
-        items.append((due_at if due_at else None, title, local_key))
 
     if not items:
         click.echo("No assignments, discussions, or quizzes found.")

@@ -1,10 +1,10 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
 name = "markdown-to-canvas"
-version = "0.2.0"
+dynamic = ["version"]
 description = "Sync Markdown from a repo to Canvas LMS"
 requires-python = ">=3.11"
 dependencies = [
@@ -16,6 +16,7 @@ dependencies = [
     "tomli-w>=1.0",   # for writing TOML (tomllib reads only in stdlib)
     "python-dotenv>=1.0",
     "pathspec>=0.12",  # gitignore-style pattern matching for ignore files
+    "tomlkit>=0.12",  # comment-preserving TOML edits (upgrade, tab_configuration fix)
 ]
 
 [project.scripts]
@@ -30,6 +31,10 @@ publish = [
     "mkdocs>=1.5",
     "mkdocs-material>=9.5",
 ]
+
+[tool.hatch.version]
+source = "vcs"
+fallback-version = "0.0.0+unknown"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/markdown_to_canvas"]

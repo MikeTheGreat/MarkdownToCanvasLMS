@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import ANY, MagicMock, call
@@ -10,6 +11,8 @@ from unittest.mock import ANY, MagicMock, call
 import pytest
 from canvasapi.exceptions import Forbidden, ResourceDoesNotExist
 
+from tests.conftest import make_current
+from markdown_to_canvas.repo_format import FORMAT_VERSION
 from markdown_to_canvas.config import Config
 from markdown_to_canvas.sync import (
     _load_module_order,
@@ -190,6 +193,7 @@ def test_first_sync_creates_all_content(mock_course, course_root, mocker) -> Non
     mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     # One stub page create + no extra create_page (real page goes via edit)
@@ -208,6 +212,7 @@ def test_first_sync_stub_created_before_real_page(mock_course, course_root, mock
     mocker.patch("markdown_to_canvas.manifest.flush")
     stub_page = _setup_first_sync_mocks(mock_course)
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     # Stub: published=False, empty body
@@ -226,6 +231,7 @@ def test_first_sync_assignment_frontmatter_passed_to_canvas(mock_course, course_
     mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     call_kwargs = mock_course.create_assignment.call_args[1]["assignment"]
@@ -273,6 +279,7 @@ def test_unpublished_announcement_is_skipped_not_posted(mock_course, course_root
     _setup_first_sync_mocks(mock_course)
     _write_announcement(course_root, published=False)
 
+    make_current(course_root)
     run_sync(_config(), course_root, verbose=True)
 
     # Nothing announcement-shaped was sent to Canvas.
@@ -289,6 +296,7 @@ def test_unpublished_announcement_skip_message_quiet_by_default(
     _setup_first_sync_mocks(mock_course)
     _write_announcement(course_root, published=False)
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     assert _announcement_create_call(mock_course) is None
@@ -309,6 +317,7 @@ def test_unpublished_announcement_skipped_before_link_rewriting(
         encoding="utf-8",
     )
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     out = capsys.readouterr().out
@@ -322,6 +331,7 @@ def test_published_announcement_is_posted_without_published_kwarg(mock_course, c
     _setup_first_sync_mocks(mock_course)
     _write_announcement(course_root, published=True)
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     call = _announcement_create_call(mock_course)
@@ -350,6 +360,7 @@ def test_announcement_forwards_supported_fields_and_ignores_others(
         },
     )
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     call = _announcement_create_call(mock_course)
@@ -382,6 +393,7 @@ def test_announcement_ignored_fields_warn_inline_and_in_summary(
         },
     )
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     out = capsys.readouterr().out
@@ -405,6 +417,7 @@ def test_announcement_no_ignored_summary_when_all_fields_supported(
     _setup_first_sync_mocks(mock_course)
     _write_announcement(course_root, published=True, extra={"allow_rating": "true"})
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     out = capsys.readouterr().out
@@ -420,6 +433,7 @@ def test_announcement_recorded_with_announcement_type(mock_course, course_root, 
     _setup_first_sync_mocks(mock_course)
     _write_announcement(course_root, published=True)
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     # record(manifest, manifest_path, local_key, canvas_id, canvas_type)
@@ -474,6 +488,7 @@ def test_second_sync_updates_not_creates(mock_course, course_root, mocker) -> No
     mock_course.get_module.return_value = module
     module.create_module_item.side_effect = [_mock_item(i) for i in [201, 202, 203, 204, 205, 206]]
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     # No creates for content
@@ -515,6 +530,7 @@ def test_interrupted_sync_skips_completed_asset(mock_course, course_root, mocker
     mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     mock_course.upload.assert_not_called()           # asset skipped
@@ -536,6 +552,7 @@ def test_h1_heading_blocks_upload(
     page.write_text("---\ntitle: Test\npublished: true\n---\n\n# Big Heading\n\nBody.\n")
     mock_course.create_page.return_value = _mock_page(1, "test")
 
+    make_current(course_root)
     had_errors = run_sync(_config(), course_root)
 
     out = capsys.readouterr().out
@@ -555,6 +572,7 @@ def test_no_h1_heading_no_warning(
     page.write_text("---\ntitle: Test\npublished: true\n---\n\n## Sub Heading\n\nBody.\n")
     mock_course.create_page.return_value = _mock_page(1, "test")
 
+    make_current(course_root)
     had_errors = run_sync(_config(), course_root)
 
     out = capsys.readouterr().out
@@ -576,6 +594,7 @@ def test_missing_local_file_tag_removed_sync_continues(
     mock_page = _mock_page(1, "test")
     mock_course.create_page.return_value = mock_page
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     out = capsys.readouterr().out
@@ -625,6 +644,7 @@ def test_module_sync_item_order(mock_course, course_root, mocker) -> None:
     mock_course.create_module.return_value = module
     module.create_module_item.side_effect = [_mock_item(i) for i in [201, 202, 203, 204, 205, 206]]
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     item_calls = module.create_module_item.call_args_list
@@ -662,6 +682,7 @@ def test_published_content_in_unpublished_module_warns(
     )
     _setup_first_sync_mocks(mock_course)
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     out = capsys.readouterr().out
@@ -690,6 +711,7 @@ def test_published_content_in_published_module_no_warning(
     mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     out = capsys.readouterr().out
@@ -747,6 +769,7 @@ def test_module_resynced_when_referenced_page_updated(
     mock_course.get_module.return_value = module
     module.create_module_item.side_effect = [_mock_item(i) for i in range(201, 210)]
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     # Page was re-uploaded
@@ -800,6 +823,7 @@ def test_module_not_resynced_when_referenced_content_unchanged(
     mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
     mocker.patch("markdown_to_canvas.manifest.flush")
 
+    make_current(course_root)
     run_sync(_config(), course_root, verbose=True)
 
     mock_course.create_module.assert_not_called()
@@ -840,6 +864,7 @@ def test_up_to_date_content_file_is_skipped(mock_course, course_root, mocker, ca
     mock_course.create_module.return_value = module
     module.create_module_item.side_effect = [_mock_item(i) for i in range(201, 210)]
 
+    make_current(course_root)
     run_sync(_config(), course_root, verbose=True)
 
     mock_course.create_assignment.assert_not_called()
@@ -871,6 +896,7 @@ def test_force_uploads_re_uploads_up_to_date_file(mock_course, course_root, mock
     mock_course.create_module.return_value = module
     module.create_module_item.side_effect = [_mock_item(i) for i in range(201, 210)]
 
+    make_current(course_root)
     run_sync(_config(), course_root, force_uploads=True)
 
     mock_course.upload.assert_called_once()  # asset re-uploaded despite old mtime
@@ -899,6 +925,7 @@ def test_canvas_newer_skips_upload_and_prints_summary(
     page_mock.updated_at = "2999-12-31T00:00:00+00:00"  # Canvas far in future → newer
     mock_course.get_page.return_value = page_mock
 
+    make_current(course_root)
     run_targeted_sync(_config(), course_root, [], [str(course_root / "pages" / "syllabus.md")])
 
     # get_page called once for Canvas timestamp check; upload skipped so no edit
@@ -925,6 +952,7 @@ def test_canvas_older_upload_proceeds(mock_course, course_root, mocker) -> None:
     page_mock.updated_at = "2020-01-01T00:00:00+00:00"  # Canvas is old → local file is newer
     mock_course.get_page.return_value = page_mock
 
+    make_current(course_root)
     run_targeted_sync(_config(), course_root, [], [str(course_root / "pages" / "syllabus.md")])
 
     assert mock_course.get_page.call_count == 2  # timestamp check + actual update
@@ -946,6 +974,7 @@ def test_force_overwrite_skips_canvas_check_and_uploads(mock_course, course_root
     page_mock.updated_at = "2999-12-31T00:00:00+00:00"  # Canvas "newer" but should be ignored
     mock_course.get_page.return_value = page_mock
 
+    make_current(course_root)
     run_targeted_sync(
         _config(), course_root, [], [str(course_root / "pages" / "syllabus.md")],
         force_overwrite=True,
@@ -972,6 +1001,7 @@ def test_canvas_newer_skips_asset_upload(mock_course, course_root, mocker) -> No
     file_mock.updated_at = "2999-12-31T00:00:00+00:00"  # Canvas far in future → newer
     mock_course.get_file.return_value = file_mock
 
+    make_current(course_root)
     run_targeted_sync(
         _config(), course_root, [], [str(course_root / "assets" / "images" / "fig.png")]
     )
@@ -991,6 +1021,7 @@ def test_single_target_syncs_only_specified_file(mock_course, course_root, mocke
     mock_course.create_assignment.return_value = _mock_assignment(98765)
     mock_course.create_page.return_value = _mock_page(99999, "syllabus-stub")
 
+    make_current(course_root)
     run_targeted_sync(
         _config(), course_root,
         recursive_targets=[],
@@ -1018,6 +1049,7 @@ def test_single_target_frontmatter_snippet_merged(mock_course, course_root, mock
         "\nDo the worksheet.\n"
     )
 
+    make_current(course_root)
     run_targeted_sync(
         _config(), course_root,
         recursive_targets=[],
@@ -1045,6 +1077,7 @@ def test_single_target_respects_timestamp(mock_course, course_root, mocker, caps
     mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
     mocker.patch("markdown_to_canvas.manifest.flush")
 
+    make_current(course_root)
     run_targeted_sync(
         _config(), course_root,
         recursive_targets=[],
@@ -1086,6 +1119,7 @@ def test_recursive_target_traverses_refs(mock_course, course_root, mocker) -> No
     mock_course.create_module.return_value = module
     module.create_module_item.side_effect = [_mock_item(i) for i in range(201, 210)]
 
+    make_current(course_root)
     run_targeted_sync(
         _config(), course_root,
         recursive_targets=[str(course_root / "modules" / "week-1.md")],
@@ -1110,6 +1144,7 @@ def test_recursive_target_no_duplicate_processing(mock_course, course_root, mock
     mock_course.create_assignment.return_value = _mock_assignment(98765)
 
     page_path = str(course_root / "pages" / "syllabus.md")
+    make_current(course_root)
     run_targeted_sync(
         _config(), course_root,
         recursive_targets=[page_path],
@@ -1172,6 +1207,7 @@ def test_quiz_sync_creates_quiz_on_first_sync(mock_course, mocker, tmp_path) -> 
     mock_course.get_quiz.return_value = quiz
     quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
 
+    make_current(root)
     run_sync(_config(), root)
 
     mock_course.create_quiz.assert_called_once()
@@ -1208,6 +1244,7 @@ def test_quiz_sync_updates_quiz_on_second_sync(mock_course, mocker, tmp_path) ->
     mock_course.get_quiz.return_value = quiz
     quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
 
+    make_current(root)
     run_sync(_config(), root)
 
     mock_course.create_quiz.assert_not_called()
@@ -1238,6 +1275,7 @@ def test_published_quiz_update_warns_about_manual_save(
     mock_course.get_quiz.return_value = quiz
     quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
 
+    make_current(root)
     run_sync(_config(), root)
 
     out = capsys.readouterr().out
@@ -1260,6 +1298,7 @@ def test_unpublished_quiz_update_does_not_warn(mock_course, mocker, tmp_path, ca
     mock_course.get_quiz.return_value = quiz
     quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
 
+    make_current(root)
     run_sync(_config(), root)
 
     assert "Save It Now" not in capsys.readouterr().out
@@ -1285,6 +1324,7 @@ def test_quiz_deleted_on_canvas_is_recreated(mock_course, mocker, tmp_path, caps
         return new_quiz
     mock_course.get_quiz.side_effect = _get_quiz
 
+    make_current(root)
     run_sync(_config(), root)
 
     mock_course.get_quiz.assert_any_call(12345)
@@ -1301,6 +1341,7 @@ def test_quiz_questions_created_in_order(mock_course, mocker, tmp_path) -> None:
     mock_course.get_quiz.return_value = quiz
     quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
 
+    make_current(root)
     run_sync(_config(), root)
 
     assert quiz.create_question.call_count == 2
@@ -1329,6 +1370,7 @@ def test_quiz_skipped_if_up_to_date(mock_course, mocker, tmp_path, capsys) -> No
     mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
     mocker.patch("markdown_to_canvas.manifest.flush")
 
+    make_current(root)
     run_sync(_config(), root, verbose=True)
 
     mock_course.create_quiz.assert_not_called()
@@ -1355,6 +1397,7 @@ def test_quiz_resynced_when_question_file_updated(mock_course, mocker, tmp_path)
     mock_course.get_quiz.return_value = quiz
     quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
 
+    make_current(root)
     run_sync(_config(), root)
 
     # Question file mtime > last_synced → whole quiz re-synced via update
@@ -1398,11 +1441,13 @@ def test_quiz_resynced_when_referenced_snippet_updated(mock_course, mocker, tmp_
     quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
 
     # Sanity check: with everything aged, nothing should sync.
+    make_current(root)
     run_sync(_config(), root)
     mock_course.get_quiz.assert_not_called()
 
     # Now only the snippet changes (current mtime, after last_synced).
     snippet.write_text("Updated hint.")
+    make_current(root)
     run_sync(_config(), root)
 
     mock_course.get_quiz.assert_called_with(12345)
@@ -1429,6 +1474,7 @@ def test_quiz_module_item_type_is_quiz(mock_course, mocker, tmp_path) -> None:
     mock_course.create_module.return_value = module
     module.create_module_item.return_value = _mock_item(201)
 
+    make_current(root)
     run_sync(_config(), root)
 
     module.create_module_item.assert_called_once()
@@ -1460,6 +1506,7 @@ def test_file_module_item_type_is_file(mock_course, mocker, tmp_path) -> None:
     mock_course.create_module.return_value = module
     module.create_module_item.return_value = _mock_item(201)
 
+    make_current(root)
     run_sync(_config(), root)
 
     module.create_module_item.assert_called_once()
@@ -1493,6 +1540,7 @@ def test_unpublished_file_item_warns(mock_course, mocker, tmp_path, capsys) -> N
     mi.type = "File"
     module.create_module_item.return_value = mi
 
+    make_current(root)
     run_sync(_config(), root)
 
     out = capsys.readouterr().out
@@ -1520,6 +1568,7 @@ def test_single_target_skipped_when_t_already_uploaded_it(mock_course, course_ro
     mock_course.create_module.return_value = module
     module.create_module_item.side_effect = [_mock_item(i) for i in range(201, 210)]
 
+    make_current(course_root)
     run_targeted_sync(
         _config(), course_root,
         recursive_targets=[str(course_root / "modules" / "week-1.md")],
@@ -1842,6 +1891,7 @@ def test_assignment_lock_at_unlock_at_grading_type_passed_to_canvas(
     mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     call_kwargs = mock_course.create_assignment.call_args[1]["assignment"]
@@ -1874,6 +1924,7 @@ def test_assignment_group_grading_peer_review_fields_passed_to_canvas(
         "Submit your work.\n"
     )
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     call_kwargs = mock_course.create_assignment.call_args[1]["assignment"]
@@ -1904,6 +1955,7 @@ def test_assignment_group_id_numeric_passed_to_canvas(
         "Body.\n"
     )
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     call_kwargs = mock_course.create_assignment.call_args[1]["assignment"]
@@ -1928,6 +1980,7 @@ def test_assignment_group_id_by_name_resolved_to_canvas_id(
         "Body.\n"
     )
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     call_kwargs = mock_course.create_assignment.call_args[1]["assignment"]
@@ -1949,6 +2002,7 @@ def test_assignment_group_id_unknown_name_skipped(
         "Body.\n"
     )
 
+    make_current(course_root)
     had_errors = run_sync(_config(), course_root)
 
     assert had_errors, "run_sync should return True (errors present)"
@@ -1983,6 +2037,7 @@ def test_quiz_assignment_group_id_by_name_resolved_to_canvas_id(
     mock_course.get_quiz.return_value = quiz
     quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
 
+    make_current(root)
     run_sync(_config(), root)
 
     call_params = mock_course.create_quiz.call_args[1]["quiz"]
@@ -2007,6 +2062,7 @@ def test_quiz_assignment_group_id_unknown_name_skipped(
     mock_course.get_quiz.return_value = quiz
     quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
 
+    make_current(root)
     had_errors = run_sync(_config(), root)
 
     assert had_errors, "run_sync should return True (errors present)"
@@ -2029,6 +2085,7 @@ def test_graded_discussion_fields_passed_as_assignment_dict(
     mocker.patch("markdown_to_canvas.manifest.flush")
     _setup_first_sync_mocks(mock_course)
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     call_kwargs = mock_course.create_discussion_topic.call_args[1]
@@ -2060,6 +2117,7 @@ def test_discussion_assignment_group_id_by_name_resolved_to_canvas_id(
         "Tell us about yourself.\n"
     )
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     assignment_params = mock_course.create_discussion_topic.call_args[1]["assignment"]
@@ -2083,6 +2141,7 @@ def test_discussion_assignment_group_id_unknown_name_skipped(
         "Tell us about yourself.\n"
     )
 
+    make_current(course_root)
     had_errors = run_sync(_config(), course_root)
 
     assert had_errors, "run_sync should return True (errors present)"
@@ -2115,6 +2174,7 @@ def test_syllabus_synced_calls_course_update(mock_course, mocker, tmp_path) -> N
     mocker.patch("markdown_to_canvas.manifest.flush")
     root = _make_course_with_syllabus(tmp_path)
 
+    make_current(root)
     run_sync(_config(), root)
 
     update_calls = mock_course.update.call_args_list
@@ -2130,6 +2190,7 @@ def test_syllabus_missing_does_not_crash(mock_course, mocker, tmp_path) -> None:
     root = tmp_path / "course"
     root.mkdir()
 
+    make_current(root)
     run_sync(_config(), root)  # should not raise
 
     # No syllabus_body update when file is missing
@@ -2153,6 +2214,7 @@ def test_syllabus_expands_inline_snippets(mock_course, mocker, tmp_path) -> None
         "Check your [Grades]($../snippets/inline/CANVAS_COURSE_REFERENCE.md$/grades) here.\n"
     )
 
+    make_current(root)
     run_sync(_config(), root)
 
     syllabus_calls = [
@@ -2174,7 +2236,7 @@ def _make_course_with_settings(tmp_path: Path) -> Path:
     root = tmp_path / "course"
     root.mkdir()
     cs_dir = root / "course_settings"
-    cs_dir.mkdir()
+    cs_dir.mkdir(exist_ok=True)
     (cs_dir / "course_settings.toml").write_text(
         'title = "Intro to CS"\n'
         'course_code = "CS101"\n'
@@ -2188,6 +2250,7 @@ def test_course_metadata_synced_calls_course_update(mock_course, mocker, tmp_pat
     mocker.patch("markdown_to_canvas.manifest.flush")
     root = _make_course_with_settings(tmp_path)
 
+    make_current(root)
     run_sync(_config(), root)
 
     update_calls = mock_course.update.call_args_list
@@ -2205,6 +2268,7 @@ def test_course_settings_missing_does_not_crash(mock_course, mocker, tmp_path) -
     root = tmp_path / "course"
     root.mkdir()
 
+    make_current(root)
     run_sync(_config(), root)  # should not raise
 
 
@@ -2219,7 +2283,7 @@ def test_dashboard_image_uploaded_and_set(mock_course, mocker, tmp_path) -> None
     root = tmp_path / "course"
     root.mkdir()
     cs_dir = root / "course_settings"
-    cs_dir.mkdir()
+    cs_dir.mkdir(exist_ok=True)
     # Place image outside assets/ to avoid the asset walker also uploading it
     image_file = cs_dir / "banner.png"
     image_file.write_bytes(b"fake-png-data")
@@ -2229,6 +2293,7 @@ def test_dashboard_image_uploaded_and_set(mock_course, mocker, tmp_path) -> None
     )
     mock_course.upload.return_value = (True, {"id": 42, "url": "https://example.com/files/42"})
 
+    make_current(root)
     run_sync(_config(), root)
 
     # The image file was uploaded via course.upload
@@ -2250,11 +2315,12 @@ def test_dashboard_image_missing_file_warns(mock_course, mocker, tmp_path, capsy
     root = tmp_path / "course"
     root.mkdir()
     cs_dir = root / "course_settings"
-    cs_dir.mkdir()
+    cs_dir.mkdir(exist_ok=True)
     (cs_dir / "course_settings.toml").write_text(
         'dashboard_image = "assets/nonexistent.png"\n'
     )
 
+    make_current(root)
     run_sync(_config(), root)
 
     out = capsys.readouterr().out
@@ -2270,12 +2336,13 @@ def test_dashboard_image_not_passed_to_course_metadata(mock_course, mocker, tmp_
     root = tmp_path / "course"
     root.mkdir()
     cs_dir = root / "course_settings"
-    cs_dir.mkdir()
+    cs_dir.mkdir(exist_ok=True)
     (cs_dir / "course_settings.toml").write_text(
         'title = "Test"\n'
         'dashboard_image = "assets/banner.png"\n'
     )
     # No image file exists → warning, but metadata update should still happen without dashboard_image
+    make_current(root)
     run_sync(_config(), root)
 
     meta_calls = [c for c in mock_course.update.call_args_list if "name" in c[1].get("course", {})]
@@ -2478,7 +2545,7 @@ def test_tab_configuration_synced_end_to_end(mock_course, mocker, tmp_path) -> N
     root = tmp_path / "course"
     root.mkdir()
     cs_dir = root / "course_settings"
-    cs_dir.mkdir()
+    cs_dir.mkdir(exist_ok=True)
     # JSON string, exactly as the importer writes it (TOML escapes the inner quotes).
     (cs_dir / "course_settings.toml").write_text(
         'title = "Intro to CS"\n'
@@ -2488,6 +2555,7 @@ def test_tab_configuration_synced_end_to_end(mock_course, mocker, tmp_path) -> N
     modules_tab = _mock_tab("modules")
     mock_course.get_tabs.return_value = [assignments_tab, modules_tab]
 
+    make_current(root)
     run_sync(_config(), root)
 
     assignments_tab.update.assert_called_once_with(position=2, hidden=False)
@@ -2500,7 +2568,7 @@ def test_tab_configuration_array_of_tables_end_to_end(mock_course, mocker, tmp_p
     root = tmp_path / "course"
     root.mkdir()
     cs_dir = root / "course_settings"
-    cs_dir.mkdir()
+    cs_dir.mkdir(exist_ok=True)
     (cs_dir / "course_settings.toml").write_text(
         'title = "Intro to CS"\n'
         "\n"
@@ -2516,39 +2584,35 @@ def test_tab_configuration_array_of_tables_end_to_end(mock_course, mocker, tmp_p
     zoom_tab = _mock_tab("context_external_tool_4567", label="Zoom")
     mock_course.get_tabs.return_value = [assignments_tab, zoom_tab]
 
+    make_current(root)
     run_sync(_config(), root)
 
     assignments_tab.update.assert_called_once_with(position=2, hidden=False)
     zoom_tab.update.assert_called_once_with(position=3, hidden=True)
 
 
-def test_tab_configuration_misplaced_under_section_warns(mock_course, mocker, tmp_path, capsys) -> None:
-    """tab_configuration accidentally nested under a [section] is detected and warned."""
+def test_tab_configuration_misplaced_under_section_is_left_alone(
+    mock_course, mocker, tmp_path
+) -> None:
+    """sync does not repair a nested tab_configuration (only `upgrade` does), and
+    since it is not a top-level key the tabs are not applied."""
     mocker.patch("markdown_to_canvas.manifest.flush")
     root = tmp_path / "course"
-    root.mkdir()
-    cs_dir = root / "course_settings"
-    cs_dir.mkdir()
-    # The classic TOML trap: a top-level key written AFTER a [section] header, so
-    # TOML attaches it to that section instead.
-    (cs_dir / "course_settings.toml").write_text(
-        'title = "Intro to CS"\n'
-        "\n"
-        "[late_policy]\n"
-        "missing_submission_deduction_enabled = false\n"
-        "\n"
-        "tab_configuration = [\n"
-        '    { id = "modules" },\n'
-        "]\n"
+    (root / "course_settings").mkdir(parents=True)
+    settings = root / "course_settings" / "course_settings.toml"
+    settings.write_text(
+        'format_version = 1\ntitle = "Intro to CS"\n\n[late_policy]\n'
+        "missing_submission_deduction_enabled = false\n\n"
+        'tab_configuration = [\n    { id = "modules" },\n]\n'
     )
+    before = settings.read_bytes()
     modules_tab = _mock_tab("modules")
     mock_course.get_tabs.return_value = [modules_tab]
 
     run_sync(_config(), root)
 
-    modules_tab.update.assert_not_called()  # nested → never applied
-    out = capsys.readouterr().out
-    assert "late_policy.tab_configuration" in out and "top level" in out
+    assert settings.read_bytes() == before
+    modules_tab.update.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -2795,6 +2859,7 @@ def test_drop_rules_applied_after_content_via_run_sync(mock_course, course_root,
     err = BadRequest('{"errors":{"rules":[{"message":"... number of assignments"}]}}')
     mock_course.create_assignment_group.side_effect = [err, fresh_group]
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     # The deferred rule is re-applied after content via ag.edit(rules=...).
@@ -2812,7 +2877,7 @@ def test_group_weights_reach_canvas_via_run_sync(mock_course, mocker, tmp_path) 
     root = tmp_path / "course"
     root.mkdir()
     cs_dir = root / "course_settings"
-    cs_dir.mkdir()
+    cs_dir.mkdir(exist_ok=True)
     (cs_dir / "course_settings.toml").write_text(
         'title = "Intro to CS"\n'
         'assignment_groups = [\n'
@@ -2822,6 +2887,7 @@ def test_group_weights_reach_canvas_via_run_sync(mock_course, mocker, tmp_path) 
     )
     mock_course.get_assignment_groups.return_value = []
 
+    make_current(root)
     run_sync(_config(), root)
 
     meta_calls = [c for c in mock_course.update.call_args_list if "name" in c[1].get("course", {})]
@@ -2856,6 +2922,7 @@ def test_course_settings_folder_not_synced_as_page(mock_course, mocker, tmp_path
     # Provide a real page so create_page won't be called for course_settings files
     mock_course.update = MagicMock()
 
+    make_current(root)
     run_sync(_config(), root)
 
     # No page should be created for course_settings/ content
@@ -2880,6 +2947,7 @@ def test_module_external_url_item_created(mock_course, mocker, tmp_path) -> None
     mock_course.create_module.return_value = module
     module.create_module_item.return_value = _mock_item(201)
 
+    make_current(root)
     run_sync(_config(), root)
 
     module.create_module_item.assert_called_once()
@@ -2915,6 +2983,7 @@ def test_module_item_missing_from_manifest_warns_and_skips(
     module = _mock_module(66666)
     mock_course.create_module.return_value = module
 
+    make_current(root)
     run_sync(_config(), root)
 
     out = capsys.readouterr().out
@@ -2943,6 +3012,7 @@ def test_module_with_failed_items_is_retried_next_run(
     module = _mock_module(66666)
     mock_course.create_module.return_value = module
 
+    make_current(root)
     had_errors = run_sync(_config(), root)
 
     assert had_errors
@@ -2963,6 +3033,7 @@ def test_quiz_with_missing_question_file_skips_upload_and_reports_error(
     root = _quiz_course_root(tmp_path)
     (root / "quizzes" / "a-quiz" / "questions" / "what-is-2-plus-2.md").unlink()
 
+    make_current(root)
     had_errors = run_sync(_config(), root)
 
     assert had_errors
@@ -2985,6 +3056,7 @@ def test_assignment_without_optional_fields_still_uploads(
     )
     mock_course.create_assignment.return_value = _mock_assignment(10001)
 
+    make_current(root)
     run_sync(_config(), root)
 
     mock_course.create_assignment.assert_called_once()
@@ -3010,6 +3082,7 @@ def test_discussion_without_optional_fields_still_uploads(
     )
     mock_course.create_discussion_topic.return_value = _mock_discussion(20001)
 
+    make_current(root)
     run_sync(_config(), root)
 
     mock_course.create_discussion_topic.assert_called_once()
@@ -3029,6 +3102,7 @@ def test_content_file_without_frontmatter_still_uploads(
     (root / "pages" / "my-notes.md").write_text("## Notes\n\nSome content here.\n")
     mock_course.create_page.return_value = _mock_page(30001, "my-notes")
 
+    make_current(root)
     run_sync(_config(), root)
 
     mock_course.create_page.assert_called_once()
@@ -3067,6 +3141,7 @@ def test_module_position_passed_when_order_file_present(
     mod2 = _mock_module(102)
     mock_course.create_module.side_effect = [mod1, mod2]
 
+    make_current(root)
     run_sync(_config(), root)
 
     calls = mock_course.create_module.call_args_list
@@ -3087,6 +3162,7 @@ def test_module_without_order_file_has_no_position(
     module = _mock_module(101)
     mock_course.create_module.return_value = module
 
+    make_current(root)
     run_sync(_config(), root)
 
     call_kwargs = mock_course.create_module.call_args[1]["module"]
@@ -3118,6 +3194,7 @@ def test_module_order_change_repositions_without_resync(
     module = _mock_module(101)
     mock_course.get_module.return_value = module
 
+    make_current(root)
     run_sync(_config(), root)
 
     # Module was NOT fully re-synced (no create, no clear_module_items)
@@ -3144,6 +3221,7 @@ def test_module_order_error_when_file_not_found_locally(
     reposition_module = _mock_module(101)
     mock_course.get_module.return_value = reposition_module
 
+    make_current(root)
     run_sync(_config(), root)
 
     out = capsys.readouterr().out
@@ -3179,6 +3257,7 @@ def test_module_order_error_when_not_synced_to_canvas(
     reposition_module = _mock_module(101)
     mock_course.get_module.return_value = reposition_module
 
+    make_current(root)
     run_sync(_config(), root)
 
     out = capsys.readouterr().out
@@ -3211,6 +3290,7 @@ def test_module_order_up_to_date_skips_resync(
     mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
     mocker.patch("markdown_to_canvas.manifest.flush")
 
+    make_current(root)
     run_sync(_config(), root, verbose=True)
 
     mock_course.create_module.assert_not_called()
@@ -3234,6 +3314,7 @@ def test_targeted_sync_passes_position_from_order_file(
     module = _mock_module(101)
     mock_course.create_module.return_value = module
 
+    make_current(root)
     run_targeted_sync(
         _config(), root,
         recursive_targets=[],
@@ -3297,6 +3378,7 @@ def test_module_order_resolves_canvas_only_module_by_name(
         college if cid == 4213 else _mock_module(cid)
     )
 
+    make_current(root)
     errors = run_sync(_config(), root)
 
     assert errors is False
@@ -3333,6 +3415,7 @@ def test_module_order_uses_cached_canvas_module_id(
         college if cid == 4213 else _mock_module(cid)
     )
 
+    make_current(root)
     assert run_sync(_config(), root) is False
     mock_course.get_modules.assert_not_called()
     college.edit.assert_called_once_with(module={"position": 1})
@@ -3368,6 +3451,7 @@ def test_module_order_stale_cached_id_falls_back_to_name_lookup(
 
     mock_course.get_module.side_effect = _get_module
 
+    make_current(root)
     assert run_sync(_config(), root) is False
     college.edit.assert_called_once_with(module={"position": 1})
     assert "no longer works" in capsys.readouterr().out
@@ -3393,6 +3477,7 @@ def test_module_order_canvas_name_match_is_case_insensitive(
         college if cid == 4213 else _mock_module(cid)
     )
 
+    make_current(root)
     assert run_sync(_config(), root) is False
     college.edit.assert_called_once_with(module={"position": 1})
 
@@ -3407,6 +3492,7 @@ def test_module_order_error_when_canvas_name_not_found(
     mocker.patch("markdown_to_canvas.manifest.flush")
     mock_course.get_modules.return_value = [_canvas_module(101, "week-1.md")]
 
+    make_current(root)
     assert run_sync(_config(), root) is True
     out = capsys.readouterr().out
     assert "no module with that name was found on Canvas" in out
@@ -3427,6 +3513,7 @@ def test_module_order_error_when_canvas_name_is_ambiguous(
         _canvas_module(4214, "getting started at cascadia"),
     ]
 
+    make_current(root)
     assert run_sync(_config(), root) is True
     assert "2 modules on Canvas have that name" in capsys.readouterr().out
 
@@ -3480,6 +3567,7 @@ def test_prune_ignores_canvas_only_module_entries(mock_course, mocker, tmp_path,
     )
     mocker.patch("markdown_to_canvas.manifest.flush")
 
+    make_current(root)
     assert run_prune(_config(), root, mode="manifest") is False
     assert "No orphaned manifest entries found" in capsys.readouterr().out
 
@@ -3509,6 +3597,7 @@ def test_prune_delete_removes_orphans_and_keeps_present(
     mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
     mocker.patch("markdown_to_canvas.manifest.flush")
 
+    make_current(root)
     had_errors = run_prune(_config(), root, "delete")
 
     assert had_errors is False
@@ -3535,6 +3624,7 @@ def test_prune_announcement_deletes_and_unpublishes_like_discussion(
     mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
     mocker.patch("markdown_to_canvas.manifest.flush")
 
+    make_current(root)
     assert run_prune(_config(), root, "delete") is False
     mock_course.get_discussion_topic.assert_called_once_with(77)
     mock_course.get_discussion_topic.return_value.delete.assert_called_once()
@@ -3543,6 +3633,7 @@ def test_prune_announcement_deletes_and_unpublishes_like_discussion(
     # And the unpublish path uses .update(published=False).
     manifest["announcements/gone.md"] = {"canvas_type": "announcement", "canvas_id": 77}
     mock_course.reset_mock()
+    make_current(root)
     assert run_prune(_config(), root, "unpublish") is False
     mock_course.get_discussion_topic.return_value.update.assert_called_once_with(published=False)
     assert manifest == {}
@@ -3557,6 +3648,7 @@ def test_prune_unpublish_sets_published_false(mock_course, mocker, tmp_path) -> 
     mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
     mocker.patch("markdown_to_canvas.manifest.flush")
 
+    make_current(root)
     had_errors = run_prune(_config(), root, "unpublish")
 
     assert had_errors is False
@@ -3583,6 +3675,7 @@ def test_prune_skips_nonprunable_type_and_keeps_entry(
     mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
     mocker.patch("markdown_to_canvas.manifest.flush")
 
+    make_current(root)
     had_errors = run_prune(_config(), root, "delete")
 
     assert had_errors is False
@@ -3605,6 +3698,7 @@ def test_prune_question_bank_skipped_under_unpublish(
     mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
     mocker.patch("markdown_to_canvas.manifest.flush")
 
+    make_current(root)
     had_errors = run_prune(_config(), root, "unpublish")
 
     assert had_errors is False
@@ -3620,6 +3714,7 @@ def test_prune_no_orphans_is_noop(mock_course, mocker, tmp_path) -> None:
     mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
     flush = mocker.patch("markdown_to_canvas.manifest.flush")
 
+    make_current(root)
     had_errors = run_prune(_config(), root, "delete")
 
     assert had_errors is False
@@ -3638,6 +3733,7 @@ def test_prune_reports_errors_but_continues(mock_course, mocker, tmp_path) -> No
     mocker.patch("markdown_to_canvas.manifest.flush")
     mock_course.get_page.side_effect = RuntimeError("404 not found")
 
+    make_current(root)
     had_errors = run_prune(_config(), root, "delete")
 
     assert had_errors is True
@@ -3665,6 +3761,7 @@ def test_prune_keeps_front_page(mock_course, mocker, tmp_path) -> None:
     mock_course.show_front_page.return_value = SimpleNamespace(url="home")
     _set_syllabus_body(mock_course, "")
 
+    make_current(root)
     had_errors = run_prune(_config(), root, "delete")
 
     assert had_errors is False
@@ -3689,6 +3786,7 @@ def test_prune_keeps_page_linked_from_syllabus(mock_course, mocker, tmp_path) ->
         '<a href="/courses/123/pages/syl-page">syllabus link</a>',
     )
 
+    make_current(root)
     had_errors = run_prune(_config(), root, "delete")
 
     assert had_errors is False
@@ -3711,6 +3809,7 @@ def test_prune_keeps_announcement_linked_from_syllabus(mock_course, mocker, tmp_
         '<a href="/courses/123/discussion_topics/88">announcement link</a>',
     )
 
+    make_current(root)
     had_errors = run_prune(_config(), root, "delete")
 
     assert had_errors is False
@@ -3728,6 +3827,7 @@ def test_prune_unpublish_keeps_front_page(mock_course, mocker, tmp_path) -> None
     mock_course.show_front_page.return_value = SimpleNamespace(url="home")
     _set_syllabus_body(mock_course, "")
 
+    make_current(root)
     had_errors = run_prune(_config(), root, "unpublish")
 
     assert had_errors is False
@@ -3751,6 +3851,7 @@ def test_prune_delete_treats_already_gone_as_success(
         "404 not found"
     )
 
+    make_current(root)
     had_errors = run_prune(_config(), root, "delete")
 
     # Desired end state already reached: no error, stale entry dropped.
@@ -3774,6 +3875,7 @@ def test_prune_unpublish_treats_already_gone_as_success(
     _set_syllabus_body(mock_course, "")
     mock_course.get_page.side_effect = ResourceDoesNotExist("404 not found")
 
+    make_current(root)
     had_errors = run_prune(_config(), root, "unpublish")
 
     assert had_errors is False
@@ -3800,6 +3902,7 @@ def test_prune_manifest_only_drops_orphans_without_touching_canvas(
     mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
     flush = mocker.patch("markdown_to_canvas.manifest.flush")
 
+    make_current(root)
     had_errors = run_prune(_config(), root, "manifest")
 
     assert had_errors is False
@@ -3825,6 +3928,7 @@ def test_prune_manifest_only_no_orphans_is_noop(
     mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
     flush = mocker.patch("markdown_to_canvas.manifest.flush")
 
+    make_current(root)
     had_errors = run_prune(_config(), root, "manifest")
 
     assert had_errors is False
@@ -3845,6 +3949,7 @@ def test_ignored_asset_not_uploaded(mock_course, course_root, mocker) -> None:
     (course_root / "assets" / "~$logo.docx").write_text("junk")
     (course_root / ".canvasignore").write_text("~$*\n")
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     # Only the real asset (fig.png) is uploaded; the temp file is ignored.
@@ -3860,6 +3965,7 @@ def test_gitignore_not_consulted(mock_course, course_root, mocker) -> None:
     (course_root / "assets" / "~$logo.docx").write_text("junk")
     (course_root / ".gitignore").write_text("~$*\n")
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     # Both assets upload: .gitignore no longer excludes the temp file.
@@ -3872,6 +3978,7 @@ def test_ignored_asset_uploaded_without_ignore_file(mock_course, course_root, mo
     _setup_first_sync_mocks(mock_course)
     (course_root / "assets" / "~$logo.docx").write_text("junk")
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     assert mock_course.upload.call_count == 2
@@ -3884,6 +3991,7 @@ def test_ignored_content_file_not_synced(mock_course, course_root, mocker) -> No
     (course_root / "pages" / "scratch.md").write_text("---\ntitle: Scratch\n---\n\n## Draft\n")
     (course_root / ".canvasignore").write_text("scratch.md\n")
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     # Only the syllabus stub is created; scratch.md never reaches Canvas.
@@ -4127,6 +4235,7 @@ def test_rubric_hashing_skips_unchanged_rubrics(
         {"rubric": rubric_b},
     ]
 
+    make_current(root)
     run_sync(_config(), root)
 
     entry = manifest["course_settings/rubrics.toml"]
@@ -4143,6 +4252,7 @@ def test_rubric_hashing_skips_unchanged_rubrics(
     mock_course.create_rubric.reset_mock(side_effect=True)
     mock_course._requester.request.reset_mock()
 
+    make_current(root)
     run_sync(_config(), root)
 
     mock_course.create_rubric.assert_not_called()
@@ -4176,6 +4286,7 @@ def test_rubric_removed_from_file_drops_out_of_hash_cache(
     mock_course.get_rubrics.return_value = []
     mock_course.create_rubric.side_effect = [{"rubric": keep}, {"rubric": drop}]
 
+    make_current(root)
     run_sync(_config(), root)
 
     rubrics_toml.write_text('[[rubrics]]\ntitle = "Keep"\n')
@@ -4183,6 +4294,7 @@ def test_rubric_removed_from_file_drops_out_of_hash_cache(
     os.utime(rubrics_toml, (future, future))
     mock_course.get_rubrics.return_value = [keep, drop]
 
+    make_current(root)
     run_sync(_config(), root)
 
     entry = manifest["course_settings/rubrics.toml"]
@@ -4213,6 +4325,7 @@ def test_failed_rubric_keeps_old_hash_so_only_it_retries(
 
     mock_course.create_rubric.side_effect = _create
 
+    make_current(root)
     run_sync(_config(), root)
 
     entry = manifest["course_settings/rubrics.toml"]
@@ -4225,6 +4338,7 @@ def test_failed_rubric_keeps_old_hash_so_only_it_retries(
     mock_course.create_rubric.return_value = {"rubric": _mock_rubric(2, "Bad")}
     mock_course._requester.request.reset_mock()
 
+    make_current(root)
     run_sync(_config(), root)
 
     mock_course.create_rubric.assert_called_once()
@@ -4258,6 +4372,7 @@ def test_failed_rubric_sync_is_retried_next_run(mock_course, mocker, tmp_path) -
     mock_course.get_rubrics.return_value = []
     mock_course.create_rubric.side_effect = Exception("422 Unprocessable Entity")
 
+    make_current(root)
     run_sync(_config(), root)
 
     entry = manifest["course_settings/rubrics.toml"]
@@ -4274,7 +4389,7 @@ def test_single_target_rubrics_toml_syncs_rubrics_not_page(
     mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
     mocker.patch("markdown_to_canvas.manifest.flush")
     cs_dir = course_root / "course_settings"
-    cs_dir.mkdir()
+    cs_dir.mkdir(exist_ok=True)
     rubrics_toml = cs_dir / "rubrics.toml"
     rubrics_toml.write_text(
         '[[rubrics]]\n'
@@ -4289,6 +4404,7 @@ def test_single_target_rubrics_toml_syncs_rubrics_not_page(
         "rubric": _mock_rubric(42, "115 Assignments Rubric")
     }
 
+    make_current(course_root)
     run_targeted_sync(
         _config(), course_root,
         recursive_targets=[],
@@ -4310,10 +4426,11 @@ def test_single_target_syllabus_syncs_syllabus_not_page(
     mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
     mocker.patch("markdown_to_canvas.manifest.flush")
     cs_dir = course_root / "course_settings"
-    cs_dir.mkdir()
+    cs_dir.mkdir(exist_ok=True)
     syllabus_md = cs_dir / "syllabus.md"
     syllabus_md.write_text("---\n---\n\nWelcome to the course.\n")
 
+    make_current(course_root)
     run_targeted_sync(
         _config(), course_root,
         recursive_targets=[],
@@ -4353,6 +4470,7 @@ def test_single_target_module_order_repositions_modules(
     module = _mock_module(101)
     mock_course.get_module.return_value = module
 
+    make_current(root)
     run_targeted_sync(
         _config(), root,
         recursive_targets=[],
@@ -4373,10 +4491,11 @@ def test_single_target_other_course_settings_file_warns(
     of uploading it as content."""
     mocker.patch("markdown_to_canvas.manifest.flush")
     cs_dir = course_root / "course_settings"
-    cs_dir.mkdir()
+    cs_dir.mkdir(exist_ok=True)
     stray = cs_dir / "notes.md"
     stray.write_text("# Private planning notes\n")
 
+    make_current(course_root)
     run_targeted_sync(
         _config(), course_root,
         recursive_targets=[],
@@ -4404,6 +4523,7 @@ def test_rubric_association_by_name(mock_course, course_root, mocker) -> None:
         '---\ntitle: "Week 1"\nrubric: "Essay Rubric"\npublished: true\n---\n\n## Work\n'
     )
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     mock_course.create_rubric_association.assert_called_once()
@@ -4423,6 +4543,7 @@ def test_rubric_association_by_numeric_id(mock_course, course_root, mocker) -> N
         "---\ntitle: \"Week 1\"\nrubric: 999\npublished: true\n---\n\n## Work\n"
     )
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     mock_course.create_rubric_association.assert_called_once()
@@ -4440,6 +4561,7 @@ def test_rubric_unknown_name_warns(mock_course, course_root, mocker, capsys) -> 
         '---\ntitle: "Week 1"\nrubric: "Nonexistent"\npublished: true\n---\n\n## Work\n'
     )
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     mock_course.create_rubric_association.assert_not_called()
@@ -4459,6 +4581,7 @@ def test_rubric_use_for_grading_default_true(mock_course, course_root, mocker) -
         '---\ntitle: "Week 1"\nrubric: "Essay Rubric"\npublished: true\n---\n\n## Work\n'
     )
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     call_kwargs = mock_course.create_rubric_association.call_args[1]
@@ -4476,6 +4599,7 @@ def test_rubric_use_for_grading_false(mock_course, course_root, mocker) -> None:
         '---\ntitle: "Week 1"\nrubric: "Essay Rubric"\nuse_for_grading: false\npublished: true\n---\n\n## Work\n'
     )
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     call_kwargs = mock_course.create_rubric_association.call_args[1]
@@ -4547,6 +4671,7 @@ def test_deleted_rubric_is_recreated_and_reassociated(
     mock_course.get_rubrics.return_value = []
     mock_course.create_rubric.return_value = {"rubric": rubric}
 
+    make_current(root)
     run_sync(_config(), root)
     capsys.readouterr()
 
@@ -4559,6 +4684,7 @@ def test_deleted_rubric_is_recreated_and_reassociated(
     mock_course.create_rubric_association.reset_mock()
     mock_course.create_assignment.reset_mock()
 
+    make_current(root)
     run_sync(_config(), root)
 
     out = capsys.readouterr().out
@@ -4589,6 +4715,7 @@ def test_present_rubric_is_not_recreated(
     mock_course.get_rubrics.return_value = []
     mock_course.create_rubric.return_value = {"rubric": rubric}
 
+    make_current(root)
     run_sync(_config(), root)
     capsys.readouterr()
 
@@ -4596,6 +4723,7 @@ def test_present_rubric_is_not_recreated(
     mock_course.create_rubric.reset_mock()
     mock_course.create_rubric_association.reset_mock()
 
+    make_current(root)
     run_sync(_config(), root)
 
     out = capsys.readouterr().out
@@ -4621,6 +4749,7 @@ def test_first_sync_does_not_report_rubrics_as_deleted(
     mock_course.get_rubrics.return_value = []
     mock_course.create_rubric.return_value = {"rubric": _mock_rubric(42, "Essay Rubric")}
 
+    make_current(root)
     run_sync(_config(), root)
 
     out = capsys.readouterr().out
@@ -4645,6 +4774,7 @@ def test_rubric_removal_when_rubric_key_absent(mock_course, course_root, mocker)
         '---\ntitle: "Week 1"\npublished: true\npoints_possible: 10\n---\n\n## Work\n'
     )
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     remove_mock.assert_called_once_with(mock_course, 98765, 42)
@@ -4662,6 +4792,7 @@ def test_rubric_no_removal_when_no_canvas_rubric(mock_course, course_root, mocke
         '---\ntitle: "Week 1"\npublished: true\n---\n\n## Work\n'
     )
 
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     remove_mock.assert_not_called()
@@ -4714,7 +4845,7 @@ def _make_front_page_repo(tmp_path: Path) -> Path:
     root = tmp_path / "course"
     root.mkdir()
     cs_dir = root / "course_settings"
-    cs_dir.mkdir()
+    cs_dir.mkdir(exist_ok=True)
     (cs_dir / "course_settings.toml").write_text(
         'title = "Test"\nfront_page = "pages/home.md"\n'
     )
@@ -4743,6 +4874,7 @@ def test_front_page_set_on_first_sync(mock_course, mocker, tmp_path) -> None:
     mock_course.get_page.return_value = page
 
     root = _make_front_page_repo(tmp_path)
+    make_current(root)
     run_sync(_config(), root)
 
     _assert_front_page_set(page)
@@ -4757,6 +4889,7 @@ def test_front_page_skipped_when_nothing_changed(mock_course, mocker, tmp_path) 
     root = _make_front_page_repo(tmp_path)
 
     # First sync — everything is new; manifest is written to disk.
+    make_current(root)
     run_sync(_config(), root)
 
     # Reset the page mock so we can check the second sync independently.
@@ -4766,6 +4899,7 @@ def test_front_page_skipped_when_nothing_changed(mock_course, mocker, tmp_path) 
     _make_old(root / "course_settings" / "course_settings.toml")
     _make_old(root / "pages" / "home.md")
 
+    make_current(root)
     run_sync(_config(), root)
 
     assert not _front_page_was_set(page), "set_front_page should not have been called"
@@ -4780,6 +4914,7 @@ def test_front_page_set_when_page_resynced(mock_course, mocker, tmp_path) -> Non
     root = _make_front_page_repo(tmp_path)
 
     # First sync.
+    make_current(root)
     run_sync(_config(), root)
     page.edit.reset_mock()
 
@@ -4789,6 +4924,7 @@ def test_front_page_set_when_page_resynced(mock_course, mocker, tmp_path) -> Non
         '---\ntitle: Home\npublished: true\n---\n\nUpdated welcome!\n'
     )
 
+    make_current(root)
     run_sync(_config(), root)
 
     _assert_front_page_set(page)
@@ -4810,6 +4946,7 @@ def test_front_page_set_when_front_page_setting_changed(mock_course, mocker, tmp
     )
 
     # First sync (front page is other.md).
+    make_current(root)
     run_sync(_config(), root)
     page.edit.reset_mock()
 
@@ -4819,6 +4956,7 @@ def test_front_page_set_when_front_page_setting_changed(mock_course, mocker, tmp
         'title = "Test"\nfront_page = "pages/home.md"\n'
     )
 
+    make_current(root)
     run_sync(_config(), root)
 
     _assert_front_page_set(page)
@@ -4833,6 +4971,7 @@ def test_front_page_not_reset_on_unrelated_settings_change(mock_course, mocker, 
     root = _make_front_page_repo(tmp_path)
 
     # First sync.
+    make_current(root)
     run_sync(_config(), root)
     page.edit.reset_mock()
 
@@ -4842,6 +4981,7 @@ def test_front_page_not_reset_on_unrelated_settings_change(mock_course, mocker, 
         'title = "Test Updated"\nfront_page = "pages/home.md"\n'
     )
 
+    make_current(root)
     run_sync(_config(), root)
 
     assert not _front_page_was_set(page)
@@ -5038,6 +5178,7 @@ def test_sync_discovers_pages_in_subfolders(
     mock_course.get_assignment_groups.return_value = []
 
     config = _config()
+    make_current(root)
     run_sync(config, root, force_uploads=True)
 
     assert mock_course.create_page.call_count == 2
@@ -5070,6 +5211,7 @@ def test_sync_aborts_on_title_collision(
     mock_course.get_assignment_groups.return_value = []
 
     config = _config()
+    make_current(root)
     had_errors = run_sync(config, root, force_uploads=True)
 
     assert had_errors is True
@@ -5105,11 +5247,13 @@ def test_assignment_resynced_when_referenced_snippet_updated(
     mock_course.get_assignment.return_value = _mock_assignment(98765)
 
     # Sanity check: with everything aged, nothing should sync.
+    make_current(course_root)
     run_sync(_config(), course_root)
     mock_course.get_assignment.assert_not_called()
 
     # Now only the shared snippet changes.
     (course_root / "snippets" / "office-hours.md").write_text("Updated hours.")
+    make_current(course_root)
     run_sync(_config(), course_root)
 
     mock_course.get_assignment.assert_called_with(98765)
@@ -5146,10 +5290,12 @@ def test_module_resynced_when_referenced_snippet_updated(
     module = _mock_module(66666)
     mock_course.get_module.return_value = module
 
+    make_current(root)
     run_sync(_config(), root)
     mock_course.get_module.assert_not_called()
 
     snippet.write_text("Updated note.")
+    make_current(root)
     run_sync(_config(), root)
 
     mock_course.get_module.assert_called_with(66666)
@@ -5181,6 +5327,7 @@ def test_question_bank_warns_and_skips_upload(
     mock_course.get_assignment_groups.return_value = []
     mock_course.get_tabs.return_value = []
 
+    make_current(root)
     run_sync(_config(), root)
 
     out = capsys.readouterr().out
@@ -5203,6 +5350,7 @@ def test_question_bank_ignored_by_canvasignore_is_silent(
     mock_course.get_assignment_groups.return_value = []
     mock_course.get_tabs.return_value = []
 
+    make_current(root)
     run_sync(_config(), root)
 
     assert "question bank" not in capsys.readouterr().out
@@ -5231,6 +5379,7 @@ def test_single_target_does_not_pull_in_other_files_via_snippet_change(
     # office-hours.md is referenced by both week1.md and syllabus.md.
     (course_root / "snippets" / "office-hours.md").write_text("Updated hours.")
 
+    make_current(course_root)
     run_targeted_sync(
         _config(), course_root,
         recursive_targets=[],
@@ -5322,6 +5471,7 @@ def test_pinned_quiz_stale_is_not_uploaded_and_warns(
     mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
     mocker.patch("markdown_to_canvas.manifest.flush")
 
+    make_current(root)
     had_errors = run_sync(_config(), root)
 
     assert had_errors is False
@@ -5341,6 +5491,7 @@ def test_pinned_quiz_md_file_entry_also_matches(mock_course, mocker, tmp_path) -
     _write_pinned(root, ["quizzes/a-quiz/a-quiz.md"])
     mocker.patch("markdown_to_canvas.manifest.flush")
 
+    make_current(root)
     run_sync(_config(), root)
 
     mock_course.create_quiz.assert_not_called()
@@ -5365,6 +5516,7 @@ def test_pinned_wins_over_force_uploads(mock_course, mocker, tmp_path, capsys) -
     mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
     mocker.patch("markdown_to_canvas.manifest.flush")
 
+    make_current(root)
     run_sync(_config(), root, force_uploads=True)
 
     mock_course.get_quiz.assert_not_called()
@@ -5393,6 +5545,7 @@ def test_pinned_up_to_date_quiz_stays_silent(
     mocker.patch("markdown_to_canvas.manifest.load", return_value=preloaded)
     mocker.patch("markdown_to_canvas.manifest.flush")
 
+    make_current(root)
     run_sync(_config(), root, verbose=True)
 
     out = capsys.readouterr().out
@@ -5407,6 +5560,7 @@ def test_pinned_page_is_not_uploaded(mock_course, mocker, tmp_path, capsys) -> N
     _write_pinned(root, ["pages/one.md"])
     mocker.patch("markdown_to_canvas.manifest.flush")
 
+    make_current(root)
     had_errors = run_sync(_config(), root)
 
     assert had_errors is False
@@ -5420,6 +5574,7 @@ def test_pinned_wins_over_explicit_target(mock_course, mocker, tmp_path, capsys)
     _write_pinned(root, ["quizzes/a-quiz"])
     mocker.patch("markdown_to_canvas.manifest.flush")
 
+    make_current(root)
     run_targeted_sync(
         _config(), root,
         recursive_targets=[],
@@ -5442,6 +5597,7 @@ def test_pinned_entry_matching_nothing_warns(
     mocker.patch("markdown_to_canvas.manifest.flush")
     mock_course.create_page.return_value = _mock_page(1, "one")
 
+    make_current(root)
     run_sync(_config(), root)
 
     assert (
@@ -5461,6 +5617,7 @@ def test_prune_delete_skips_pinned_orphan(mock_course, mocker, tmp_path, capsys)
     mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
     mocker.patch("markdown_to_canvas.manifest.flush")
 
+    make_current(root)
     had_errors = run_prune(_config(), root, "delete")
 
     assert had_errors is False
@@ -5519,6 +5676,7 @@ def test_pinned_question_file_stops_update_before_any_upload(
     mocker.patch("markdown_to_canvas.manifest.flush")
 
     with pytest.raises(ValueError, match="Pin the whole quiz instead"):
+        make_current(root)
         run_sync(_config(), root)
 
     # Validation runs before phase 0, so course settings were never applied...
@@ -5537,6 +5695,7 @@ def _manifest_bytes(local_key: str, canvas_id: int) -> bytes:
     return (
         f'["{local_key}"]\ncanvas_id = {canvas_id}\ncanvas_type = "page"\n'
         f'last_synced = "2025-01-01T00:00:00+00:00"\n'
+        f"\n[_repo_format]\nformat_version = {FORMAT_VERSION}\n"
     ).encode()
 
 
@@ -5554,29 +5713,30 @@ def test_prune_uses_the_manifest_named_by_its_config(tmp_path) -> None:
         api_token="tok",
         config_path=root / "course_settings" / "canvas-sec-a.toml",
     )
+    make_current(root)
     assert run_prune(cfg, root, mode="manifest") is False
 
     from markdown_to_canvas import manifest as manifest_lib
 
-    assert manifest_lib.load(root / ".manifest-canvas-sec-a.toml") == {}
+    assert not manifest_lib.has_content_entries(
+        manifest_lib.load(root / ".manifest-canvas-sec-a.toml")
+    )
     assert manifest_lib.load(other)["pages/gone.md"]["canvas_id"] == 22
 
 
-def test_prune_migrates_legacy_manifest_for_default_config(tmp_path, capsys) -> None:
-    """A repo written by an older version keeps working: .canvas-manifest.toml
-    is renamed to the default config's manifest name."""
+def test_prune_does_not_rename_a_stray_legacy_manifest(tmp_path, capsys) -> None:
+    """Renaming .canvas-manifest.toml is `upgrade`'s job (migration 0 -> 1); on a
+    current repo the legacy file is left alone and not read."""
     root = _prune_repo(tmp_path)
     legacy = root / ".canvas-manifest.toml"
     legacy.write_bytes(_manifest_bytes("pages/kept.md", 33))
 
+    make_current(root)
     assert run_prune(_config(), root, mode="manifest") is False
 
-    from markdown_to_canvas import manifest as manifest_lib
-
-    assert not legacy.exists()
-    migrated = root / ".manifest-canvas.toml"
-    assert manifest_lib.load(migrated)["pages/kept.md"]["canvas_id"] == 33
-    assert ".canvas-manifest.toml → .manifest-canvas.toml" in capsys.readouterr().out
+    assert legacy.exists()
+    assert not (root / ".manifest-canvas.toml").exists()
+    assert "Renamed" not in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------
@@ -5657,6 +5817,7 @@ def test_sync_module_replaces_page_entry_with_new_module(mock_course, mocker, tm
     flush = mocker.patch("markdown_to_canvas.manifest.flush")
     mock_course.create_module.return_value = _mock_module(8080)
 
+    make_current(root)
     run_sync(_config(), root)
 
     mock_course.get_module.assert_not_called()
