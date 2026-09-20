@@ -108,8 +108,8 @@ def test_term_file_is_harvested_and_loads(tmp_path):
     assert term.time_zone.key == "US/Pacific"
     assert term.default_due_time.isoformat() == "23:59:00"
     assert sorted(d.isoformat() for d in term.noninstructional_days) == ["2026-11-11", "2026-11-26"]
-    assert term.relative_table == "142"
-    assert "relative_table" not in harvest.build_term(config, None)
+    assert "relative_table" not in harvest.build_term(config, "142")
+    assert "relative_table" not in text
 
 
 def test_term_needs_the_term_wide_settings(tmp_path):

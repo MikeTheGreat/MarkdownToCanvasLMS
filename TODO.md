@@ -5,19 +5,18 @@
 - Look in the todo/ folder for more items!
 - Look in the openspec/ folder
 
-## Registry of courses, term
+## Let `-t`, `-s` and `mv` use the course registry
 
-- So CLI args can just list the course, and not require the user to actually navigate to the folder
-- put it into a toml file in ~/.config/markdown-to-canvas/config.toml
-  - essentially the file will be a list of CLI key to path, for example:
-  142 : /home/mike/Dropbox/Work/Courses/_IT_CS_143/mpanitz-IT-CS-143/
-    - feel free to adjust details / spacing / etc.
-- Inside ~/.config/markdown-to-canvas/terms are info files for different terms, such as 2026Fall.toml
-  - terms can then be listed by filename, leaving off the .toml part
-- The goal is to be able to run something like this:
-markdown-to-canvas update 142
-or
-markdown-to-canvas generate-due-dates 142 2026Fall # note the .toml ending is ommited
+`update`, `publish` and the other commands that take `COURSE_DIR` can now name a
+course by registry key (see README "Naming a course"), but the commands that take
+file paths still work only from where you stand: `update -t/-s` resolve relative
+paths against the current directory, and `mv SRC DEST` derives its course from the
+paths. From outside a course they stop with an error. It would be handy to name a
+path relative to a registered course instead, for example `update 142 -t
+pages/week1.md`, or a `KEY:path` form such as `mv 142:pages/a.md 142:pages/b.md`
+(also usable for `-t`/`-s`). Open points: how a `KEY:` prefix interacts with a
+path that really contains a colon, and whether `mv` should refuse two different
+keys in one command.
 
 ## Course flags: follow-on features beyond the shipped v1
 

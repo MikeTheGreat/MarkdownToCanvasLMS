@@ -58,8 +58,10 @@ _TERM_KEYS = (
     "time_zone",
     "default_due_time",
     "noninstructional_days",
-    "relative_table",
 )
+
+#: The table to use is chosen on the command line (--table), never by the term file.
+DEFAULT_TABLE = "default"
 
 #: Guards a runaway CLASS_DAY search (for example, every class day a holiday).
 _MAX_CLASS_DAY_SEARCH = 3660
@@ -328,29 +330,25 @@ def load_tables(settings: dict[str, Any]) -> dict[str, RelativeTable]:
     return tables
 
 
-def select_table(
-    tables: dict[str, RelativeTable], cli_name: str | None, term_name: str | None
-) -> RelativeTable:
-    """Pick the table: ``--table``, else the term file's ``relative_table``, else the only one."""
+def select_table(tables: dict[str, RelativeTable], cli_name: str | None) -> RelativeTable:
+    """Pick the table: ``--table``, else the one named ``default``."""
     names = ", ".join(sorted(tables)) or "(none)"
-    wanted = cli_name or term_name
-    if wanted:
-        if wanted not in tables:
-            source = "--table" if cli_name else "the term file's relative_table"
+    if cli_name:
+        if cli_name not in tables:
             raise RelativeDueDatesError(
-                f"{source} names {wanted!r}, which is not a table in [{SECTION_KEY}.tables]. "
-                f"Tables: {names}"
+                f"--table names {cli_name!r}, which is not a table in "
+                f"[{SECTION_KEY}.tables]. Tables: {names}"
             )
-        return tables[wanted]
-    if len(tables) == 1:
-        return next(iter(tables.values()))
+        return tables[cli_name]
+    if DEFAULT_TABLE in tables:
+        return tables[DEFAULT_TABLE]
     if not tables:
         raise RelativeDueDatesError(
             f"[{SECTION_KEY}.tables] has no tables. Run `upgrade` to add an empty one."
         )
     raise RelativeDueDatesError(
-        f"Several tables in [{SECTION_KEY}.tables]; choose one with --table or "
-        f"relative_table in the term file. Tables: {names}"
+        f"[{SECTION_KEY}.tables] has no table named {DEFAULT_TABLE!r}; choose one "
+        f"with --table. Tables: {names}"
     )
 
 
@@ -366,7 +364,6 @@ class Term:
     time_zone: ZoneInfo
     default_due_time: time
     noninstructional_days: dict[date, str]
-    relative_table: str | None
 
 
 def _parse_date(value: Any, where: str) -> date:
@@ -398,6 +395,12 @@ def load_term(path: Path) -> Term:
         return raw[key]
 
     for key in raw:
+        if key == "relative_table":
+            raise RelativeDueDatesError(
+                f"{path}: unknown key 'relative_table'; the term file no longer names a "
+                f"table. Remove it and choose the table with --table (default: the table "
+                f"named {DEFAULT_TABLE!r}). Allowed keys are {', '.join(_TERM_KEYS)}"
+            )
         if key not in _TERM_KEYS:
             raise RelativeDueDatesError(
                 f"{path}: unknown key {key!r}; allowed keys are {', '.join(_TERM_KEYS)}"
@@ -423,10 +426,7 @@ def load_term(path: Path) -> Term:
             raise RelativeDueDatesError(f"{where} needs a date (and a title)")
         holidays[_parse_date(entry["date"], f"{where} date")] = str(entry.get("title", ""))
 
-    table = raw.get("relative_table")
-    if table is not None and not isinstance(table, str):
-        raise RelativeDueDatesError(f"{path}: relative_table must be a string")
-    return Term(first, last, zone, due_time, holidays, table)
+    return Term(first, last, zone, due_time, holidays)
 
 
 # ---------------------------------------------------------------------------

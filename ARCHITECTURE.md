@@ -184,11 +184,11 @@ Syncing module: modules/week-1.md
 ## `update` Subcommand
 
 ```text
-Usage: markdown-to-canvas update [OPTIONS] [REPO]
+Usage: markdown-to-canvas update [OPTIONS] [COURSE_DIR]
 ```
 
-`REPO` is a positional path to the course content repo; there is no `--repo` flag. It is
-optional — see [Repo-root resolution](#repo-root-resolution) below.
+`COURSE_DIR` is a positional argument (a path or a registry key); there is no `--repo` flag.
+It is optional — see [Course-directory resolution](#course-directory-resolution) below.
 
 After `get_course()` and before either `run_sync` or `run_targeted_sync`, the CLI runs
 the stored-course check (`cli._guard_course` → `course_guard.check_course`; see
@@ -199,27 +199,91 @@ Before any of that, `run_sync`, `run_targeted_sync` and `course_guard.check_cour
 `repo_format.check_repo_format()`, which refuses a repo or manifest in a different
 format version (see "Repo format version and `upgrade`").
 
-### Repo-root resolution
+### Course-directory resolution
 
-`update` and `publish` both resolve their repo argument through `_resolve_repo()` in
-`cli.py`, which delegates to `find_repo_root()` in `config.py`:
+Every command that acts on an existing course takes `COURSE_DIR` and resolves it the same
+way: `update`, `publish`, `prune`, `clean-manifest`, `upgrade`, `generate-due-dates`,
+`list-titles`, `find-canvas-orphans`, `find-local-orphans` and `emit-workflow`. The
+argument is declared once, by `cli._course_dir_argument()`, as a plain string (not a
+`click.Path`, which would reject a registry key) with `course_registry.complete_course` as
+its `shell_complete`. `cli._resolve_course(course_dir, config)` does the resolving, prints
+`Course dir: <absolute path>` (plus `  (course KEY)` when a key was used) as the first
+line of output, and returns `(directory, config)`:
 
-- **Argument given** — used exactly as typed, with no walking up. A wrong path still fails
-  with the missing `course_settings/canvas.toml`, rather than silently acting on some
-  parent directory the user did not mean.
-- **Argument omitted** — walk up from the current working directory looking for
-  `course_settings/course_settings.toml`, so the command can be run from any subdirectory
-  of the course repo. If no repo encloses the cwd, the command exits with a message
-  telling the user to pass the path explicitly.
+- **Argument given** — `course_registry.resolve_course()`: if a directory exists at that path
+  it is used as typed, with no walking up (a wrong path still fails with the missing
+  `course_settings/canvas.toml`, rather than silently acting on some parent directory the
+  user did not mean). Otherwise the argument is looked up as a key in the registry. A path
+  therefore beats a key. Neither → an error that lists the registered keys; a registered
+  directory that is gone → an error naming the key.
+- **Argument omitted** — walk up from the current working directory via `find_repo_root()`
+  looking for `course_settings/course_settings.toml`, so the command can be run from any
+  subdirectory of the course. If no course encloses the cwd, the command exits asking for
+  the argument. `prune` is the one exception: its argument is `required=True`, so it is
+  never inferred from the cwd (it changes Canvas).
+- **Config** — the second return value is `--config` if the command line gave one, else the
+  registry entry's `config` (joined to the course directory), else `None`, meaning the
+  command's own default `<course dir>/course_settings/canvas.toml`. Only a course named by
+  key can get a registry config; a path, or a walk-up, never does. Commands with no
+  `--config` (`upgrade`, `generate-due-dates`, `find-local-orphans`, `emit-workflow`)
+  discard it. The manifest name derives from the config path (`manifest_path_for`), so a
+  registry config selects the section's manifest exactly as `--config` does.
+
+**Click gotcha.** `_course_dir_argument(required=True)` must not pass `default=None`: with
+Click 8.4 an explicit `default=None` made a required argument optional, so `prune` fell
+through to the walk-up. `tests/test_cli_course_dir.py::test_prune_requires_an_argument_even_inside_a_course`
+guards it.
 
 `find_repo_root()` lives in `config.py` because it encodes knowledge of the
 `course_settings/` layout. `mv.py` re-exports it (`from .config import find_repo_root`) —
 `mv` has always derived its repo root this way, from the source/dest paths rather than the
-cwd, and that behavior is unchanged.
+cwd, and that behavior is unchanged. `mv` has no `COURSE_DIR`, and `update -t/-s` still
+resolve relative paths against the cwd; letting them use a registered course is in TODO.md.
 
-`import` deliberately does *not* participate: its `OUTPUT_DIR` names a repo to be
+`import` deliberately does *not* participate in resolution: its `OUTPUT_DIR` names a repo to be
 **created** (it writes `course_settings/` itself and requires an empty or new directory),
-so searching for an existing enclosing repo would be backwards.
+so searching for an existing enclosing repo would be backwards. It gains `--register KEY`
+instead (below).
+
+### The registry (`course_registry.py`)
+
+Per-user files live under `~/.config/markdown-to-canvas/` (`Path.home()` is looked up on every
+call, so tests move `HOME`; `XDG_CONFIG_HOME` is not consulted):
+
+| File | Purpose |
+| --- | --- |
+| `course_registry.toml` | `[courses]` table: `key = "<path>"` or `key = { path, config }` |
+| `terms/<name>.toml` | term files, named on the command line without `.toml` |
+| `.env` | fallback for `CANVAS_API_TOKEN` and other variables |
+
+The module imports nothing that reads `CANVAS_API_TOKEN` (no `config`, no `canvas_api`),
+because `cli` calls `load_env_files()` before those imports.
+
+- **Lazy reading.** `_read_courses()` is called only when a key must be looked up (and by the
+  completion helpers), so a path argument or a walk-up works with a broken or missing
+  registry. A whole-file TOML error is a `RegistryError` naming the file; an entry is
+  validated only when *that* key is looked up (`_parse_entry`: string or table, keys limited
+  to `path`/`config`, a leading `~` expanded, anything else non-absolute rejected), so one bad
+  entry does not break the others. `RegistryError` subclasses `Exception`, not `ValueError`,
+  so `die()` does not get a "KeyError or ValueError:" prefix.
+- **Terms.** `resolve_term(arg)`: an existing file at the path wins, else
+  `terms/<arg>.toml`, else an error naming both places and listing the terms. An argument
+  ending in `.toml` is never looked up as a name.
+- **`.env`.** `load_env_files()` keeps the old call (`find_dotenv(usecwd=True)`, `override=True`,
+  so a `.env` from the cwd or a parent beats the shell) and then loads the fallback with
+  `override=False`. Precedence: cwd `.env`, then the shell, then the fallback. The fallback load
+  is skipped silently when the file is absent.
+- **`import --register KEY`.** `check_key_free()` runs before `run_import` (so a taken key
+  stops before anything is written); `add_entry()` runs only after the import succeeded. It
+  edits the registry with `tomlkit` (comments and other entries survive) and never overwrites a
+  key. If registration fails after a successful import, the error says the import itself
+  succeeded.
+- **Completion.** `complete_course` returns the keys that start with the typed prefix plus a
+  `dir` item, and `complete_term` the term names plus a `file` item (Click's shell scripts
+  then fall back to directory or file completion when no key matches). Both swallow errors and
+  read the registry at Tab time; `install-completion` writes Click's stock script, which calls
+  the program on each Tab, so a key added later is offered without reinstalling.
+  `tests/test_course_registry.py` drives Click's `bash_complete` protocol in a subprocess.
 
 ## CLI Options
 
@@ -262,8 +326,8 @@ This ordering means: run `-t` on a module to recursively re-sync everything it r
 
 Paths passed to `-t` and `-s` are resolved as follows:
 
-- Absolute paths: used directly, then made relative to `--repo`
-- Relative paths: resolved relative to the current working directory, then made relative to `REPO`
+- Absolute paths: used directly, then made relative to `COURSE_DIR`
+- Relative paths: resolved relative to the current working directory, then made relative to `COURSE_DIR`
 
 Paths that resolve outside the repo root print a warning and are skipped.
 
@@ -315,13 +379,13 @@ dry-run — tab ids/labels can only be checked against a live course.
 ## `prune` Subcommand
 
 ```text
-Usage: markdown-to-canvas prune [OPTIONS] REPO
+Usage: markdown-to-canvas prune [OPTIONS] COURSE_DIR
 
   --delete         Delete the orphaned items from Canvas.
   --unpublish      Unpublish (set published=False) the orphaned items on Canvas.
   --manifest-only  Remove orphaned entries from the local manifest only; never
                    touch Canvas.
-  --config PATH    Path to canvas.toml (default: <repo>/course_settings/canvas.toml)
+  --config PATH    Path to canvas.toml (default: <COURSE_DIR>/course_settings/canvas.toml)
   -y, --yes        Record the course for a manifest that has none without asking
 ```
 
@@ -332,7 +396,7 @@ scan skips the reserved course entry (its key is not a repo path).
 
 Removes Canvas items whose local source file no longer exists. Because the
 manifest is the only record of what the tool created, an entry is treated as an
-**orphan** when `REPO / <local_key>` is gone from disk — which covers both
+**orphan** when `COURSE_DIR / <local_key>` is gone from disk — which covers both
 deleting a file and renaming one (a rename leaves the old path orphaned while the
 new path syncs as a fresh item, per the path-keyed manifest).
 
@@ -439,9 +503,9 @@ while other modules are re-synced around it.
 ## `clean-manifest` Subcommand
 
 ```text
-Usage: markdown-to-canvas clean-manifest [OPTIONS] [REPO]
+Usage: markdown-to-canvas clean-manifest [OPTIONS] [COURSE_DIR]
 
-  --config PATH  Path to canvas.toml (default: <repo>/course_settings/canvas.toml)
+  --config PATH  Path to canvas.toml (default: <COURSE_DIR>/course_settings/canvas.toml)
   --apply           Make the changes. Without it, only report what would change.
   --no-canvas-check Do not check Canvas; treat every entry as invalid.
   -y, --yes         With --apply, skip the confirmation when switching courses.
@@ -765,7 +829,7 @@ Done. Wrote course repo to: ./my-course/
 
 `repo_format.py` owns the format version, the check every repo-reading operation runs, and the migrations behind `upgrade`.
 
-**Where the version lives.** `course_settings/course_settings.toml` has a top-level integer `format_version` (missing file or key = 0); `import` also writes `created_by` (the tool version that ran `import`), and `upgrade` appends one string per version-changing run to `upgraded_by` (`"<tool version> on <date>: <from> -> <to>"`). These are the first keys in the file. Every `.manifest-*.toml` has its own `_repo_format` stamp (see the manifest file section), because manifests are local and can lag behind the committed settings on a second machine. `repo_format.FORMAT_VERSION` is the tool's version (currently 2). `tool_version()` returns `importlib.metadata.version("markdown-to-canvas")`, or `"unknown"`. `pyproject.toml` uses `hatch-vcs` (`dynamic = ["version"]`, `fallback-version = "0.0.0+unknown"`), so the version comes from git tags: `0.2.1.devN+g<hash>` after a `v0.2.0` tag. An editable dev install reports the version from its last install, so `created_by`/`upgraded_by` can be stale there.
+**Where the version lives.** `course_settings/course_settings.toml` has a top-level integer `format_version` (missing file or key = 0); `import` also writes `created_by` (the tool version that ran `import`), and `upgrade` appends one string per version-changing run to `upgraded_by` (`"<tool version> on <date>: <from> -> <to>"`). These are the first keys in the file. Every `.manifest-*.toml` has its own `_repo_format` stamp (see the manifest file section), because manifests are local and can lag behind the committed settings on a second machine. `repo_format.FORMAT_VERSION` is the tool's version (currently 3). `tool_version()` returns `importlib.metadata.version("markdown-to-canvas")`, or `"unknown"`. `pyproject.toml` uses `hatch-vcs` (`dynamic = ["version"]`, `fallback-version = "0.0.0+unknown"`), so the version comes from git tags: `0.2.1.devN+g<hash>` after a `v0.2.0` tag. An editable dev install reports the version from its last install, so `created_by`/`upgraded_by` can be stale there.
 
 **The check.** `check_repo_format(repo) -> None` reads the repo version and every manifest's stamp and raises `RepoFormatError` if any differs from `FORMAT_VERSION`: older says to run `markdown-to-canvas upgrade`, newer says to update the tool, and both versions and any offending manifest are named. It compares versions only; it never edits a file, so a matching version is taken to mean the files were set up correctly (`upgrade` is the one place that repairs `tab_configuration`). `RepoFormatError` subclasses `Exception`, not `ValueError`, so `_handle_cli_errors` does not prefix it with "KeyError or ValueError:". It is called first thing in each library entry point, so no code path reads a repo without it:
 
@@ -792,6 +856,8 @@ Done. Wrote course repo to: ./my-course/
 
 **Migration 1 -> 2** (`_migrate_1_to_2`): append an empty `[relative_due_dates.tables.default]` (with `items = []`) to the end of `course_settings.toml` by parsing a snippet with `tomlkit` and adding its `relative_due_dates` table to the document (a table header at the end cannot capture existing keys), and stamp every manifest with version 2. It does nothing to the settings when `relative_due_dates` already exists, or when the settings file is already at version 2 (`read_repo_version(repo) >= 2`: a manifest that lags a current settings file must not cause the section to be added, for example when the tab_configuration fix rewrites the file). A repo with no settings file gets one from migration 0 -> 1 before this step, so it gains the section too. The bump was chosen although the change is additive, so that repos match what `import` writes; it does not create a term file.
 
+**Migration 2 -> 3** (`_migrate_2_to_3`): the term file no longer names a table, and the table `generate-due-dates` uses is `--table`, else `default`. Two edits, both only when the settings file's own version is below 3 (same guard as 1 -> 2), and a manifest stamp. (1) `UpgradeState` now also holds the in-repo term file (`course_settings/term_dates.toml`, a `tomlkit` document when it exists, plus a `term_changed` flag that `run_upgrade` writes with the manifests, so `--noop` writes neither); an uncommented `relative_table` key is deleted from it. It never creates the file and cannot reach term files outside the repo. (2) `_migrate_relative_tables` renames the table: a lone table not called `default`, or the one non-empty table when the only other is the empty `default` that 1 -> 2 added (that block is dropped first). Anything else (several real tables, or `default` plus two others) is left alone with a `NOTICE: ... --table NAME` line. The rename is done on the *text* by `_rename_table_headers` / `_drop_table_block`, rewriting only the `[relative_due_dates.tables.NAME...]` and `[[...]]` header lines, because that keeps comments and both item layouts (inline `items = [...]` and `[[...items]]` blocks) byte-identical, which moving a `tomlkit` table under a new key does not guarantee. Comment lines directly above the next header stay with that header when an empty `default` is dropped. Afterwards the result is parsed and compared with the expected data; if it does not match (dotted keys, inline `tables = {...}`, quoted oddities) the file is left unchanged and a "could not rename" notice says to use `--table NAME`. `state.settings_doc` is reassigned to the re-parsed document, which is safe because `run_upgrade` reads the attribute afresh.
+
 **Adding a migration.** Increase `FORMAT_VERSION`, add the function to `MIGRATIONS` keyed by the previous version, and test it (see `tests/test_repo_format.py`). CLAUDE.md states when a bump is required.
 
 ## `generate-due-dates` Subcommand and relative due dates
@@ -799,12 +865,12 @@ Done. Wrote course repo to: ./my-course/
 Computes absolute `unlock_at` / `due_at` / `lock_at` from offsets and writes them into the `due_dates` table of `course_settings.toml`. It never contacts Canvas and never applies `only_if`; `update` sends the dates as it does for hand-written entries (see "due_dates resolved-value caching"). Modules: `relative_dates.py` (loading and arithmetic, no I/O beyond reading two files), `generate_due_dates.py` (plan, render, apply), `cli.generate_due_dates_cmd`.
 
 ```text
-markdown-to-canvas generate-due-dates TERM_FILE [REPO] [--table NAME] [--noop] [--yes]
+markdown-to-canvas generate-due-dates TERM_FILE [COURSE_DIR] [--table NAME] [--noop] [--yes]
 ```
 
-**Settings** live in one top-level `[relative_due_dates]` section (a new top-level key is safe at the end of the file because it is a table). `load_tables(settings)` turns it into `RelativeTable`s: the section's `days_of_week`, `class_on_noninstructional_days`, `unlock_relative_default` and `lock_relative_default` are the shared values, and each `[relative_due_dates.tables.<name>]` table may override any of them, so its `TableSettings` are already resolved. Tables sit under `tables` so a table name can never collide with a setting name. Unknown keys at any level are errors (a typo such as `lock_ofset` would otherwise silently do nothing). Offsets are parsed when loaded, so a bad one is reported before any date is computed. `days_of_week` is stored as a set in week order (the class-day search steps to the next entry of the list). `select_table` picks the table: `--table`, else the term file's `relative_table`, else the only table; several with no choice lists the names. `sync._NON_METADATA_SETTINGS_KEYS` contains `relative_due_dates`, so editing the section never triggers a course-settings upload. `toml_write.INLINE_TABLE_ARRAY_KEYS` contains `items`, so `import` writes a table's items as inline rows, never as `[[...items]]` blocks.
+**Settings** live in one top-level `[relative_due_dates]` section (a new top-level key is safe at the end of the file because it is a table). `load_tables(settings)` turns it into `RelativeTable`s: the section's `days_of_week`, `class_on_noninstructional_days`, `unlock_relative_default` and `lock_relative_default` are the shared values, and each `[relative_due_dates.tables.<name>]` table may override any of them, so its `TableSettings` are already resolved. Tables sit under `tables` so a table name can never collide with a setting name. Unknown keys at any level are errors (a typo such as `lock_ofset` would otherwise silently do nothing). Offsets are parsed when loaded, so a bad one is reported before any date is computed. `days_of_week` is stored as a set in week order (the class-day search steps to the next entry of the list). `select_table(tables, cli_name)` picks the table: `--table`, else the one named `default` (`DEFAULT_TABLE`); with no `default` and no `--table` it lists the names and stops, even when there is exactly one other table (migration 2 -> 3 renames the common lone-table case). `sync._NON_METADATA_SETTINGS_KEYS` contains `relative_due_dates`, so editing the section never triggers a course-settings upload. `toml_write.INLINE_TABLE_ARRAY_KEYS` contains `items`, so `import` writes a table's items as inline rows, never as `[[...items]]` blocks.
 
-**Term file** (`load_term`): TOML with `first_day`, `last_day`, `time_zone` (an IANA name, resolved with `zoneinfo`; `tzdata` is a dependency so Windows and slim containers, which have no OS time zone database, work too), `default_due_time`, `noninstructional_days` and optional `relative_table`. Dates and times may be TOML values or strings. `import` writes a fully commented example, `course_settings/term_dates.toml`, only when it does not exist. `course_settings/` is never scanned by `find-local-orphans` and no sync code enumerates it, so the file is not reported or uploaded (tested).
+**Term file** (`load_term`): TOML with `first_day`, `last_day`, `time_zone` (an IANA name, resolved with `zoneinfo`; `tzdata` is a dependency so Windows and slim containers, which have no OS time zone database, work too), `default_due_time`, and `noninstructional_days`; a `relative_table` key is rejected with a message that points at `--table` (it was removed in format version 3). The CLI turns `TERM_FILE` into a path with `course_registry.resolve_term` (a path, else a term name) before `load_term`. Dates and times may be TOML values or strings. `import` writes a fully commented example, `course_settings/term_dates.toml`, only when it does not exist. `course_settings/` is never scanned by `find-local-orphans` and no sync code enumerates it, so the file is not reported or uploaded (tested).
 
 **Arithmetic** (`_Calculator`) is a port of MikesGradingTool's `calculateDueDate` and `apply_offsets_to_due_date` (`Canvas/CanvasHelper.py`), on *naive local* `datetime`s; the zone's UTC offset is attached only when a value is formatted (`isoformat(timespec="seconds")`). The grading tool adds `timedelta` to `pytz`-localized values, which keep the offset of their start date, so an item whose own offsets cross a daylight-saving change ends up an hour early counting forward and an hour late counting backward (23:59 on Oct 31 became 00:59 on Nov 1). Local arithmetic avoids that. Other differences: results are memoized per item (`_due`) and cycles are found with an in-progress list; an item's offsets are never modified (the grading tool inserts `-1 CALENDAR_DAY, +1 CLASS_DAY` into the list for `FIRST_CLASS_OF_QUARTER`, which is safe there only because of its cache; here the two offsets are prepended to a new tuple); `-N CLASS_DAY` looks for the previous class day (the original looks for index+1 in both directions, correct only for one or two class days); an `ASSIGNMENT` anchor to an item with no due date is an error for the whole run (the original reports that one item and continues); an `ASSIGNMENT` anchor counts from the anchor's *date* and restarts at `default_due_time`, as the original does. The class-day search, kept from the original, tracks the index of the next class day, skips a non-instructional day by advancing that index, and starts from the first class day it meets when the start is between class days. It stops with an error after 3,660 steps.
 
@@ -828,8 +894,9 @@ never touches Canvas, the API, or the manifest.
 markdown-to-canvas publish [COURSE_DIR] [--output-dir site] [--deploy] [--emit-workflow]
 ```
 
-- `COURSE_DIR`: the course content repo. If omitted, resolved by walking up from the current
-  directory — see [Repo-root resolution](#repo-root-resolution)
+- `COURSE_DIR`: the course content directory (a path or a registry key). If omitted, resolved by
+  walking up from the current directory — see
+  [Course-directory resolution](#course-directory-resolution)
 - `--output-dir`: where `mkdocs build` writes the static HTML (default: `site/`)
 - `--deploy`: run `mkdocs gh-deploy` (push to the repo's `gh-pages` branch) instead of a local build
 - `--emit-workflow`: also write a starter `.github/workflows/publish.yml` into the course repo

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from markdown_to_canvas.cli import _resolve_repo
+from markdown_to_canvas.cli import _resolve_course
 from markdown_to_canvas.config import load
 
 
@@ -188,7 +188,7 @@ def test_require_course_false_tolerates_missing_fields(
 
 
 # ---------------------------------------------------------------------------
-# _resolve_repo: optional REPO argument for update/publish
+# _resolve_course: optional COURSE_DIR argument (path, registry key, or walk-up)
 # ---------------------------------------------------------------------------
 
 
@@ -199,14 +199,16 @@ def _make_course_repo(tmp_path: Path) -> Path:
     return repo
 
 
-class TestResolveRepo:
+class TestResolveCourse:
     def test_explicit_path_is_used_verbatim(self, tmp_path: Path) -> None:
         """An explicit path never walks up, so a wrong path still reports its own
         missing config rather than silently acting on the parent repo."""
         repo = _make_course_repo(tmp_path)
         subdir = repo / "pages" / "worksheets"
         subdir.mkdir(parents=True)
-        assert _resolve_repo(subdir) == subdir
+        path, config = _resolve_course(str(subdir))
+        assert path == subdir.resolve()
+        assert config is None
 
     def test_omitted_walks_up_from_cwd(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -215,18 +217,18 @@ class TestResolveRepo:
         subdir = repo / "pages" / "worksheets"
         subdir.mkdir(parents=True)
         monkeypatch.chdir(subdir)
-        assert _resolve_repo(None) == repo
+        assert _resolve_course(None)[0] == repo.resolve()
 
     def test_omitted_at_repo_root(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         repo = _make_course_repo(tmp_path)
         monkeypatch.chdir(repo)
-        assert _resolve_repo(None) == repo
+        assert _resolve_course(None)[0] == repo.resolve()
 
     def test_omitted_outside_any_repo_exits(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.chdir(tmp_path)
         with pytest.raises(SystemExit):
-            _resolve_repo(None)
+            _resolve_course(None)

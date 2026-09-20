@@ -20,7 +20,6 @@ def _term(**over) -> rd.Term:
         time_zone=ZoneInfo("America/Los_Angeles"),
         default_due_time=time(23, 59),
         noninstructional_days={date(2026, 10, 21): "Non-Instructional Day"},
-        relative_table=None,
     )
     values.update(over)
     return rd.Term(**values)
@@ -176,36 +175,44 @@ def test_same_title_with_different_types_is_allowed():
 # --- selecting a table -----------------------------------------------------
 
 
-def _two_tables():
-    section = {"tables": {"quarter11": {"items": []}, "summer8": {"items": []}}}
+def _tables(*names):
+    section = {"tables": {name: {"items": []} for name in names}}
     return rd.load_tables({"relative_due_dates": section})
 
 
 def test_the_only_table_is_used_without_a_choice():
-    tables = rd.load_tables({"relative_due_dates": {"tables": {"default": {"items": []}}}})
-    assert rd.select_table(tables, None, None).name == "default"
+    assert rd.select_table(_tables("default"), None).name == "default"
 
 
-def test_several_tables_without_a_choice_list_the_names():
+def test_default_is_used_when_there_are_several_tables():
+    assert rd.select_table(_tables("default", "summer8"), None).name == "default"
+
+
+def test_several_tables_without_a_default_list_the_names():
     with pytest.raises(RelativeDueDatesError) as exc:
-        rd.select_table(_two_tables(), None, None)
-    assert "quarter11" in str(exc.value) and "summer8" in str(exc.value)
+        rd.select_table(_tables("quarter11", "summer8"), None)
+    message = str(exc.value)
+    assert "quarter11" in message and "summer8" in message and "--table" in message
 
 
-def test_term_file_names_the_table_and_the_command_line_wins():
-    tables = _two_tables()
-    assert rd.select_table(tables, None, "quarter11").name == "quarter11"
-    assert rd.select_table(tables, "summer8", "quarter11").name == "summer8"
+def test_one_table_not_named_default_still_needs_a_choice():
+    with pytest.raises(RelativeDueDatesError) as exc:
+        rd.select_table(_tables("quarter11"), None)
+    assert "quarter11" in str(exc.value) and "--table" in str(exc.value)
+
+
+def test_the_command_line_names_the_table():
+    assert rd.select_table(_tables("default", "summer8"), "summer8").name == "summer8"
 
 
 def test_unknown_table_name_lists_the_names():
     with pytest.raises(RelativeDueDatesError, match="'fall'.*quarter11, summer8"):
-        rd.select_table(_two_tables(), "fall", None)
+        rd.select_table(_tables("quarter11", "summer8"), "fall")
 
 
 def test_no_tables_at_all():
     with pytest.raises(RelativeDueDatesError, match="no tables"):
-        rd.select_table({}, None, None)
+        rd.select_table({}, None)
 
 
 # --- the term file ---------------------------------------------------------
@@ -215,7 +222,6 @@ first_day = 2026-09-30
 last_day = "2026-12-18"
 time_zone = "America/Los_Angeles"
 default_due_time = "23:59"
-relative_table = "quarter11"
 noninstructional_days = [
   { title = "Veterans Day", date = 2026-11-11 },
 ]
@@ -235,7 +241,6 @@ def test_term_file_is_read(tmp_path):
     assert term.time_zone == ZoneInfo("America/Los_Angeles")
     assert term.default_due_time == time(23, 59)
     assert term.noninstructional_days == {date(2026, 11, 11): "Veterans Day"}
-    assert term.relative_table == "quarter11"
 
 
 def test_term_file_missing_key_names_key_and_file(tmp_path):
@@ -257,12 +262,21 @@ def test_term_file_unknown_time_zone(tmp_path):
         ('default_due_time = "23:59"', 'default_due_time = "late"', "time like 23:59"),
         ("first_day = 2026-09-30", 'first_day = "soon"', "first_day must be a date"),
         ('last_day = "2026-12-18"', 'last_day = "2026-09-01"', "last_day is before first_day"),
-        ('relative_table = "quarter11"', 'relative_tabel = "x"', "unknown key 'relative_tabel'"),
+        ('default_due_time = "23:59"', 'default_due_time = "23:59"\nrelative_tabel = "x"', "unknown key 'relative_tabel'"),
     ],
 )
 def test_term_file_bad_values(tmp_path, old, new, message):
     with pytest.raises(RelativeDueDatesError, match=message):
         rd.load_term(_term_file(tmp_path, TERM_TOML.replace(old, new)))
+
+
+def test_term_file_rejects_the_old_relative_table_key(tmp_path):
+    path = _term_file(tmp_path, TERM_TOML + 'relative_table = "quarter11"\n')
+    with pytest.raises(RelativeDueDatesError) as exc:
+        rd.load_term(path)
+    message = str(exc.value)
+    assert "relative_table" in message and str(path) in message
+    assert "--table" in message and "first_day" in message  # says what to do, lists allowed keys
 
 
 def test_term_file_not_found_and_not_toml(tmp_path):

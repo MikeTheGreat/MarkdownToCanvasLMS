@@ -9,14 +9,25 @@ from pathlib import Path
 import click
 import pypandoc
 import requests
-from dotenv import find_dotenv, load_dotenv
 
-# load_dotenv() must run before the local package imports below, because .config
+# load_env_files() must run before the local package imports below, because .config
 # (imported transitively by canvas_api/sync/etc.) reads CANVAS_API_TOKEN from the
 # environment at import time. That is why those imports deliberately come after
 # this call rather than at the top of the file — ruff's E402 is ignored for this
 # file in pyproject.toml for exactly this reason.
-load_dotenv(find_dotenv(usecwd=True), override=True, verbose=True)
+from .course_registry import (  # noqa: E402  (safe: imports nothing that reads the token)
+    RegistryError,
+    ResolvedCourse,
+    add_entry,
+    check_key_free,
+    complete_course,
+    complete_term,
+    load_env_files,
+    resolve_course,
+    resolve_term,
+)
+
+load_env_files()
 
 
 from .canvas_api import get_course, read_tab_configuration
@@ -50,22 +61,49 @@ def die(msg: str) -> None:
     sys.exit(1)
 
 
-def _resolve_repo(repo: Path | None) -> Path:
-    """Return the course repo to act on.
+def _course_dir_argument(required: bool = False):
+    """The COURSE_DIR argument every course-acting command shares.
 
-    An explicit path is used as given — no walking up — so a wrong path still
-    reports the missing course_settings/ rather than silently acting on a parent.
-    When omitted, walk up from the current directory to find the enclosing repo.
+    It is a plain string here, not a click.Path, because it may be a registry
+    key; `_resolve_course` turns it into a directory.
     """
-    if repo is not None:
-        return repo
-    found = find_repo_root(Path.cwd())
-    if found is None:
-        die(
-            "Not inside a course repo (no course_settings/course_settings.toml found "
-            "in this directory or any parent). Pass the repo path explicitly."
-        )
-    return found
+    # No default= for a required argument: Click 8.4 treats an explicit
+    # default=None as satisfying `required`, which would let `prune` walk up.
+    extra = {} if required else {"default": None}
+    return click.argument(
+        "course_dir",
+        required=required,
+        type=str,
+        shell_complete=complete_course,
+        **extra,
+    )
+
+
+def _resolve_course(course_dir: str | None, config: Path | None = None) -> tuple[Path, Path | None]:
+    """Return (course directory, config to use) and print the directory.
+
+    A given argument is tried as a path (used as typed, no walking up), then as a
+    registry key. An omitted argument walks up from the current directory. The
+    config is --config if given, else the registry entry's config, else None
+    (meaning the command's own default).
+    """
+    if course_dir is None:
+        found = find_repo_root(Path.cwd())
+        if found is None:
+            die(
+                "Not inside a course directory (no course_settings/course_settings.toml "
+                "found in this directory or any parent). Pass COURSE_DIR (a path or a "
+                "registered course key) explicitly."
+            )
+        resolved = ResolvedCourse(found.resolve())
+    else:
+        try:
+            resolved = resolve_course(course_dir)
+        except RegistryError as e:
+            die(str(e))
+    via = f"  (course {resolved.key})" if resolved.key else ""
+    click.echo(f"Course dir: {resolved.path}{via}")
+    return resolved.path, config if config is not None else resolved.config
 
 
 def _guard_course(repo: Path, cfg: Config, course, assume_yes: bool) -> None:
@@ -259,18 +297,39 @@ def mv_cmd(src: Path, dest: str, noop: bool, verbose: bool) -> None:
 @main.command(name="import", no_args_is_help=True)
 @click.argument("imscc_path", type=click.Path(exists=True, path_type=Path))
 @click.argument("output_dir", type=click.Path(path_type=Path))
-def import_cmd(imscc_path: Path, output_dir: Path) -> None:
+@click.option(
+    "--register",
+    "register_key",
+    default=None,
+    metavar="KEY",
+    help=(
+        "Add the new course to the course registry under KEY, so later commands can "
+        "name it by KEY. Fails, before writing anything, if KEY is already registered."
+    ),
+)
+def import_cmd(imscc_path: Path, output_dir: Path, register_key: str | None) -> None:
     """Import a Canvas course from a local .imscc file into a Markdown repo.
 
     IMSCC_PATH is the path to a .imscc zip file or an already-extracted directory.
     OUTPUT_DIR is where the course repo will be written (must be empty or new).
     """
+    if register_key is not None:
+        try:
+            check_key_free(register_key)
+        except RegistryError as e:
+            die(str(e))
     try:
         run_import(imscc_path, output_dir)
     except ValueError as e:
         die(str(e))
     except Exception as e:
         die(str(e))
+    if register_key is not None:
+        try:
+            registry = add_entry(register_key, output_dir)
+        except (RegistryError, OSError) as e:
+            die(f"The course was imported to {output_dir.resolve()}, but registering it failed: {e}")
+        click.echo(f"Registered course {register_key}: {output_dir.resolve()}  ({registry})")
 
 
 def _flags_config(repo: Path, config: Path | None) -> Config | None:
@@ -278,7 +337,7 @@ def _flags_config(repo: Path, config: Path | None) -> Config | None:
 
     Used by the subcommands that never contact Canvas (`publish`,
     `list-titles`): an explicit --config must exist, while the default
-    <repo>/course_settings/canvas.toml is optional — a repo that only
+    <COURSE_DIR>/course_settings/canvas.toml is optional — a repo that only
     publishes need not have one. No API token and no base_url/course_id
     required (see config.load's require_course).
     """
@@ -292,12 +351,7 @@ def _flags_config(repo: Path, config: Path | None) -> Config | None:
 
 
 @main.command(name="publish")
-@click.argument(
-    "course_dir",
-    required=False,
-    default=None,
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-)
+@_course_dir_argument()
 @click.option(
     "--output-dir",
     default="site",
@@ -310,19 +364,20 @@ def _flags_config(repo: Path, config: Path | None) -> Config | None:
     type=click.Path(path_type=Path),
     help=(
         "Path to canvas.toml, read only for its [course_flags] table "
-        "(default: <repo>/course_settings/canvas.toml, if present)."
+        "(default: <COURSE_DIR>/course_settings/canvas.toml, if present)."
     ),
 )
 def publish(
-    course_dir: Path | None, output_dir: Path, config: Path | None
+    course_dir: str | None, output_dir: Path, config: Path | None
 ) -> None:
     """Generate a public MkDocs static site from the course repo.
 
-    COURSE_DIR is the course content repo. If omitted, the enclosing repo is
-    found by walking up from the current directory. --config selects which
-    section's course flags the site is built with; Canvas is never contacted.
+    COURSE_DIR is the course content directory: a path or a registered course
+    key. If omitted, the enclosing course is found by walking up from the
+    current directory. --config selects which section's course flags the site
+    is built with; Canvas is never contacted.
     """
-    course_dir = _resolve_repo(course_dir)
+    course_dir, config = _resolve_course(course_dir, config)
     cfg = _flags_config(course_dir, config)
     try:
         run_publish(course_dir, output_dir, cfg)
@@ -333,34 +388,30 @@ def publish(
 
 
 @main.command(name="emit-workflow")
-@click.argument(
-    "course_dir",
-    default=".",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-)
-def emit_workflow_cmd(course_dir: Path) -> None:
+@_course_dir_argument()
+def emit_workflow_cmd(course_dir: str | None) -> None:
     """Write a GitHub Actions workflow for publishing to GitHub Pages.
 
-    COURSE_DIR is the course content repo (defaults to the current directory).
+    COURSE_DIR is the course content directory: a path or a registered course
+    key. If omitted, the enclosing course is found by walking up from the
+    current directory.
     """
     from .publish import emit_workflow
 
+    course_dir, _ = _resolve_course(course_dir)
     try:
-        emit_workflow(Path(course_dir).resolve())
+        emit_workflow(course_dir)
     except Exception as e:
         die(str(e))
 
 
 @main.command(name="prune", no_args_is_help=True)
-@click.argument(
-    "repo",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-)
+@_course_dir_argument(required=True)
 @click.option(
     "--config",
     default=None,
     type=click.Path(path_type=Path),
-    help="Path to canvas.toml (default: <repo>/course_settings/canvas.toml)",
+    help="Path to canvas.toml (default: <COURSE_DIR>/course_settings/canvas.toml)",
 )
 @click.option(
     "--delete",
@@ -382,21 +433,23 @@ def emit_workflow_cmd(course_dir: Path) -> None:
 )
 @click.option("--yes", "-y", "assume_yes", is_flag=True, default=False, help=_YES_HELP)
 @_handle_cli_errors
-def prune(repo: Path, config: Path | None, mode: str | None, assume_yes: bool) -> None:
+def prune(course_dir: str, config: Path | None, mode: str | None, assume_yes: bool) -> None:
     """Delete or unpublish Canvas items whose local source file no longer exists.
 
-    REPO is the course content repo. An item is pruned when its manifest entry's
+    COURSE_DIR is the course content directory: a path or a registered course
+    key. It is required (never found by walking up), because prune changes
+    Canvas. An item is pruned when its manifest entry's
     local file is gone (deleted or renamed). Exactly one of --delete / --unpublish /
     --manifest-only is required. --manifest-only just drops the stale manifest
     entries without contacting Canvas; the others apply changes immediately.
     """
+    repo, config = _resolve_course(course_dir, config)
     if mode is None:
         die("Exactly one of --delete, --unpublish, or --manifest-only is required.")
     if config is None:
         config = repo / "course_settings" / "canvas.toml"
     cfg = load_config(config)
 
-    click.echo(f"Repo:      {repo.resolve()}")
     click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})")
 
     if mode != "manifest":
@@ -415,19 +468,15 @@ def prune(repo: Path, config: Path | None, mode: str | None, assume_yes: bool) -
 
 
 @main.command(name="find-canvas-orphans")
-@click.argument(
-    "repo",
-    default=".",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-)
+@_course_dir_argument()
 @click.option(
     "--config",
     default=None,
     type=click.Path(path_type=Path),
-    help="Path to canvas.toml (default: <repo>/course_settings/canvas.toml)",
+    help="Path to canvas.toml (default: <COURSE_DIR>/course_settings/canvas.toml)",
 )
 @_handle_cli_errors
-def find_canvas_orphans_cmd(repo: Path, config: Path | None) -> None:
+def find_canvas_orphans_cmd(course_dir: str | None, config: Path | None) -> None:
     """Find Canvas resources not referenced by any other resource in the course.
 
     Queries the live Canvas course: scans all pages, assignments, discussions,
@@ -435,8 +484,11 @@ def find_canvas_orphans_cmd(repo: Path, config: Path | None) -> None:
     identifies the front page. Resources with zero inbound references are
     reported. See find-local-orphans for the repo-side equivalent.
 
-    REPO is the course content repo (defaults to the current directory).
+    COURSE_DIR is the course content directory: a path or a registered course
+    key. If omitted, the enclosing course is found by walking up from the
+    current directory.
     """
+    repo, config = _resolve_course(course_dir, config)
     if config is None:
         config = repo / "course_settings" / "canvas.toml"
     cfg = load_config(config)
@@ -454,11 +506,7 @@ def find_canvas_orphans_cmd(repo: Path, config: Path | None) -> None:
 
 
 @main.command(name="find-local-orphans")
-@click.argument(
-    "repo",
-    default=".",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-)
+@_course_dir_argument()
 @click.option(
     "-v",
     "--verbose",
@@ -467,7 +515,7 @@ def find_canvas_orphans_cmd(repo: Path, config: Path | None) -> None:
     "unreferenced ones.",
 )
 @_handle_cli_errors
-def find_local_orphans_cmd(repo: Path, verbose: bool) -> None:
+def find_local_orphans_cmd(course_dir: str | None, verbose: bool) -> None:
     """Find files in the course repo that nothing else in the repo references.
 
     Reads the repo on disk only — no Canvas call, no API token needed. Scans
@@ -484,28 +532,24 @@ def find_local_orphans_cmd(repo: Path, verbose: bool) -> None:
     With -v, the referenced files and their referrers are listed first, so the
     unreferenced ones end up at the bottom of the output.
 
-    REPO is the course content repo (defaults to the current directory).
+    COURSE_DIR is the course content directory: a path or a registered course
+    key. If omitted, the enclosing course is found by walking up from the
+    current directory.
     """
-    _ensure_pandoc()
-    repo = repo.resolve()
-    click.echo(f"Repo: {repo}")
+    repo, _ = _resolve_course(course_dir)
     click.echo()
+    _ensure_pandoc()
 
     print_local_orphan_report(find_local_orphans(repo), verbose=verbose)
 
 
 @main.command(name="clean-manifest")
-@click.argument(
-    "repo",
-    required=False,
-    default=None,
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-)
+@_course_dir_argument()
 @click.option(
     "--config",
     default=None,
     type=click.Path(path_type=Path),
-    help="Path to canvas.toml (default: <repo>/course_settings/canvas.toml)",
+    help="Path to canvas.toml (default: <COURSE_DIR>/course_settings/canvas.toml)",
 )
 @click.option(
     "--apply",
@@ -533,7 +577,7 @@ def find_local_orphans_cmd(repo: Path, verbose: bool) -> None:
 )
 @_handle_cli_errors
 def clean_manifest_cmd(
-    repo: Path | None,
+    course_dir: str | None,
     config: Path | None,
     apply: bool,
     no_canvas_check: bool,
@@ -555,17 +599,17 @@ def clean_manifest_cmd(
     which is what a deliberate move to a different course means: Canvas object IDs
     are unique per object, so none of the recorded IDs can exist in the new course.
 
-    REPO is the course content repo. If omitted, the enclosing repo is found by
-    walking up from the current directory.
+    COURSE_DIR is the course content directory: a path or a registered course
+    key. If omitted, the enclosing course is found by walking up from the
+    current directory.
     """
+    repo, config = _resolve_course(course_dir, config)
     if not no_canvas_check:
         _ensure_pandoc()
-    repo = _resolve_repo(repo).resolve()
     if config is None:
         config = repo / "course_settings" / "canvas.toml"
     cfg = load_config(config)
 
-    click.echo(f"Repo:      {repo}")
     click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})")
     course = get_course(cfg)
     click.echo(f"Course:    {course.name}")
@@ -692,12 +736,7 @@ def create_tool_aliases(course_url: str) -> None:
 
 
 @main.command(name="upgrade")
-@click.argument(
-    "repo",
-    required=False,
-    default=None,
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-)
+@_course_dir_argument()
 @click.option(
     "--noop",
     "-n",
@@ -705,7 +744,7 @@ def create_tool_aliases(course_url: str) -> None:
     default=False,
     help="Show what would change without writing any file.",
 )
-def upgrade_cmd(repo: Path | None, noop: bool) -> None:
+def upgrade_cmd(course_dir: str | None, noop: bool) -> None:
     """Upgrade a course repo (and its manifests) to this tool's file format.
 
     Every other command refuses to run on a repo written for a different
@@ -717,12 +756,12 @@ def upgrade_cmd(repo: Path | None, noop: bool) -> None:
 
     Manifests are local files, so run upgrade on every machine that holds one.
 
-    REPO is the course content repo. If omitted, the enclosing repo is found by
-    walking up from the current directory. When the repo has no
-    course_settings.toml yet, pass its path explicitly.
+    COURSE_DIR is the course content directory: a path or a registered course
+    key. If omitted, the enclosing course is found by walking up from the
+    current directory. When the course has no course_settings.toml yet, pass
+    its path explicitly.
     """
-    repo = _resolve_repo(repo).resolve()
-    click.echo(f"Repo:      {repo}")
+    repo, _ = _resolve_course(course_dir)
     try:
         run_upgrade(repo, noop=noop)
     except RepoFormatError as e:
@@ -734,23 +773,15 @@ def _stdin_is_terminal() -> bool:
 
 
 @main.command(name="generate-due-dates", no_args_is_help=True)
-@click.argument(
-    "term_file",
-    type=click.Path(exists=True, dir_okay=False, path_type=Path),
-)
-@click.argument(
-    "repo",
-    required=False,
-    default=None,
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-)
+@click.argument("term_file", type=str, shell_complete=complete_term)
+@_course_dir_argument()
 @click.option(
     "--table",
     "table_name",
     default=None,
     help=(
-        "Which table of [relative_due_dates.tables] to use. Default: the term "
-        "file's relative_table, or the only table."
+        "Which table of [relative_due_dates.tables] to use. Default: the table "
+        "named `default`."
     ),
 )
 @click.option(
@@ -764,13 +795,15 @@ def _stdin_is_terminal() -> bool:
     "Write the changes without asking. Needed when there is no terminal to ask."
 ))
 def generate_due_dates_cmd(
-    term_file: Path, repo: Path | None, table_name: str | None, noop: bool, assume_yes: bool
+    term_file: str, course_dir: str | None, table_name: str | None, noop: bool, assume_yes: bool
 ) -> None:
     """Fill the due_dates table from the relative due dates in course_settings.toml.
 
     TERM_FILE is a TOML file with this term's first and last day, time zone,
     default due time and non-instructional days (`import` writes a commented
-    example, course_settings/term_dates.toml). Each item of the chosen table in
+    example, course_settings/term_dates.toml), given as a path or as a term name:
+    the name of a file in ~/.config/markdown-to-canvas/terms/ without its .toml.
+    Each item of the chosen table in
     [relative_due_dates] is turned into absolute unlock_at / due_at / lock_at
     values and written into the matching due_dates entry, or a new one. Other
     keys of an entry, such as only_if, are kept.
@@ -779,13 +812,17 @@ def generate_due_dates_cmd(
     until you confirm; --noop shows them and stops. The command never contacts
     Canvas: run `update` afterwards to send the dates.
 
-    REPO is the course content repo. If omitted, the enclosing repo is found by
-    walking up from the current directory.
+    COURSE_DIR is the course content directory: a path or a registered course
+    key. If omitted, the enclosing course is found by walking up from the
+    current directory.
     """
-    repo = _resolve_repo(repo).resolve()
-    click.echo(f"Repo:      {repo}")
+    repo, _ = _resolve_course(course_dir)
     try:
-        plan = plan_generation(repo, term_file, table_name)
+        term_path = resolve_term(term_file)
+    except RegistryError as e:
+        die(str(e))
+    try:
+        plan = plan_generation(repo, term_path, table_name)
     except (RepoFormatError, RelativeDueDatesError) as e:
         die(str(e))
 
@@ -817,29 +854,27 @@ def generate_due_dates_cmd(
 
 
 @main.command(name="list-titles")
-@click.argument(
-    "repo",
-    default=".",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-)
+@_course_dir_argument()
 @click.option(
     "--config",
     default=None,
     type=click.Path(path_type=Path),
     help=(
         "Path to canvas.toml, read only for its [course_flags] table "
-        "(default: <repo>/course_settings/canvas.toml, if present)."
+        "(default: <COURSE_DIR>/course_settings/canvas.toml, if present)."
     ),
 )
-def list_titles(repo: Path, config: Path | None) -> None:
+def list_titles(course_dir: str | None, config: Path | None) -> None:
     """List all assignments, discussions, and quizzes with their due dates and file paths.
 
-    REPO is the course content repo (defaults to the current directory).
+    COURSE_DIR is the course content directory: a path or a registered course
+    key. If omitted, the enclosing course is found by walking up from the
+    current directory.
     Items are sorted by due date (earliest first), then items without
     a due date are listed alphabetically by title. --config selects which
     section's course flags apply to due_dates `only_if` entries.
     """
-    repo = repo.resolve()
+    repo, config = _resolve_course(course_dir, config)
     cfg = _flags_config(repo, config)
     try:
         items = collect_title_items(repo, cfg)  # (due_at, title, path)
@@ -881,17 +916,12 @@ def _format_concise_date(iso_date: str) -> str:
 
 
 @main.command()
-@click.argument(
-    "repo",
-    required=False,
-    default=None,
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
-)
+@_course_dir_argument()
 @click.option(
     "--config",
     default=None,
     type=click.Path(path_type=Path),
-    help="Path to canvas.toml (default: <repo>/course_settings/canvas.toml)",
+    help="Path to canvas.toml (default: <COURSE_DIR>/course_settings/canvas.toml)",
 )
 @click.option(
     "--force-uploads",
@@ -952,7 +982,7 @@ def _format_concise_date(iso_date: str) -> str:
 @click.option("--yes", "-y", "assume_yes", is_flag=True, default=False, help=_YES_HELP)
 @_handle_cli_errors
 def update(
-    repo: Path | None,
+    course_dir: str | None,
     config: Path | None,
     force_uploads: bool,
     force_overwrite: bool,
@@ -964,11 +994,12 @@ def update(
 ) -> None:
     """Sync a Markdown course repo to Canvas LMS.
 
-    REPO is the course content repo. If omitted, the enclosing repo is found by
-    walking up from the current directory.
+    COURSE_DIR is the course content directory: a path or a registered course
+    key. If omitted, the enclosing course is found by walking up from the
+    current directory.
     """
+    repo, config = _resolve_course(course_dir, config)
     _ensure_pandoc()
-    repo = _resolve_repo(repo)
     if check_all and (target_recursively or single_target):
         die("--check-all always checks the whole repo; it cannot be combined with -t/--target-recursively or -s/--single-target.")
     if check_all and (force_uploads or force_overwrite):
@@ -977,7 +1008,6 @@ def update(
         config = repo / "course_settings" / "canvas.toml"
     cfg = load_config(config, require_token=not check_all)
 
-    click.echo(f"Repo:      {repo.resolve()}")
     click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})")
 
     if check_all:

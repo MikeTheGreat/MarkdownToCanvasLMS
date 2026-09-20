@@ -37,8 +37,10 @@ Usage
     --term          Print the term file instead: the quarter's first and last day,
                     time zone, default due time and non-instructional days, from
                     the config's top-level "due_date_info" and "app-wide_config".
-                    With a course, it also names that course's table
-                    (relative_table).
+                    The term file no longer names a table: pass the table to
+                    `generate-due-dates` with --table <name> (the course key
+                    unless --table was given here; `default` is used when
+                    --table is omitted there).
 
 Output goes to stdout, so redirect it or paste it. Notes about anything that could
 not be carried over (assignments without a due_date or a Canvas name) go to stderr.
@@ -214,8 +216,6 @@ def build_term(config: dict[str, Any], course: str | None) -> dict[str, Any]:
         "time_zone": zone,
         "default_due_time": info["assignment_default_due_time"],
     }
-    if course:
-        term["relative_table"] = course
     holidays = [
         {"title": d["title"], "date": date.fromisoformat(d["date"])}
         for d in info.get("noninstructional_days", [])

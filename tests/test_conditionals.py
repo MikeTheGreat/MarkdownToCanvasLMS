@@ -1285,7 +1285,7 @@ def test_mv_preserves_flags_used(tmp_path) -> None:
     with manifest_path.open("wb") as f:
         tomli_w.dump(
             {
-                "_repo_format": {"format_version": 2},
+                "_repo_format": {"format_version": 3},
                 "pages/flagged.md": {
                     "canvas_id": 1,
                     "canvas_type": "page",

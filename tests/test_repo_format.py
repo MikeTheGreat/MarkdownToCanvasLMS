@@ -404,7 +404,7 @@ def test_migration_1_to_2_adds_empty_default_table(tmp_path):
     body = '# c\ntitle = "x"\ndue_dates = [\n  { name = "A", due_at = "NONE" },\n]\n\n[late_policy]\nz = 1  # t\n'
     path = _v1_repo(tmp_path, body)
     manifest = _manifest(tmp_path, version=1, extra={"a.md": {"canvas_id": 1}})
-    rf.run_upgrade(tmp_path, today=date(2026, 9, 20))
+    rf.run_upgrade(tmp_path, today=date(2026, 9, 20), target_version=2)  # this step only
     text = path.read_text()
     data = tomllib.loads(text)
     assert data["format_version"] == 2
@@ -413,13 +413,14 @@ def test_migration_1_to_2_adds_empty_default_table(tmp_path):
     assert text.index("[relative_due_dates") > text.index("[late_policy]")
     assert data["upgraded_by"] == [f"{rf.tool_version()} on 2026-09-20: 1 -> 2"]
     assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 2}
+    rf.run_upgrade(tmp_path)  # the rest of the way to the current version
     assert rf.check_repo_format(tmp_path) is None
 
 
 def test_migration_1_to_2_leaves_existing_section(tmp_path, capsys):
     body = '[relative_due_dates]\ndays_of_week = ["Mon"]\n'
     path = _v1_repo(tmp_path, body)
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=2)  # this step only
     data = tomllib.loads(path.read_text())
     assert data["relative_due_dates"] == {"days_of_week": ["Mon"]}
     assert data["format_version"] == 2
@@ -446,3 +447,212 @@ def test_manifest_lagging_does_not_add_section_to_current_settings(tmp_path):
     _manifest(tmp_path, version=1)
     rf.run_upgrade(tmp_path)  # the tab_configuration fix rewrites the file
     assert "relative_due_dates" not in tomllib.loads(path.read_text())
+
+
+# --- migration 2 -> 3 ------------------------------------------------------
+#
+# The term file no longer names a table, and the table `generate-due-dates` uses
+# is `default` unless --table says otherwise. The migration renames a lone table,
+# drops the empty `default` that migration 1 -> 2 leaves beside a used table, and
+# removes `relative_table` from the in-repo term file.
+
+TOP = '# my course\nformat_version = 2\ntitle = "x"  # keep\ndue_dates = [\n  { name = "A", due_at = "NONE" },\n]\n\n'
+LATE = '[late_policy]\nz = 1  # t\n\n'
+QUARTER = (
+    "# the schedule\n"
+    "[relative_due_dates.tables.quarter11]\n"
+    'days_of_week = ["Mon", "Wed"]  # class days\n'
+    "\n"
+    "[[relative_due_dates.tables.quarter11.items]]\n"
+    'name = "Week 1"\n'
+    'relative_to = { type = "START_OF_QUARTER" }\n'
+    'offsets = ["+1 CLASS_DAY"]\n'
+)
+EMPTY_DEFAULT = "[relative_due_dates.tables.default]\nitems = []\n\n"
+TERM = 'first_day = 2026-09-30\n# a comment\nrelative_table = "quarter11"\ntime_zone = "America/Los_Angeles"\n'
+
+
+def _v2_repo(tmp_path, body, term=None):
+    path = _settings(tmp_path, TOP + LATE + body)
+    if term is not None:
+        (tmp_path / "course_settings" / "term_dates.toml").write_text(term)
+    return path
+
+
+def _tables(path):
+    return tomllib.loads(path.read_text())["relative_due_dates"]["tables"]
+
+
+def test_migration_2_to_3_renames_a_lone_table(tmp_path, capsys):
+    path = _v2_repo(tmp_path, QUARTER)
+    rf.run_upgrade(tmp_path)
+    text = path.read_text()
+    assert list(_tables(path)) == ["default"]
+    assert _tables(path)["default"]["items"][0]["name"] == "Week 1"
+    assert "[relative_due_dates.tables.default]" in text
+    assert "[[relative_due_dates.tables.default.items]]" in text
+    assert "quarter11" not in text
+    assert "# the schedule" in text and "# class days" in text
+    out = capsys.readouterr().out
+    assert "Rename [relative_due_dates.tables.quarter11] -> [relative_due_dates.tables.default]" in out
+
+
+def test_migration_2_to_3_drops_the_empty_default_beside_a_used_table(tmp_path, capsys):
+    path = _v2_repo(tmp_path, EMPTY_DEFAULT + QUARTER)
+    rf.run_upgrade(tmp_path)
+    text = path.read_text()
+    assert list(_tables(path)) == ["default"]
+    assert _tables(path)["default"]["items"][0]["name"] == "Week 1"
+    assert text.count("[relative_due_dates.tables.default]") == 1
+    assert "items = []" not in text
+    out = capsys.readouterr().out
+    assert "Remove the empty [relative_due_dates.tables.default] table" in out
+    assert "Rename [relative_due_dates.tables.quarter11]" in out
+
+
+def test_migration_2_to_3_drops_an_empty_default_that_comes_last(tmp_path):
+    path = _v2_repo(tmp_path, QUARTER + "\n" + EMPTY_DEFAULT.rstrip("\n") + "\n")
+    rf.run_upgrade(tmp_path)
+    assert list(_tables(path)) == ["default"]
+    assert _tables(path)["default"]["items"][0]["name"] == "Week 1"
+
+
+def test_migration_2_to_3_keeps_everything_else_byte_for_byte(tmp_path):
+    path = _v2_repo(tmp_path, EMPTY_DEFAULT + QUARTER)
+    rf.run_upgrade(tmp_path)
+    text = path.read_text()
+    head = "format_version = 3\n"
+    # upgraded_by is added after format_version by every upgrade; strip that line.
+    lines = [ln for ln in text.splitlines(keepends=True) if not ln.startswith("upgraded_by")]
+    expected = (TOP + LATE + QUARTER).replace("format_version = 2\n", head).replace(
+        "quarter11", "default"
+    )
+    assert "".join(lines) == expected
+
+
+def test_migration_2_to_3_handles_inline_items(tmp_path):
+    body = (
+        "[relative_due_dates.tables.quarter11]\n"
+        'items = [ { name = "Week 1", relative_to = { type = "START_OF_QUARTER" }, offsets = ["+1 CLASS_DAY"] } ]\n'
+    )
+    path = _v2_repo(tmp_path, body)
+    rf.run_upgrade(tmp_path)
+    assert list(_tables(path)) == ["default"]
+    assert _tables(path)["default"]["items"][0]["name"] == "Week 1"
+
+
+def test_migration_2_to_3_leaves_several_real_tables_and_says_so(tmp_path, capsys):
+    body = QUARTER + "\n" + QUARTER.replace("quarter11", "summer8")
+    path = _v2_repo(tmp_path, body)
+    rf.run_upgrade(tmp_path)
+    assert sorted(_tables(path)) == ["quarter11", "summer8"]
+    assert "--table NAME" in capsys.readouterr().out
+
+
+def test_migration_2_to_3_default_plus_two_used_tables_says_so(tmp_path, capsys):
+    body = EMPTY_DEFAULT + QUARTER + "\n" + QUARTER.replace("quarter11", "summer8")
+    path = _v2_repo(tmp_path, body)
+    rf.run_upgrade(tmp_path)
+    assert sorted(_tables(path)) == ["default", "quarter11", "summer8"]
+    assert "--table NAME" in capsys.readouterr().out
+
+
+def test_migration_2_to_3_only_default_needs_nothing(tmp_path, capsys):
+    path = _v2_repo(tmp_path, EMPTY_DEFAULT.rstrip("\n") + "\n")
+    rf.run_upgrade(tmp_path)
+    assert _tables(path) == {"default": {"items": []}}
+    out = capsys.readouterr().out
+    assert "NOTICE" not in out and "Rename" not in out
+
+
+def test_migration_2_to_3_gives_up_on_a_layout_it_cannot_rewrite(tmp_path, capsys):
+    # Dotted keys instead of a table header: the header rewrite cannot reach it.
+    body = 'relative_due_dates.tables.quarter11.days_of_week = ["Mon"]\n'
+    path = _settings(tmp_path, "format_version = 2\n" + body)
+    rf.run_upgrade(tmp_path)
+    assert list(_tables(path)) == ["quarter11"]
+    out = capsys.readouterr().out
+    assert "could not rename" in out and "--table quarter11" in out
+
+
+def test_migration_2_to_3_removes_relative_table_from_the_in_repo_term_file(tmp_path, capsys):
+    _v2_repo(tmp_path, QUARTER, term=TERM)
+    rf.run_upgrade(tmp_path)
+    term = (tmp_path / "course_settings" / "term_dates.toml").read_text()
+    assert term == TERM.replace('relative_table = "quarter11"\n', "")
+    assert "Remove relative_table from course_settings/term_dates.toml" in capsys.readouterr().out
+
+
+def test_migration_2_to_3_leaves_a_commented_relative_table_alone(tmp_path):
+    term = 'first_day = 2026-09-30\n# relative_table = "default"\n'
+    _v2_repo(tmp_path, QUARTER, term=term)
+    term_path = tmp_path / "course_settings" / "term_dates.toml"
+    before = term_path.read_bytes()
+    rf.run_upgrade(tmp_path)
+    assert term_path.read_bytes() == before
+
+
+def test_migration_2_to_3_does_not_create_a_term_file(tmp_path):
+    _v2_repo(tmp_path, QUARTER)
+    rf.run_upgrade(tmp_path)
+    assert not (tmp_path / "course_settings" / "term_dates.toml").exists()
+
+
+def test_migration_2_to_3_noop_writes_neither_file(tmp_path, capsys):
+    path = _v2_repo(tmp_path, EMPTY_DEFAULT + QUARTER, term=TERM)
+    term_path = tmp_path / "course_settings" / "term_dates.toml"
+    manifest = _manifest(tmp_path, version=2, extra={"a.md": {"canvas_id": 1}})
+    before = (path.read_bytes(), term_path.read_bytes(), manifest.read_bytes())
+    rf.run_upgrade(tmp_path, noop=True)
+    assert (path.read_bytes(), term_path.read_bytes(), manifest.read_bytes()) == before
+    out = capsys.readouterr().out
+    assert "Rename [relative_due_dates.tables.quarter11]" in out
+    assert "Remove relative_table from" in out
+
+
+def test_migration_2_to_3_stamps_manifests_and_the_version(tmp_path):
+    path = _v2_repo(tmp_path, QUARTER)
+    manifest = _manifest(tmp_path, version=2, extra={"a.md": {"canvas_id": 1}})
+    rf.run_upgrade(tmp_path, today=date(2026, 9, 20))
+    data = tomllib.loads(path.read_text())
+    assert data["format_version"] == 3
+    assert data["upgraded_by"] == [f"{rf.tool_version()} on 2026-09-20: 2 -> 3"]
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 3}
+    assert rf.check_repo_format(tmp_path) is None
+
+
+def test_migration_2_to_3_skips_a_settings_file_already_at_3(tmp_path):
+    # A current settings file with a manifest that lags: only the manifest is stamped.
+    path = _settings(tmp_path, "format_version = 3\n" + QUARTER)
+    manifest = _manifest(tmp_path, version=2, extra={"a.md": {"canvas_id": 1}})
+    before = path.read_bytes()
+    rf.run_upgrade(tmp_path)
+    assert path.read_bytes() == before
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 3}
+
+
+def test_migration_1_through_3_in_one_run_collapses_the_two_tables(tmp_path):
+    # A v1 repo gets an empty `default` from 1 -> 2 only when it has no section;
+    # one that already has a lone named table just has it renamed.
+    path = _settings(tmp_path, "format_version = 1\n" + QUARTER)
+    rf.run_upgrade(tmp_path)
+    assert list(_tables(path)) == ["default"]
+    assert tomllib.loads(path.read_text())["format_version"] == 3
+
+
+@pytest.mark.parametrize(
+    "table",
+    [
+        QUARTER,
+        "[relative_due_dates.tables.quarter11]\n"
+        "# inline layout\n"
+        'items = [ { name = "Week 1", relative_to = { type = "START_OF_QUARTER" }, offsets = ["+1 CLASS_DAY"] } ]\n',
+    ],
+    ids=["array-of-tables items", "inline items"],
+)
+def test_migration_2_to_3_lone_table_rename_changes_only_the_names(tmp_path, table):
+    path = _v2_repo(tmp_path, table)
+    rf.run_upgrade(tmp_path)
+    lines = [ln for ln in path.read_text().splitlines(keepends=True) if not ln.startswith("upgraded_by")]
+    expected = (TOP + LATE + table).replace("format_version = 2\n", "format_version = 3\n")
+    assert "".join(lines) == expected.replace("quarter11", "default")

@@ -41,7 +41,6 @@ def _term() -> rd.Term:
         noninstructional_days={
             date.fromisoformat(d["date"]): d["title"] for d in t["noninstructional_days"]
         },
-        relative_table=None,
     )
 
 

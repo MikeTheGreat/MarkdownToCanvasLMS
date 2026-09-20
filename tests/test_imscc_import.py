@@ -1400,8 +1400,8 @@ def test_example_term_file_is_all_comments_and_works_when_uncommented(
     assert tomllib.loads(text) == {}
 
     uncommented = re.sub(
-        r"^# ((?:first_day|last_day|time_zone|default_due_time|noninstructional_days"
-        r"|relative_table) = .*|  \{.*|\])$",
+        r"^# ((?:first_day|last_day|time_zone|default_due_time|noninstructional_days)"
+        r" = .*|  \{.*|\])$",
         r"\1",
         text,
         flags=re.MULTILINE,
@@ -1409,7 +1409,7 @@ def test_example_term_file_is_all_comments_and_works_when_uncommented(
     term = rd.load_term(_write(imported_dir.parent / "uncommented_term.toml", uncommented))
     assert term.time_zone.key == "America/Los_Angeles"
     assert len(term.noninstructional_days) == 2
-    assert term.relative_table == "default"
+    assert "relative_table" not in text
 
 
 def _write(path: Path, text: str) -> Path:

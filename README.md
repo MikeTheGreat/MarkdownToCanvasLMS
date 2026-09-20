@@ -60,6 +60,10 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
     - [`canvas.toml`](#canvastoml)
     - [Several Canvas courses from one repo](#several-canvas-courses-from-one-repo)
       - [Making the sections differ](#making-the-sections-differ)
+    - [Naming a course: `COURSE_DIR`, the registry and terms](#naming-a-course-course_dir-the-registry-and-terms)
+      - [The course registry](#the-course-registry)
+      - [Term names](#term-names)
+      - [Registering on import, and Tab completion](#registering-on-import-and-tab-completion)
     - [Which course a manifest belongs to](#which-course-a-manifest-belongs-to)
     - [API token](#api-token)
   - [Usage](#usage)
@@ -321,6 +325,111 @@ everything else in `course_settings.toml`: course name, grading standards,
 assignment groups, late policy, tab configuration. Those are one set of values
 per repo.
 
+### Naming a course: `COURSE_DIR`, the registry and terms
+
+Every command that acts on a course takes an optional `COURSE_DIR` argument:
+`update`, `publish`, `prune`, `clean-manifest`, `upgrade`, `generate-due-dates`,
+`list-titles`, `find-canvas-orphans`, `find-local-orphans` and `emit-workflow`.
+(`mv` takes file paths and works out the course from them; `import` names a
+directory to create.) A course directory does not have to be a git repo.
+
+`COURSE_DIR` can be given three ways:
+
+- **Left out.** The command walks up from the current directory to the nearest
+  directory that contains `course_settings/course_settings.toml`, so you can run
+  it from any subdirectory of a course. If there is none, it stops and asks for
+  the argument. `prune` is the exception: it changes Canvas, so its `COURSE_DIR`
+  is always required and is never guessed from where you are.
+- **A path.** If a directory exists at that path, it is used exactly as typed,
+  with no walking up.
+- **A registry key.** If no such directory exists, the argument is looked up in
+  the course registry (below).
+
+The path wins over a key, so a directory named `142` in your current directory
+is used even if `142` is also a registry key. Every command prints the directory
+it settled on, as its first line, so you can see which course it is about to
+act on:
+
+```text
+$ markdown-to-canvas update 142
+Course dir: /home/you/Courses/it142  (course 142)
+```
+
+#### The course registry
+
+The registry is a file you edit by hand,
+`~/.config/markdown-to-canvas/course_registry.toml`. It maps a short key to a
+course directory, so you can run a command from anywhere:
+
+```toml
+[courses]
+142  = "/home/you/Courses/_IT_CS_142/it142"
+143  = "~/Courses/_IT_CS_143/it143"
+
+# An entry can also be a table, to pick a canvas.toml other than the default
+# (see "Several Canvas courses from one repo"). `config` is relative to the
+# course directory.
+142a = { path = "~/Courses/_IT_CS_142/it142", config = "course_settings/canvas-sec-a.toml" }
+142b = { path = "~/Courses/_IT_CS_142/it142", config = "course_settings/canvas-sec-b.toml" }
+```
+
+```bash
+markdown-to-canvas update 142            # from any directory
+markdown-to-canvas update 142a           # the section-A Canvas course of the same repo
+markdown-to-canvas list-titles 142
+```
+
+- A path must be absolute or start with `~`. A key that is not registered, or a
+  registered directory that no longer exists, is an error that names the key;
+  the "not registered" message lists the keys you do have.
+- An entry's `config` is used only when the course was named by its key.
+  `--config` on the command line overrides it. A course named by a path, or left
+  out, uses the default `course_settings/canvas.toml`. The manifest follows the
+  config, exactly as it does with `--config` (`.manifest-canvas-sec-a.toml` for
+  `canvas-sec-a.toml`).
+- `config` matters to the commands that read a `canvas.toml`: `update`,
+  `publish`, `prune`, `clean-manifest`, `find-canvas-orphans` and `list-titles`.
+  The others ignore it.
+- The registry is read only when a key has to be looked up. A path, or a course
+  found by walking up, works even if the registry file is missing or broken.
+- Relative `-t` / `-s` paths for `update`, and the paths given to `mv`, are
+  still resolved from your current directory, so use them from inside the course.
+
+#### Term names
+
+`generate-due-dates` takes a term file. Its `TERM_FILE` argument may also be a
+term name: the name of a file in `~/.config/markdown-to-canvas/terms/` without
+the `.toml`. A file that exists at the path you typed wins over a name.
+
+```bash
+# ~/.config/markdown-to-canvas/terms/2026Fall.toml holds the term's dates
+markdown-to-canvas generate-due-dates 2026Fall 142
+markdown-to-canvas generate-due-dates 2026Fall          # inside a course
+markdown-to-canvas generate-due-dates course_settings/term_dates.toml 142   # a path still works
+```
+
+The term comes first and the course second. See
+[Generating due dates from offsets](#generating-due-dates-from-offsets-generate-due-dates)
+for what a term file holds; several courses can share one term file.
+
+#### Registering on import, and Tab completion
+
+`import` can add the new course to the registry for you:
+
+```bash
+markdown-to-canvas import export.imscc ~/Courses/it143 --register 143
+```
+
+It refuses a key that is already registered (and does so before writing
+anything), and it registers the course only after the import succeeds. Comments
+and other entries in the registry are kept. This is the only thing that writes
+the file; everything else is up to you.
+
+After `markdown-to-canvas install-completion`, pressing Tab after a command
+offers your registry keys (as well as directories) for `COURSE_DIR`, and your
+term names (as well as files) for `TERM_FILE`. The lists are read each time you
+press Tab, so a key you add later shows up without reinstalling.
+
 ### Which course a manifest belongs to
 
 The manifest is named after the `canvas.toml` file, not after the course inside
@@ -330,14 +439,17 @@ manifest records the course it belongs to (a `_canvas_course` entry holding
 `base_url`, `course_id` and the course name), and `update`, `prune --delete` and
 `prune --unpublish` check it after connecting to Canvas.
 
-These commands already print the repo, the course id and base URL, and the
+These commands already print the course directory, the course id and base URL, and the
 course's name as it comes back from Canvas:
 
 ```text
-Repo:      /home/you/Courses/my-course
+Course dir: /home/you/Courses/my-course  (course 142)
 Course ID: 2735395  (https://cascadia.instructure.com)
 Course:    IT-CS 142 (2026 Fall)
 ```
+
+(`(course 142)` appears only when the directory was named by a registry key; see
+[Naming a course](#naming-a-course-course_dir-the-registry-and-terms).)
 
 The prompts below come right after those lines, so you can check the course name
 before anything is uploaded to it.
@@ -382,6 +494,12 @@ Or put it in a `.env` file in your working directory (loaded automatically on st
 CANVAS_API_TOKEN=your-token-here
 ```
 
+Because a course can now be named from any directory, there is also a fallback
+file, `~/.config/markdown-to-canvas/.env`, in the same format. For each
+variable the tool uses the first of these that sets it: the `.env` in the
+current directory (or the nearest parent that has one), then the shell
+environment, then the fallback file.
+
 Or put it in the `[auth]` block of `course_settings/canvas.toml` for local-only use (add `course_settings/canvas.toml` to `.gitignore` if you do this).
 
 ---
@@ -389,18 +507,19 @@ Or put it in the `[auth]` block of `course_settings/canvas.toml` for local-only 
 ## Usage
 
 ```
-Usage: markdown-to-canvas update [OPTIONS] [REPO]
+Usage: markdown-to-canvas update [OPTIONS] [COURSE_DIR]
 
   Sync a Markdown course repo to Canvas LMS.
 
 Arguments:
-  REPO                            Path to the course content repo. If omitted, the enclosing
-                                  repo is found by walking up from the current directory,
-                                  so you can run `markdown-to-canvas update` from any
-                                  subdirectory.  [optional]
+  COURSE_DIR                      A path or a registered course key. If omitted, the
+                                  enclosing course is found by walking up from the current
+                                  directory, so you can run `markdown-to-canvas update` from
+                                  any subdirectory.  [optional]
 
 Options:
-  --config PATH                   Path to canvas.toml  [default: <repo>/course_settings/canvas.toml]
+  --config PATH                   Path to canvas.toml  [default: <COURSE_DIR>/course_settings/canvas.toml,
+                                  or the registry entry's config]
   --force-uploads                 Re-upload all files even if unchanged since last sync
   --force-overwrite               Skip Canvas timestamp check; always overwrite Canvas
   -t, --target-recursively FILE   Comma-separated files; each is synced plus all resources
@@ -590,12 +709,12 @@ file locally, the item it created stays in Canvas and a stale entry remains in t
 manifest. Use `prune` to clean those up.
 
 ```text
-Usage: markdown-to-canvas prune [OPTIONS] REPO
+Usage: markdown-to-canvas prune [OPTIONS] COURSE_DIR
 
   Delete or unpublish Canvas items whose local source file no longer exists.
 
 Options:
-  --config PATH    Path to canvas.toml  [default: <repo>/course_settings/canvas.toml]
+  --config PATH    Path to canvas.toml  [default: <COURSE_DIR>/course_settings/canvas.toml]
   --delete         Delete the orphaned items from Canvas
   --unpublish      Unpublish (set published=False) the orphaned items on Canvas
   --manifest-only  Remove orphaned entries from the local manifest only; never
@@ -653,10 +772,10 @@ date, so the item is skipped and every page that links to it keeps linking to th
 bad ID. `clean-manifest` finds and removes those entries.
 
 ```text
-Usage: markdown-to-canvas clean-manifest [OPTIONS] [REPO]
+Usage: markdown-to-canvas clean-manifest [OPTIONS] [COURSE_DIR]
 
 Options:
-  --config PATH  Path to canvas.toml  [default: <repo>/course_settings/canvas.toml]
+  --config PATH  Path to canvas.toml  [default: <COURSE_DIR>/course_settings/canvas.toml]
   --apply           Make the changes. Without it, only report what would change.
   --no-canvas-check Do not check Canvas; treat every entry as invalid.
   -y, --yes         With --apply, skip the confirmation when the manifest records
@@ -795,6 +914,8 @@ Reads the course repo on disk. No Canvas call, no API token, works offline.
 
 ```bash
 markdown-to-canvas find-local-orphans path/to/course-repo
+markdown-to-canvas find-local-orphans 142     # a registry key
+markdown-to-canvas find-local-orphans         # inside the course (walks up)
 ```
 
 ```text
@@ -920,6 +1041,7 @@ the course references.
 
 ```bash
 markdown-to-canvas find-canvas-orphans path/to/course-repo
+markdown-to-canvas find-canvas-orphans 142    # a registry key, or omit it inside the course
 ```
 
 It scans page, assignment, discussion, and quiz HTML for internal Canvas links,
@@ -1152,7 +1274,7 @@ tab_configuration = [
 # The optional `type` field disambiguates if two items share a title
 # (valid values: assignment, discussion, quiz).
 #
-# Use `markdown-to-canvas list-titles <repo>` to see all available titles.
+# Use `markdown-to-canvas list-titles <COURSE_DIR>` to see all available titles.
 #
 # IMPORTANT: like tab_configuration, this is a top-level key and must appear
 # BEFORE any [section] or [[section]] header.
@@ -2512,8 +2634,8 @@ anything on Canvas. If a version differs from the tool's, the command stops and
 changes nothing:
 
 ```text
-Error: This course repo is format version 0 but this tool (markdown-to-canvas 0.2.1) uses format version 2. Run `markdown-to-canvas upgrade` first.
-Error: course_settings/course_settings.toml is format version 3 but this tool (markdown-to-canvas 0.2.1) only understands format version 2. Update markdown-to-canvas.
+Error: This course repo is format version 0 but this tool (markdown-to-canvas 0.2.1) uses format version 3. Run `markdown-to-canvas upgrade` first.
+Error: course_settings/course_settings.toml is format version 4 but this tool (markdown-to-canvas 0.2.1) only understands format version 3. Update markdown-to-canvas.
 ```
 
 A manifest that is older than the repo is named in the message. This happens
@@ -2526,8 +2648,8 @@ not check.
 # See what would change, without writing anything
 markdown-to-canvas upgrade --noop
 
-# Upgrade the repo you are in (or pass the path)
-markdown-to-canvas upgrade [REPO]
+# Upgrade the course you are in (or pass a path or a registry key)
+markdown-to-canvas upgrade [COURSE_DIR]
 ```
 
 `upgrade` applies each migration from the repo's version (the lowest of
@@ -2560,6 +2682,17 @@ the end of `course_settings.toml` (see
 [Generating due dates from offsets](#generating-due-dates-from-offsets-generate-due-dates)),
 unless the file already has a `relative_due_dates` key, and records version 2 in
 every manifest. It does not create a term file.
+
+Migration 2 to 3 goes with the removal of `relative_table` from the term file
+(see [The term file](#the-term-file)): a table is now chosen with `--table`,
+else the table named `default`. It removes an uncommented `relative_table` line
+from `course_settings/term_dates.toml` when the repo has that file, and it
+renames the relative-due-dates table to `default` when that is unambiguous: a
+lone table with another name, or the one table that has items when the only other
+table is the empty `default` that migration 1 to 2 added. With several real tables
+it changes nothing and prints a notice that `--table NAME` is needed. Term files
+you keep outside the repo (for example in `~/.config/markdown-to-canvas/terms/`)
+are not touched, so delete a `relative_table` line from those by hand.
 
 `upgrade` also checks that `tab_configuration` is a top-level key. The tool
 only reads it there, so when it is nested under a section
@@ -2668,6 +2801,7 @@ alphabetically by title.
 
 ```bash
 markdown-to-canvas list-titles path/to/course-repo
+markdown-to-canvas list-titles 142            # a registry key, or omit it inside the course
 ```
 
 Example output:
@@ -2700,7 +2834,10 @@ contacts Canvas.
 markdown-to-canvas generate-due-dates course_settings/term_dates.toml --noop
 
 # Compute the dates, show the changes, and ask before writing them
-markdown-to-canvas generate-due-dates course_settings/term_dates.toml [REPO]
+markdown-to-canvas generate-due-dates TERM_FILE [COURSE_DIR] [--table NAME]
+
+# Both may be short names from the registry and the terms directory
+markdown-to-canvas generate-due-dates 2026Fall 142
 
 # Then send them to Canvas as usual
 markdown-to-canvas update
@@ -2713,7 +2850,8 @@ needs a new term file and no edit to the schedule.
 
 ### The term file
 
-A TOML file; the path is whatever you pass on the command line. `import` writes
+A TOML file, named on the command line by its path or by a term name (see
+[Term names](#term-names)). `import` writes
 a fully commented-out example, `course_settings/term_dates.toml`, if there is not
 one already. Remove the leading `# ` from the lines you want and fill in your
 values:
@@ -2723,15 +2861,17 @@ first_day = 2026-09-30
 last_day = 2026-12-18
 time_zone = "America/Los_Angeles"    # an IANA name, so daylight-saving time is handled
 default_due_time = "23:59"
-relative_table = "quarter11"         # optional: which table to use (see below)
 noninstructional_days = [
   { title = "Veterans Day", date = 2026-11-11 },
   { title = "Thanksgiving", date = 2026-11-26 },
 ]
 ```
 
-All keys except `relative_table` and `noninstructional_days` are required, and a
-misspelled key is an error.
+All keys except `noninstructional_days` are required, and a misspelled key is an
+error. The term file does not say which relative table to use: pass `--table`
+(below). A term file that still has a `relative_table` key is rejected with a
+message saying so; `upgrade` removes the line from the copy in
+`course_settings/`, and you delete it from other copies by hand.
 
 ### The `[relative_due_dates]` section
 
@@ -2772,9 +2912,10 @@ Each item has:
 | `unlock_offset`, `lock_offset` | Optional. How far from the item's own due date it unlocks or locks. |
 
 Tables are named, and one run uses one of them: the one named by `--table`, else
-by `relative_table` in the term file, else the only one. If there are several
-and none is chosen, the command lists their names and stops. That is how one
-repo can carry both an 11-week and an 8-week schedule. The `ignore` list quiets
+the table named `default`. If there is no `default` table and none is chosen, the
+command lists the table names and stops. That is how one repo can carry both an
+11-week and an 8-week schedule: keep the usual one as `default` and pick the other
+with `--table summer8`. The `ignore` list quiets
 the warnings below for titles that belong to another table.
 
 ### Offsets
@@ -2810,8 +2951,8 @@ and new value are dates they are printed on two lines with the values in the sam
 columns, so you can see which part changed:
 
 ```text
-Repo:      /home/me/cs142
-Relative table: quarter11
+Course dir: /home/me/cs142
+Relative table: default
 Week 1 Problem Set:
 	due_at: 2026-01-01T00:00:00-08:00
 	     -> 2026-10-05T23:59:00-07:00
@@ -2861,7 +3002,8 @@ CLASS_DAY` goes to the previous class day even with three or more class days a
 week. An item relative to an item with no due date is an error. To bring an
 existing grading-tool course over, `scripts/harvest_relative_due_dates.py
 CONFIG.json COURSE` prints its schedule as a `[relative_due_dates]` section to
-paste into `course_settings.toml`, and `... CONFIG.json --term [COURSE]` prints
+paste into `course_settings.toml` (the table is named after the course, so pass it
+with `--table COURSE` when generating), and `... CONFIG.json --term` prints
 the matching term file (first and last day, time zone, default due time and
 holidays) to save as `course_settings/term_dates.toml`. The script needs only
 [`uv`](https://docs.astral.sh/uv/) (it declares its one dependency inline), so

@@ -11,6 +11,7 @@ reads a repo; it only compares versions. run_upgrade() applies the migrations in
 """
 from __future__ import annotations
 
+import re
 import tomllib
 from collections.abc import Callable
 from datetime import date
@@ -27,9 +28,12 @@ from . import manifest as manifest_lib
 #: The format version this tool reads and writes. Increase it (and add a
 #: migration to MIGRATIONS) whenever a change makes the tool read an existing
 #: repo file differently. See CLAUDE.md.
-FORMAT_VERSION = 2
+FORMAT_VERSION = 3
 
 SETTINGS_RELPATH = Path("course_settings") / "course_settings.toml"
+
+#: The example term file `import` writes (see migration 2 -> 3).
+TERM_RELPATH = Path("course_settings") / "term_dates.toml"
 
 #: Keys written first in course_settings.toml, in this order.
 VERSION_KEYS = ("format_version", "created_by", "upgraded_by")
@@ -232,6 +236,14 @@ class UpgradeState:
         }
         #: Renames to perform when the step is written: (old, new).
         self.renames: list[tuple[Path, Path]] = []
+        #: The in-repo term file, when there is one, and whether a step changed it.
+        self.term_path = repo / TERM_RELPATH
+        self.term_doc: tomlkit.TOMLDocument | None = (
+            tomlkit.parse(self.term_path.read_text(encoding="utf-8"))
+            if self.term_path.exists()
+            else None
+        )
+        self.term_changed = False
 
 
 #: A migration edits ``state`` for the step ``v -> v + 1`` and returns
@@ -287,10 +299,129 @@ def _migrate_1_to_2(state: UpgradeState) -> list[str]:
     return lines
 
 
+#: Name of the table `generate-due-dates` uses when --table is not given.
+DEFAULT_TABLE = "default"
+_TABLES_PATH = f"{RELATIVE_DUE_DATES_KEY}.tables"
+
+
+def _rename_table_headers(text: str, old: str, new: str) -> str:
+    """Rewrite ``[relative_due_dates.tables.<old>...]`` and ``[[...]]`` headers to ``<new>``.
+
+    Only header lines are touched, so comments, key order and the layout of the
+    table's items (inline or ``[[...items]]``) stay as they are.
+    """
+    pattern = re.compile(
+        r"^(\s*\[\[?\s*" + re.escape(RELATIVE_DUE_DATES_KEY) + r"\s*\.\s*tables\s*\.\s*)"
+        r"(?:\"" + re.escape(old) + r"\"|'" + re.escape(old) + r"'|" + re.escape(old) + r")"
+        r"(?=\s*[.\]])",
+        re.MULTILINE,
+    )
+    return pattern.sub(lambda m: m.group(1) + new, text)
+
+
+_HEADER_LINE = re.compile(r"^\s*\[")
+
+
+def _drop_table_block(text: str, name: str) -> str:
+    """Delete the ``[relative_due_dates.tables.<name>]`` header and the lines under it."""
+    lines = text.splitlines(keepends=True)
+    header = re.compile(
+        r"^\s*\[\s*" + re.escape(RELATIVE_DUE_DATES_KEY) + r"\s*\.\s*tables\s*\.\s*"
+        r"(?:\"" + re.escape(name) + r"\"|'" + re.escape(name) + r"'|" + re.escape(name) + r")"
+        r"\s*\]"
+    )
+    start = next((i for i, line in enumerate(lines) if header.match(line)), None)
+    if start is None:
+        return text
+    end = start + 1
+    while end < len(lines) and not _HEADER_LINE.match(lines[end]):
+        end += 1
+    if end == len(lines):
+        # The last block: take the blank line that separated it from what precedes it.
+        while start > 0 and not lines[start - 1].strip():
+            start -= 1
+    else:
+        # Comment lines right above the next header belong to that header, not to this block.
+        while end - 1 > start and lines[end - 1].lstrip().startswith("#"):
+            end -= 1
+    return "".join(lines[:start] + lines[end:])
+
+
+def _migrate_relative_tables(state: UpgradeState) -> list[str]:
+    """Make the relative-due-dates table selectable as ``default`` (migration 2 -> 3, part 2)."""
+    text = tomlkit.dumps(state.settings_doc)
+    data = tomllib.loads(text)
+    section = data.get(RELATIVE_DUE_DATES_KEY)
+    tables = section.get("tables") if isinstance(section, dict) else None
+    if not isinstance(tables, dict) or not tables:
+        return []
+    names = sorted(tables)
+    if names == [DEFAULT_TABLE]:
+        return []
+
+    def is_empty(table: Any) -> bool:
+        return isinstance(table, dict) and not table.get("items") and set(table) <= {"items"}
+
+    drop_empty_default = False
+    if len(names) == 1:
+        target = names[0]
+    elif len(names) == 2 and DEFAULT_TABLE in names and is_empty(tables[DEFAULT_TABLE]):
+        target = next(n for n in names if n != DEFAULT_TABLE)
+        drop_empty_default = True
+    else:
+        return [
+            f"NOTICE: {_TABLES_PATH} has tables {', '.join(names)}; `generate-due-dates` now "
+            f"uses the table named {DEFAULT_TABLE!r} unless --table NAME is given"
+        ]
+
+    new_text = text
+    if drop_empty_default:
+        new_text = _drop_table_block(new_text, DEFAULT_TABLE)
+    new_text = _rename_table_headers(new_text, target, DEFAULT_TABLE)
+
+    expected = {DEFAULT_TABLE: tables[target]}  # the only table left, renamed
+    try:
+        renamed = tomllib.loads(new_text)[RELATIVE_DUE_DATES_KEY].get("tables")
+    except (tomllib.TOMLDecodeError, KeyError):
+        renamed = None
+    if renamed != expected:
+        return [
+            f"NOTICE: could not rename [{_TABLES_PATH}.{target}] to {DEFAULT_TABLE!r} "
+            f"automatically (unusual layout); left unchanged. Use --table {target}, or rename it by hand"
+        ]
+
+    state.settings_doc = tomlkit.parse(new_text)
+    lines = []
+    if drop_empty_default:
+        lines.append(f"Remove the empty [{_TABLES_PATH}.{DEFAULT_TABLE}] table")
+    lines.append(f"Rename [{_TABLES_PATH}.{target}] -> [{_TABLES_PATH}.{DEFAULT_TABLE}]")
+    return lines
+
+
+def _migrate_2_to_3(state: UpgradeState) -> list[str]:
+    """The term file no longer names a table; the table used is ``default`` unless --table.
+
+    Removes an uncommented ``relative_table`` from the in-repo term file and renames
+    a lone (or the only non-empty) table to ``default``. Term files outside the repo
+    are not reachable from here. Stamps the manifests.
+    """
+    lines: list[str] = []
+    if settings_path(state.repo).exists() and read_repo_version(state.repo) < 3:
+        lines.extend(_migrate_relative_tables(state))
+        if state.term_doc is not None and "relative_table" in state.term_doc:
+            del state.term_doc["relative_table"]
+            state.term_changed = True
+            lines.append(f"Remove relative_table from {TERM_RELPATH.as_posix()}")
+    for path in state.manifests:
+        lines.append(f"Record format version 3 in {path.name}")
+    return lines
+
+
 #: Ordered migrations, keyed by the version they migrate *from*.
 MIGRATIONS: dict[int, Migration] = {
     0: _migrate_0_to_1,
     1: _migrate_1_to_2,
+    2: _migrate_2_to_3,
 }
 
 
@@ -368,6 +499,9 @@ def run_upgrade(
                 old.rename(new)
             for path, data in state.manifests.items():
                 _write_manifest(path, data, version + 1)
+            if state.term_changed and state.term_doc is not None:
+                state.term_path.write_text(tomlkit.dumps(state.term_doc), encoding="utf-8")
+                state.term_changed = False
             if repo_version <= version:
                 _set_version(state.settings_doc, version + 1)
                 _write_settings(settings, state.settings_doc)

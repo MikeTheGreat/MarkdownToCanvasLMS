@@ -10,10 +10,12 @@ table, and the `import` output that gives new repos a place to start.
 
 ### Requirement: generate-due-dates writes computed dates into due_dates
 
-`generate-due-dates` SHALL take a required term-file path, an optional repo
-path (resolved the way `update`'s is), and the options `--table NAME`,
-`--noop` and `--yes`/`-y`. It SHALL compute the dates of every item of the
-selected table (see the `relative-due-dates` capability) and write them to the
+`generate-due-dates` SHALL take a required `TERM_FILE` (a path or a term name,
+see the `course-registry` capability), an optional `COURSE_DIR` (resolved as
+described in the `course-registry` capability), and the options `--table NAME`,
+`--noop` and `--yes`/`-y`. The term comes first and the course second. It SHALL
+compute the dates of every item of the selected table (see the
+`relative-due-dates` capability) and write them to the
 top-level `due_dates` array of `course_settings/course_settings.toml`: an
 existing entry with the same `name` (and the same `type` when both give one)
 gets its `due_at`, `unlock_at` and `lock_at` set; an item with no entry gets a
@@ -43,8 +45,16 @@ SHALL NOT contact Canvas.
 - **THEN** its entry's `unlock_at` and `lock_at` are `"KEEP"`
 
 #### Scenario: Not in a repo
-- **WHEN** the resolved repo has no `course_settings/course_settings.toml`
+- **WHEN** the resolved course directory has no `course_settings/course_settings.toml`
 - **THEN** the command exits with a non-zero status and an error, and creates no file
+
+#### Scenario: Term name and course key
+- **WHEN** the user runs `generate-due-dates 2026Fall 142` from an unrelated directory, and `2026Fall` is a term name and `142` a registered course
+- **THEN** the dates from that term are computed for that course
+
+#### Scenario: Course omitted
+- **WHEN** the user runs `generate-due-dates 2026Fall` from inside a course
+- **THEN** the enclosing course directory is used
 
 ### Requirement: Changes are shown before anything is written
 

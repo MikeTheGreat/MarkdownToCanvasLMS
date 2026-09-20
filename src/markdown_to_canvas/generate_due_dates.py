@@ -201,7 +201,7 @@ def plan_generation(repo: Path, term_path: Path, table_name: str | None = None) 
     settings = tomllib.loads(source_text)
 
     term = rd.load_term(term_path)
-    table = rd.select_table(rd.load_tables(settings), table_name, term.relative_table)
+    table = rd.select_table(rd.load_tables(settings), table_name)
     calculation = rd.calculate(table, term)
 
     due_dates = settings.get("due_dates", [])

@@ -42,7 +42,7 @@ in_person = true
 days_of_week = ["Mon", "Wed"]
 lock_relative_default = "+7 CALENDAR_DAY"
 
-[relative_due_dates.tables.quarter11]
+[relative_due_dates.tables.default]
 items = [
     { name = "Week 1 Problem Set", relative_to = { type = "START_OF_QUARTER" }, offsets = ["+1 CLASS_DAY"] },
     { name = "Week 1 Discussion", type = "discussion", relative_to = { type = "START_OF_QUARTER" }, offsets = ["+2 CLASS_DAY"], unlock_offset = "NONE" },
@@ -94,7 +94,7 @@ def test_plan_lists_added_changed_and_leaves_others(tmp_path):
     plan = gd.plan_generation(root, _term(tmp_path))
     by_name = {c.name: c for c in plan.changes}
 
-    assert plan.table_name == "quarter11"
+    assert plan.table_name == "default"
     assert by_name["Week 1 Problem Set"].kind == "changed"
     assert set(by_name["Week 1 Problem Set"].fields) == {"due_at", "unlock_at", "lock_at"} - {"unlock_at"}
     assert by_name["Week 1 Discussion"].kind == "added"
@@ -142,7 +142,7 @@ def test_old_repo_is_refused(tmp_path):
     root = _repo(tmp_path)
     _write(
         root / "course_settings" / "course_settings.toml",
-        _settings_text(root).replace("format_version = 2", "format_version = 1"),
+        _settings_text(root).replace("format_version = 3", "format_version = 1"),
     )
     with pytest.raises(RepoFormatError):
         gd.plan_generation(root, _term(tmp_path))
@@ -255,7 +255,7 @@ def test_bad_term_file_and_bad_table_are_reported_without_a_traceback(tmp_path):
     result = _run(root, bad)
     assert result.exit_code == 1 and "last_day" in result.output
     result = _run(root, _term(tmp_path), "--table", "summer8")
-    assert result.exit_code == 1 and "summer8" in result.output and "quarter11" in result.output
+    assert result.exit_code == 1 and "summer8" in result.output and "default" in result.output
 
 
 # --- writing preserves everything else ---------------------------------------
@@ -341,7 +341,7 @@ def test_apply_refuses_when_the_file_changed_after_planning(tmp_path):
 # --- table selection through the command -------------------------------------
 
 
-def test_second_table_chosen_by_option_or_term_file(tmp_path):
+def test_second_table_chosen_by_option(tmp_path):
     settings = SETTINGS + (
         '\n[relative_due_dates.tables.summer8]\ndays_of_week = ["Mon", "Tue", "Wed", "Thu"]\n'
         'items = [ { name = "Week 1 Problem Set", relative_to = { type = "START_OF_QUARTER" }, offsets = ["+1 CLASS_DAY"] } ]\n'
@@ -350,18 +350,33 @@ def test_second_table_chosen_by_option_or_term_file(tmp_path):
     term = _term(tmp_path)
 
     unchosen = _run(root, term, "--noop")
-    assert unchosen.exit_code == 1
-    assert "quarter11" in unchosen.output and "summer8" in unchosen.output
+    assert unchosen.exit_code == 0, unchosen.output
+    assert "Relative table: default" in unchosen.output  # `default` wins when no --table
 
     by_option = _run(root, term, "--noop", "--table", "summer8")
     assert by_option.exit_code == 0, by_option.output
     assert "Relative table: summer8" in by_option.output
     assert "2026-10-01T23:59:00-07:00" in by_option.output  # Thursday 10-01 is the next class day
 
-    named = tmp_path / "named.toml"
-    named.write_text(TERM + 'relative_table = "quarter11"\n')
-    assert "Relative table: quarter11" in _run(root, named, "--noop").output
-    assert "Relative table: summer8" in _run(root, named, "--noop", "--table", "summer8").output
+
+def test_no_default_table_needs_the_table_option(tmp_path):
+    root = _repo(tmp_path, SETTINGS.replace("tables.default]", "tables.quarter11]"))
+    term = _term(tmp_path)
+    unchosen = _run(root, term, "--noop")
+    assert unchosen.exit_code == 1
+    assert "quarter11" in unchosen.output and "--table" in unchosen.output
+    assert "Traceback" not in unchosen.output
+    assert _run(root, term, "--noop", "--table", "quarter11").exit_code == 0
+
+
+def test_term_file_with_relative_table_is_rejected_by_the_command(tmp_path):
+    root = _repo(tmp_path)
+    old = tmp_path / "old.toml"
+    old.write_text(TERM + 'relative_table = "default"\n')
+    result = _run(root, old, "--noop")
+    assert result.exit_code == 1
+    assert "relative_table" in result.output and "--table" in result.output
+    assert "Traceback" not in result.output
 
 
 # --- warnings ----------------------------------------------------------------
@@ -380,7 +395,7 @@ def test_item_matching_nothing_is_reported_once_naming_the_table(tmp_path):
     root = _repo(tmp_path, settings)
     hits = [w for w in _warnings(root, tmp_path) if "Week 12 Quiz" in w and "matches no" in w]
     assert len(hits) == 1
-    assert "relative table 'quarter11'" in hits[0] and "due_dates" not in hits[0]
+    assert "relative table 'default'" in hits[0] and "due_dates" not in hits[0]
 
 
 def test_item_matching_nothing_that_is_also_in_due_dates_names_both(tmp_path):
@@ -392,7 +407,7 @@ def test_item_matching_nothing_that_is_also_in_due_dates_names_both(tmp_path):
     root = _repo(tmp_path, settings)
     hits = [w for w in _warnings(root, tmp_path) if "'Old Item'" in w and "matches no" in w]
     assert len(hits) == 1
-    assert "relative table 'quarter11' and due_dates" in hits[0]
+    assert "relative table 'default' and due_dates" in hits[0]
 
 
 def test_content_in_neither_table_is_reported_once(tmp_path):

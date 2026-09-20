@@ -2819,10 +2819,6 @@ _TERM_EXAMPLE = """\
 #   { title = "Veterans Day", date = 2026-11-11 },
 #   { title = "Thanksgiving", date = 2026-11-26 },
 # ]
-
-# Which table of [relative_due_dates.tables] to use (optional when there is only one,
-# and --table overrides it).
-# relative_table = "default"
 """
 
 
