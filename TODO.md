@@ -219,7 +219,7 @@ also need to stop excluding `question_banks/**`.
 
 ### Editing a rubric used by 2+ assignments silently does nothing
 
-See **[RUBRIC_ISSUES.md](RUBRIC_ISSUES.md)** for the full measured Canvas behaviour
+See **[todo/RUBRIC_ISSUES.md](todo/RUBRIC_ISSUES.md)** for the full measured Canvas behaviour
 behind this and the other open rubric items.
 
 Canvas refuses to edit a rubric in place once it has more than one *grading*

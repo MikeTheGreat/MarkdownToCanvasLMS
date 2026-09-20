@@ -14,7 +14,7 @@ context: |
   - ARCHITECTURE.md: internals, sync algorithm, manifest format, per-subcommand notes.
   - TESTING.md: test layers and what to assert on.
   - TODO.md: future work only; may already describe the requested feature.
-  - RUBRIC_ISSUES.md: required reading for anything rubric-related.
+  - todo/RUBRIC_ISSUES.md: required reading for anything rubric-related.
 
   Core concepts: per-config manifest (.manifest-<config stem>.toml) maps repo
   paths to Canvas IDs and is flushed after every write; mtime vs last_synced
