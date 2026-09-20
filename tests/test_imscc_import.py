@@ -537,6 +537,8 @@ def test_course_settings_toml_comments_precede_section_headers(
 ) -> None:
     """A user who uncomments a key must not land inside a later [section]."""
     text = (imported_dir / "course_settings" / "course_settings.toml").read_text()
+    # The [relative_due_dates] help comments deliberately follow their own header.
+    text = text.split("\n[relative_due_dates]", 1)[0]
     lines = text.split("\n")
     last_comment = max(
         i for i, line in enumerate(lines) if line.startswith("# ") and " = " in line
@@ -1336,3 +1338,110 @@ def test_imported_repo_passes_format_check_without_upgrade(imported_dir: Path) -
     from markdown_to_canvas.repo_format import check_repo_format
 
     assert check_repo_format(imported_dir) is None
+
+
+# ---------------------------------------------------------------------------
+# generate-due-dates scaffolding
+# ---------------------------------------------------------------------------
+
+
+def test_course_settings_has_an_empty_default_relative_table(imported_dir: Path) -> None:
+    import tomllib
+
+    text = (imported_dir / "course_settings" / "course_settings.toml").read_text()
+    data = tomllib.loads(text)
+    assert data["relative_due_dates"] == {"tables": {"default": {"items": []}}}
+    # the section comes last, so it captured none of the top-level keys
+    if "[late_policy]" in text:
+        assert text.rindex("[relative_due_dates]") > text.rindex("[late_policy]")
+    assert "due_dates" not in data["relative_due_dates"]
+    assert "format_version" not in data["relative_due_dates"]
+
+
+def test_relative_due_dates_settings_are_commented_and_work_when_uncommented(
+    imported_dir: Path,
+) -> None:
+    import re
+    import tomllib
+
+    from markdown_to_canvas import relative_dates as rd
+
+    text = (imported_dir / "course_settings" / "course_settings.toml").read_text()
+    section = text[text.index("[relative_due_dates]"):]
+    for key in ("days_of_week", "class_on_noninstructional_days",
+                "unlock_relative_default", "lock_relative_default"):
+        assert f"# {key} = " in section
+        assert key not in tomllib.loads(text)["relative_due_dates"]
+    uncommented = re.sub(
+        r"^# ((?:days_of_week|class_on_noninstructional_days|unlock_relative_default"
+        r"|lock_relative_default) = .*)$",
+        r"\1",
+        text,
+        flags=re.MULTILINE,
+    )
+    tables = rd.load_tables(tomllib.loads(uncommented))
+    settings = tables["default"].settings
+    assert settings.days_of_week == ("Mon", "Wed")
+    assert settings.lock_relative_default == ("+7 CALENDAR_DAY",)
+    assert settings.unlock_relative_default == ("NONE",)
+
+
+def test_example_term_file_is_all_comments_and_works_when_uncommented(
+    imported_dir: Path,
+) -> None:
+    import re
+    import tomllib
+
+    from markdown_to_canvas import relative_dates as rd
+
+    path = imported_dir / "course_settings" / "term_dates.toml"
+    text = path.read_text()
+    assert all(not line.strip() or line.startswith("#") for line in text.splitlines())
+    assert tomllib.loads(text) == {}
+
+    uncommented = re.sub(
+        r"^# ((?:first_day|last_day|time_zone|default_due_time|noninstructional_days"
+        r"|relative_table) = .*|  \{.*|\])$",
+        r"\1",
+        text,
+        flags=re.MULTILINE,
+    )
+    term = rd.load_term(_write(imported_dir.parent / "uncommented_term.toml", uncommented))
+    assert term.time_zone.key == "America/Los_Angeles"
+    assert len(term.noninstructional_days) == 2
+    assert term.relative_table == "default"
+
+
+def _write(path: Path, text: str) -> Path:
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def test_existing_term_file_is_not_overwritten(tmp_path: Path) -> None:
+    from markdown_to_canvas.imscc_import import _write_term_example
+
+    path = tmp_path / "course_settings" / "term_dates.toml"
+    path.parent.mkdir()
+    path.write_text("first_day = 2030-01-01\n")
+    _write_term_example(tmp_path)
+    assert path.read_text() == "first_day = 2030-01-01\n"
+
+
+def test_example_term_file_is_not_uploaded_or_reported(imported_dir: Path, tmp_path: Path, mocker, capsys) -> None:
+    import shutil
+
+    from markdown_to_canvas.config import Config
+    from markdown_to_canvas.local_orphans import find_local_orphans
+    from markdown_to_canvas.sync import run_sync
+
+    repo = tmp_path / "copy"
+    shutil.copytree(imported_dir, repo)
+    assert (repo / "course_settings" / "term_dates.toml").exists()
+
+    report = find_local_orphans(repo)
+    assert "term_dates" not in repr(report)
+
+    mocker.patch("markdown_to_canvas.canvas_api.Canvas")
+    cfg = Config(base_url="https://s.instructure.com", course_id=1, api_token="t")
+    run_sync(cfg, repo, check_all=True)
+    assert "term_dates" not in capsys.readouterr().out

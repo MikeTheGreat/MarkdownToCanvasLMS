@@ -32,12 +32,14 @@ from .clean_manifest import (
 from .config import Config, find_repo_root
 from .config import load as load_config
 from .course_guard import CourseGuardError, check_course
+from .generate_due_dates import apply_plan, plan_generation, render_plan
 from .imscc_import import run_import
 from .local_orphans import find_local_orphans
 from .local_orphans import print_report as print_local_orphan_report
 from .mv import run_mv
 from .orphans import find_orphans, print_report
 from .publish import run_publish
+from .relative_dates import RelativeDueDatesError
 from .repo_format import RepoFormatError, run_upgrade
 from .sync import collect_title_items, run_prune, run_sync, run_targeted_sync
 
@@ -725,6 +727,93 @@ def upgrade_cmd(repo: Path | None, noop: bool) -> None:
         run_upgrade(repo, noop=noop)
     except RepoFormatError as e:
         die(str(e))
+
+
+def _stdin_is_terminal() -> bool:
+    return sys.stdin.isatty()
+
+
+@main.command(name="generate-due-dates", no_args_is_help=True)
+@click.argument(
+    "term_file",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.argument(
+    "repo",
+    required=False,
+    default=None,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.option(
+    "--table",
+    "table_name",
+    default=None,
+    help=(
+        "Which table of [relative_due_dates.tables] to use. Default: the term "
+        "file's relative_table, or the only table."
+    ),
+)
+@click.option(
+    "--noop",
+    "-n",
+    is_flag=True,
+    default=False,
+    help="Show the changes that would be made, without writing any file.",
+)
+@click.option("--yes", "-y", "assume_yes", is_flag=True, default=False, help=(
+    "Write the changes without asking. Needed when there is no terminal to ask."
+))
+def generate_due_dates_cmd(
+    term_file: Path, repo: Path | None, table_name: str | None, noop: bool, assume_yes: bool
+) -> None:
+    """Fill the due_dates table from the relative due dates in course_settings.toml.
+
+    TERM_FILE is a TOML file with this term's first and last day, time zone,
+    default due time and non-instructional days (`import` writes a commented
+    example, course_settings/term_dates.toml). Each item of the chosen table in
+    [relative_due_dates] is turned into absolute unlock_at / due_at / lock_at
+    values and written into the matching due_dates entry, or a new one. Other
+    keys of an entry, such as only_if, are kept.
+
+    The changes are shown first (real changes in yellow) and nothing is written
+    until you confirm; --noop shows them and stops. The command never contacts
+    Canvas: run `update` afterwards to send the dates.
+
+    REPO is the course content repo. If omitted, the enclosing repo is found by
+    walking up from the current directory.
+    """
+    repo = _resolve_repo(repo).resolve()
+    click.echo(f"Repo:      {repo}")
+    try:
+        plan = plan_generation(repo, term_file, table_name)
+    except (RepoFormatError, RelativeDueDatesError) as e:
+        die(str(e))
+
+    for line, is_change in render_plan(plan):
+        click.secho(line, fg="yellow" if is_change else None)
+    for warning in plan.warnings:
+        click.echo(f"  {warning}")
+
+    if not plan.has_changes:
+        click.echo("Nothing to change: every date already matches.")
+        return
+    if noop:
+        click.echo("--noop: no file was written.")
+        return
+    if not assume_yes:
+        if not _stdin_is_terminal():
+            die("There is no terminal to confirm on; re-run with --yes to write these changes.")
+        if not click.confirm("Write these dates into due_dates?", default=False):
+            click.echo("Stopped; nothing was changed.")
+            return
+    try:
+        apply_plan(plan)
+    except RelativeDueDatesError as e:
+        die(str(e))
+    click.secho(
+        f"{plan.settings_path.name} updated. Run `update` to send the dates to Canvas.",
+        fg="green",
+    )
 
 
 @main.command(name="list-titles")

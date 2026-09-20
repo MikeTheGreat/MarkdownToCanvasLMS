@@ -1104,10 +1104,12 @@ _SETTINGS_SECTION_KEYS = (
 )
 # Excluded from the metadata section but with no section of their own:
 # due_dates changes are handled per-item by the dates pass (which runs every
-# update), course_flags changes are handled per-file via flags_used, and
-# pinned_resources only gates uploads locally (nothing on Canvas to update).
+# update), course_flags changes are handled per-file via flags_used,
+# pinned_resources only gates uploads locally (nothing on Canvas to update), and
+# relative_due_dates is only read by `generate-due-dates`.
 _NON_METADATA_SETTINGS_KEYS = _SETTINGS_SECTION_KEYS + (
     "due_dates",
+    "relative_due_dates",
     "course_flags",
     "pinned_resources",
     # Repo-format bookkeeping written by import/upgrade; never Canvas metadata.

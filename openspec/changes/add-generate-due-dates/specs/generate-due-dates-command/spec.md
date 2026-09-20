@@ -44,7 +44,7 @@ SHALL NOT contact Canvas.
 
 #### Scenario: Not in a repo
 - **WHEN** the resolved repo has no `course_settings/course_settings.toml`
-- **THEN** the command fails with an error that says so and writes nothing
+- **THEN** the command exits with a non-zero status and an error, and creates no file
 
 ### Requirement: Changes are shown before anything is written
 
@@ -95,7 +95,8 @@ table that matches no assignment, discussion or quiz in the repo, and (b) an
 assignment, discussion or quiz that has no item in the selected table and no
 `due_dates` entry. Each warning SHALL say which table or tables are
 responsible (the relative table, `due_dates`, or both). A title listed in the
-table's `ignore` array SHALL NOT be reported as in (b). `due_dates` entries
+table's `ignore` array SHALL NOT be reported as in (b), nor listed in the
+notice below. `due_dates` entries
 left over from an earlier table SHALL NOT be changed or removed; they SHALL be
 listed in a notice as entries not produced by the selected table. Warnings
 SHALL NOT change the exit status.

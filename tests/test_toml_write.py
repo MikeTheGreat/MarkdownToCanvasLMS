@@ -99,3 +99,25 @@ def test_long_scalar_array_is_one_item_per_line() -> None:
     text = _dump(lambda d: w.fill_table(d, {"order": [f"module-number-{i}.md" for i in range(10)], "short": ["a", "b"]}))
     assert text.splitlines()[0] == "order = ["
     assert 'short = ["a", "b"]' in text
+
+
+@pytest.mark.parametrize("size", ["short", "long"])
+def test_relative_due_dates_items_are_inline_rows_inside_nested_tables(size: str) -> None:
+    """A table's `items` must not become `[[...items]]` blocks, whatever the row size."""
+    name = "a" if size == "short" else LONG
+    row = {
+        "name": name,
+        "relative_to": {"type": "ASSIGNMENT", "assignment_name": "b"},
+        "offsets": ["+7 CALENDAR_DAY", "23:59 ABS_TIME"],
+    }
+    data = {
+        "format_version": 2,
+        "relative_due_dates": {
+            "days_of_week": ["Mon", "Wed"],
+            "tables": {"default": {"items": [row]}, "summer8": {"items": []}},
+        },
+    }
+    text = _dump(lambda d: w.fill_table(d, data))
+    assert "[[" not in text
+    assert text.startswith("format_version = 2")
+    assert tomllib.loads(text) == data

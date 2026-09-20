@@ -1,0 +1,1840 @@
+{
+ "courses": {
+  "101": {
+   "expected": {
+    "Background research": "2026-10-29 23:59",
+    "Chapter 1 Discussion": "2026-10-04 23:59",
+    "Chapter 10 Discussion": "2026-11-29 23:59",
+    "Chapter 12 Discussion": "2026-12-06 23:59",
+    "Chapter 4 Discussion": "2026-10-18 23:59",
+    "Chapter 5 Discussion": "2026-10-25 23:59",
+    "Chapter 6 Discussion": "2026-11-01 22:59",
+    "Chapter 7 Discussion": "2026-11-08 23:59",
+    "Chapter 8 Discussion": "2026-11-15 23:59",
+    "Chapter 9 Discussion": "2026-11-22 23:59",
+    "Chapters 2, 3 Discussion": "2026-10-11 23:59",
+    "Exercise 01 - Introduction to class; Overview of Computer Science": "2026-10-01 23:59",
+    "Exercise 02 - Exploring ChatGPT": "2026-10-06 23:59",
+    "Exercise 03 - VSCode and Copilot": "2026-10-08 23:59",
+    "Exercise 04 - Creating functions with AI": "2026-10-13 23:59",
+    "Exercise 05 - Binary Data": "2026-10-15 23:59",
+    "Exercise 06 - Algorithms": "2026-10-20 23:59",
+    "Exercise 07 - Proof by induction": "2026-10-22 23:59",
+    "Exercise 08 - Learning To Read Python": "2026-10-27 23:59",
+    "Exercise 09 - Review for the midterm": "2026-10-29 23:59",
+    "Exercise 10 - TBD": "2026-11-03 22:59",
+    "Exercise 11 - Learning to read Python (Chapter 4)": "2026-11-10 23:59",
+    "Exercise 12 - Learning to read Python (Chapter 5)": "2026-11-12 23:59",
+    "Exercise 13 - Testing and Prompt Engineering": "2026-11-17 23:59",
+    "Exercise 14 - Parallel Computing": "2026-11-19 23:59",
+    "Exercise 15 - Parallel Computing Part 2": "2026-11-24 23:59",
+    "Exercise 16 - Problem Decomposition": "2026-12-01 23:59",
+    "Exercise 17 - TBD": "2026-12-03 23:59",
+    "Exercise 18 - TBD": "2026-12-08 23:59",
+    "Final Exam": "2026-12-10 23:59",
+    "Final Presentation": "2026-12-15 23:59",
+    "Finished Software Demonstration": "2026-12-03 23:59",
+    "Get your presentation topic approved": "2026-10-15 23:59",
+    "Introduce Yourself": "2026-10-03 23:59",
+    "Midterm Exam": "2026-11-05 23:59",
+    "Outline Of Your Presentation": "2026-11-26 23:59",
+    "Practice Presentation": "2026-12-17 23:59",
+    "Prototype Software Demonstration": "2026-11-12 23:59",
+    "Reading Comprehension Quiz for Chapter 10": "2026-11-29 23:59",
+    "Reading Comprehension Quiz for Chapter 12": "2026-12-06 23:59",
+    "Reading Comprehension Quiz for Chapter 2": "2026-10-07 23:59",
+    "Reading Comprehension Quiz for Chapter 3": "2026-10-11 23:59",
+    "Reading Comprehension Quiz for Chapter 4": "2026-10-18 23:59",
+    "Reading Comprehension Quiz for Chapter 5": "2026-10-25 23:59",
+    "Reading Comprehension Quiz for Chapter 6": "2026-11-01 23:59",
+    "Reading Comprehension Quiz for Chapter 7": "2026-11-08 23:59",
+    "Reading Comprehension Quiz for Chapter 8": "2026-11-15 23:59",
+    "Reading Comprehension Quiz for Chapter 9": "2026-11-22 23:59",
+    "Start Investigating (and Discussing) Possible Topics": "2026-10-08 23:59",
+    "Viewing Comprehension Quiz: Deepfake Ryan Gosling Explains ChatGPT": "2026-10-05 23:59",
+    "Viewing Comprehension Quiz: How to create an outline": "2026-11-19 23:59",
+    "Written Paper From Your Outline": "2026-12-10 23:59"
+   },
+   "notes": [],
+   "section": {
+    "class_on_noninstructional_days": false,
+    "days_of_week": [
+     "Tue",
+     "Thu"
+    ],
+    "tables": {
+     "101": {
+      "items": [
+       {
+        "name": "Start Investigating (and Discussing) Possible Topics",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Exercise 03 - VSCode and Copilot",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Get your presentation topic approved",
+        "offsets": [
+         "+7 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Start Investigating (and Discussing) Possible Topics",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Background research",
+        "offsets": [
+         "+14 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Get your presentation topic approved",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Prototype Software Demonstration",
+        "offsets": [
+         "+7 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Midterm Exam",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Viewing Comprehension Quiz: How to create an outline",
+        "offsets": [
+         "+7 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Prototype Software Demonstration",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Outline Of Your Presentation",
+        "offsets": [
+         "+7 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Viewing Comprehension Quiz: How to create an outline",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Finished Software Demonstration",
+        "offsets": [
+         "+7 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Outline Of Your Presentation",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Written Paper From Your Outline",
+        "offsets": [
+         "+7 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Finished Software Demonstration",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Practice Presentation",
+        "offsets": [
+         "+7 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Written Paper From Your Outline",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Final Presentation",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Final Exam",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Exercise 01 - Introduction to class; Overview of Computer Science",
+        "offsets": [],
+        "relative_to": {
+         "type": "FIRST_CLASS_OF_QUARTER"
+        }
+       },
+       {
+        "name": "Introduce Yourself",
+        "offsets": [
+         "+2 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 01 - Introduction to class; Overview of Computer Science",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Viewing Comprehension Quiz: Deepfake Ryan Gosling Explains ChatGPT",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 02 - Exploring ChatGPT",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Exercise 02 - Exploring ChatGPT",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 01 - Introduction to class; Overview of Computer Science",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Chapter 1 Discussion",
+        "offsets": [
+         "Sun NEAREST_CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 02 - Exploring ChatGPT",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Reading Comprehension Quiz for Chapter 2",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 03 - VSCode and Copilot",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Exercise 03 - VSCode and Copilot",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 02 - Exploring ChatGPT",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Chapters 2, 3 Discussion",
+        "offsets": [
+         "+7 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Chapter 1 Discussion",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Reading Comprehension Quiz for Chapter 3",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Chapters 2, 3 Discussion",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Chapter 4 Discussion",
+        "offsets": [
+         "+7 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Chapters 2, 3 Discussion",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Reading Comprehension Quiz for Chapter 4",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Chapter 4 Discussion",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Chapter 5 Discussion",
+        "offsets": [
+         "+7 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Chapter 4 Discussion",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Reading Comprehension Quiz for Chapter 5",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Chapter 5 Discussion",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Chapter 6 Discussion",
+        "offsets": [
+         "+7 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Chapter 5 Discussion",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Reading Comprehension Quiz for Chapter 6",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Chapter 6 Discussion",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Chapter 7 Discussion",
+        "offsets": [
+         "+7 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Chapter 6 Discussion",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Reading Comprehension Quiz for Chapter 7",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Chapter 7 Discussion",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Chapter 8 Discussion",
+        "offsets": [
+         "+7 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Chapter 7 Discussion",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Reading Comprehension Quiz for Chapter 8",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Chapter 8 Discussion",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Chapter 9 Discussion",
+        "offsets": [
+         "+7 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Chapter 8 Discussion",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Reading Comprehension Quiz for Chapter 9",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Chapter 9 Discussion",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Chapter 10 Discussion",
+        "offsets": [
+         "+7 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Chapter 9 Discussion",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Reading Comprehension Quiz for Chapter 10",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Chapter 10 Discussion",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Chapter 12 Discussion",
+        "offsets": [
+         "+7 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Chapter 10 Discussion",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Reading Comprehension Quiz for Chapter 12",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Chapter 12 Discussion",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Exercise 04 - Creating functions with AI",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 03 - VSCode and Copilot",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Exercise 05 - Binary Data",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 04 - Creating functions with AI",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Exercise 06 - Algorithms",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 05 - Binary Data",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Exercise 07 - Proof by induction",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 06 - Algorithms",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Exercise 08 - Learning To Read Python",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 07 - Proof by induction",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Exercise 09 - Review for the midterm",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 08 - Learning To Read Python",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Exercise 10 - TBD",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 09 - Review for the midterm",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Midterm Exam",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 10 - TBD",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Exercise 11 - Learning to read Python (Chapter 4)",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Midterm Exam",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Exercise 12 - Learning to read Python (Chapter 5)",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 11 - Learning to read Python (Chapter 4)",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Exercise 13 - Testing and Prompt Engineering",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 12 - Learning to read Python (Chapter 5)",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Exercise 14 - Parallel Computing",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 13 - Testing and Prompt Engineering",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Exercise 15 - Parallel Computing Part 2",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 14 - Parallel Computing",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Exercise 16 - Problem Decomposition",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 15 - Parallel Computing Part 2",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Exercise 17 - TBD",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 16 - Problem Decomposition",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Exercise 18 - TBD",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 17 - TBD",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Final Exam",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Exercise 18 - TBD",
+         "type": "ASSIGNMENT"
+        }
+       }
+      ]
+     }
+    }
+   }
+  },
+  "142": {
+   "expected": {
+    "01 Syllabus Quiz": "2026-10-12 23:59",
+    "Assignment 1 - Space Needle - Opportunity #1": "2026-10-21 23:59",
+    "Assignment 1 - Space Needle - Opportunity #2": "NONE",
+    "Assignment 2 - Birthdays - Opportunity #1": "2026-11-01 00:59",
+    "Assignment 2 - Birthdays - Opportunity #2": "NONE",
+    "Assignment 3 - Adding Large Integers - Opportunity #1": "2026-11-14 23:59",
+    "Assignment 3 - Adding Large Integers - Opportunity #2": "NONE",
+    "Assignment 4 - Grocery List - Opportunity #1": "2026-11-21 23:59",
+    "Assignment 4 - Grocery List - Opportunity #2": "NONE",
+    "Coding Exercises: Unit 01 Review": "2026-10-12 23:59",
+    "Coding Exercises: Unit 02": "2026-10-19 23:59",
+    "Coding Exercises: Unit 03": "2026-10-26 23:59",
+    "Coding Exercises: Unit 04": "2026-11-02 22:59",
+    "Coding Exercises: Unit 07": "2026-11-16 23:59",
+    "Coding Exercises: Unit 08": "2026-11-23 23:59",
+    "Coding Exercises: Unit 09": "2026-11-30 23:59",
+    "Coding Exercises: Unit 10": "2026-12-07 23:59",
+    "Confirm that you've made plans to take the Midterm & final exams": "2026-10-12 23:59",
+    "Final Exam: This is the Canvas entry for the In-Person Exam": "2026-12-14 23:59",
+    "How would you like to be graded?": "2026-10-12 23:59",
+    "Hybrid Participation Week 01": "2026-10-05 23:59",
+    "Hybrid Participation Week 02": "2026-10-12 23:59",
+    "Hybrid Participation Week 03": "2026-10-19 23:59",
+    "Hybrid Participation Week 04": "2026-10-26 23:59",
+    "Hybrid Participation Week 05": "2026-11-02 22:59",
+    "Hybrid Participation Week 07": "2026-11-09 22:59",
+    "Hybrid Participation Week 08": "2026-11-16 23:59",
+    "Hybrid Participation Week 09": "2026-11-23 23:59",
+    "Hybrid Participation Week 10": "2026-11-30 23:59",
+    "Introduce Yourself": "2026-10-05 23:59",
+    "Midterm Exam: This is the Canvas entry for the In-Person Exam": "2026-11-09 23:59",
+    "Unit 01 Forum": "2026-10-12 23:59",
+    "Unit 02 Forum": "2026-10-18 23:59",
+    "Unit 03 Forum": "2026-10-25 23:59",
+    "Unit 04 Forum": "2026-11-01 23:59",
+    "Unit 05 Forum": "2026-11-05 23:59",
+    "Unit 06 Forum": "2026-11-08 23:59",
+    "Unit 07 Forum": "2026-11-15 23:59",
+    "Unit 08 Forum": "2026-11-22 23:59",
+    "Unit 09 Forum": "2026-11-29 23:59",
+    "Unit 10 Forum": "2026-12-06 23:59",
+    "Unit 10 Pre-Class Notes (Chapter 9.3-9.6)": "2026-12-07 23:59",
+    "Unit 11 Forum": "2026-12-13 23:59",
+    "Unit 2 Pre-Class Notes (3.1-3.2: Parameters & Return Values; 3.3, 4.3: Strings / Text)": "2026-10-19 23:59",
+    "Unit 3 Pre-Class Notes (4.1, 4.4, 5.1-5.3)": "2026-10-26 23:59",
+    "Unit 4 Pre-Class Notes (Chapter 6)": "2026-11-02 23:59",
+    "Unit 7 Pre-Class Notes (Chapter 7)": "2026-11-16 23:59",
+    "Unit 8 Pre-Class Notes (Chapter 8)": "2026-11-23 23:59",
+    "Unit 9 Pre-Class Notes (Chapters 7.3, 9.1-9.2)": "2026-11-30 23:59",
+    "Week 1, Part 1 Pre-Class Notes (Chapters 1.1-1.5 & 2.1-2.3: Console UI ; static methods (functions) ; expression eval))": "2026-10-10 23:59",
+    "Week 1, Part 2 Pre-Class Notes (Chapters 2.3-2.5: Nested Loops)": "2026-10-12 23:59",
+    "Worksheets For Unit 01": "2026-10-12 23:59",
+    "Worksheets For Unit 02": "2026-10-19 23:59",
+    "Worksheets For Unit 03": "2026-10-26 23:59",
+    "Worksheets For Unit 04": "2026-11-02 23:59",
+    "Worksheets For Unit 07": "2026-11-16 23:59",
+    "Worksheets For Unit 08": "2026-11-23 23:59",
+    "Worksheets For Unit 09": "2026-11-30 23:59",
+    "Worksheets For Unit 10": "2026-12-07 23:59"
+   },
+   "notes": [],
+   "section": {
+    "class_on_noninstructional_days": true,
+    "days_of_week": [
+     "Mon"
+    ],
+    "tables": {
+     "142": {
+      "items": [
+       {
+        "name": "Assignment 1 - Space Needle - Opportunity #1",
+        "offsets": [
+         "+2 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 02",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Assignment 1 - Space Needle - Opportunity #2",
+        "offsets": [],
+        "relative_to": {
+         "type": "NO_DUE_DATE"
+        }
+       },
+       {
+        "name": "Assignment 2 - Birthdays - Opportunity #1",
+        "offsets": [
+         "-2 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 04",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Assignment 2 - Birthdays - Opportunity #2",
+        "offsets": [],
+        "relative_to": {
+         "type": "NO_DUE_DATE"
+        }
+       },
+       {
+        "name": "Assignment 3 - Adding Large Integers - Opportunity #1",
+        "offsets": [
+         "-2 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 07",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Assignment 3 - Adding Large Integers - Opportunity #2",
+        "offsets": [],
+        "relative_to": {
+         "type": "NO_DUE_DATE"
+        }
+       },
+       {
+        "name": "Assignment 4 - Grocery List - Opportunity #1",
+        "offsets": [
+         "-2 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 08",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Assignment 4 - Grocery List - Opportunity #2",
+        "offsets": [],
+        "relative_to": {
+         "type": "NO_DUE_DATE"
+        }
+       },
+       {
+        "name": "Introduce Yourself",
+        "offsets": [],
+        "relative_to": {
+         "type": "FIRST_CLASS_OF_QUARTER"
+        }
+       },
+       {
+        "name": "Unit 01 Forum",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 01 Review",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 02 Forum",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 02",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 03 Forum",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 03",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 04 Forum",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 04",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 05 Forum",
+        "offsets": [
+         "+3 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 04",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 06 Forum",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Midterm Exam: This is the Canvas entry for the In-Person Exam",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 07 Forum",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 07",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 08 Forum",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 08",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 09 Forum",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 09",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 10 Forum",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 10",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 11 Forum",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Final Exam: This is the Canvas entry for the In-Person Exam",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Hybrid Participation Week 01",
+        "offsets": [],
+        "relative_to": {
+         "type": "FIRST_CLASS_OF_QUARTER"
+        }
+       },
+       {
+        "name": "Hybrid Participation Week 02",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Hybrid Participation Week 01",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Hybrid Participation Week 03",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Hybrid Participation Week 02",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Hybrid Participation Week 04",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Hybrid Participation Week 03",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Hybrid Participation Week 05",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Hybrid Participation Week 04",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Hybrid Participation Week 07",
+        "offsets": [
+         "+2 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Hybrid Participation Week 04",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Hybrid Participation Week 08",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Hybrid Participation Week 07",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Hybrid Participation Week 09",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Hybrid Participation Week 08",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Hybrid Participation Week 10",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Hybrid Participation Week 09",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Coding Exercises: Unit 01 Review",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "type": "FIRST_CLASS_OF_QUARTER"
+        }
+       },
+       {
+        "name": "Week 1, Part 1 Pre-Class Notes (Chapters 1.1-1.5 & 2.1-2.3: Console UI ; static methods (functions) ; expression eval))",
+        "offsets": [
+         "-2 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 01 Review",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Week 1, Part 2 Pre-Class Notes (Chapters 2.3-2.5: Nested Loops)",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 01 Review",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Worksheets For Unit 01",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 01 Review",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Coding Exercises: Unit 02",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 01 Review",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 2 Pre-Class Notes (3.1-3.2: Parameters & Return Values; 3.3, 4.3: Strings / Text)",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 02",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Worksheets For Unit 02",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 02",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Coding Exercises: Unit 03",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 02",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 3 Pre-Class Notes (4.1, 4.4, 5.1-5.3)",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 03",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Worksheets For Unit 03",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 03",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Coding Exercises: Unit 04",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 03",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 4 Pre-Class Notes (Chapter 6)",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 04",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Worksheets For Unit 04",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 04",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Midterm Exam: This is the Canvas entry for the In-Person Exam",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 04",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Coding Exercises: Unit 07",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Midterm Exam: This is the Canvas entry for the In-Person Exam",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 7 Pre-Class Notes (Chapter 7)",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 07",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Worksheets For Unit 07",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 07",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Coding Exercises: Unit 08",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 07",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 8 Pre-Class Notes (Chapter 8)",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 08",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Worksheets For Unit 08",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 08",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Coding Exercises: Unit 09",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 08",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 9 Pre-Class Notes (Chapters 7.3, 9.1-9.2)",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 09",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Worksheets For Unit 09",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 09",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Coding Exercises: Unit 10",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 09",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 10 Pre-Class Notes (Chapter 9.3-9.6)",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 10",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Worksheets For Unit 10",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 10",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Final Exam: This is the Canvas entry for the In-Person Exam",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 10",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "01 Syllabus Quiz",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 01 Review",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "How would you like to be graded?",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 01 Review",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Confirm that you've made plans to take the Midterm & final exams",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 01 Review",
+         "type": "ASSIGNMENT"
+        }
+       }
+      ]
+     }
+    }
+   }
+  },
+  "143": {
+   "expected": {
+    "Assignment 1 - Shopping Cart - Opportunity #1": "2026-10-17 23:59",
+    "Assignment 1 - Shopping Cart - Opportunity #2": "NONE",
+    "Assignment 2 - Ranked Choice Voting - Opportunity #1": "2026-11-03 22:59",
+    "Assignment 2 - Ranked Choice Voting - Opportunity #2": "NONE",
+    "Assignment 3 - Student Services Desk - Opportunity #1": "2026-11-14 23:59",
+    "Assignment 3 - Student Services Desk - Opportunity #2": "NONE",
+    "Assignment 4 - Reverse Polish Notation - Opportunity #1": "2026-11-21 23:59",
+    "Assignment 4 - Reverse Polish Notation - Opportunity #2": "NONE",
+    "Coding Exercises: Unit 01 Review": "2026-10-08 23:59",
+    "Coding Exercises: Unit 02 Pre-Work": "2026-10-13 23:59",
+    "Coding Exercises: Unit 03 Pre-Work": "2026-10-20 23:59",
+    "Coding Exercises: Unit 04 Pre-Work": "2026-10-27 23:59",
+    "Coding Exercises: Unit 07 Pre-Work": "2026-11-17 23:59",
+    "Coding Exercises: Unit 08 Pre-Work": "2026-11-24 23:59",
+    "Coding Exercises: Unit 09 Pre-Work": "2026-12-01 23:59",
+    "Coding Exercises: Unit 10 Pre-Work": "2026-12-08 23:59",
+    "Confirm that you've made plans to take the Midterm & final exams": "2026-10-08 23:59",
+    "Final Exam: This is the Canvas entry for the In-Person Exam": "2026-12-15 23:59",
+    "How would you like to be graded?": "2026-10-08 23:59",
+    "Hybrid Participation: Week 01": "2026-10-06 23:59",
+    "Hybrid Participation: Week 02": "2026-10-13 23:59",
+    "Hybrid Participation: Week 03": "2026-10-20 23:59",
+    "Hybrid Participation: Week 04": "2026-10-27 23:59",
+    "Hybrid Participation: Week 05": "2026-11-03 22:59",
+    "Hybrid Participation: Week 07": "2026-11-17 23:59",
+    "Hybrid Participation: Week 08": "2026-11-24 23:59",
+    "Hybrid Participation: Week 09": "2026-12-01 23:59",
+    "Hybrid Participation: Week 10": "2026-12-08 23:59",
+    "Introduce Yourself": "2026-10-07 23:59",
+    "Midterm Exam: This is the Canvas entry for the In-Person Exam": "2026-11-10 22:59",
+    "Unit 01, Part 01: Pre-Class Notes": "2026-10-05 23:59",
+    "Unit 01, Part 02 Pre-Class Notes (Chapter 10.1: ArrayList)": "2026-10-06 23:59",
+    "Unit 02 Forum": "2026-10-12 23:59",
+    "Unit 02 Pre-Class Notes (Chapter 10.1 -10.2, 11.1-11.2)": "2026-10-12 23:59",
+    "Unit 03 Forum": "2026-10-19 23:59",
+    "Unit 03 Pre-Class Notes (Chapters 11.3, 12.1, 12.2)": "2026-10-19 23:59",
+    "Unit 04 Forum": "2026-10-26 23:59",
+    "Unit 04 Pre-Class Notes (Chapters 12.3, 13.1-13.3)": "2026-10-26 23:59",
+    "Unit 05 Forum": "2026-11-03 22:59",
+    "Unit 06 Forum": "2026-11-09 23:59",
+    "Unit 07 Forum": "2026-11-16 23:59",
+    "Unit 07 Pre-Class Notes (Chapter 13.3-13.4; 14.1-14.3)": "2026-11-16 23:59",
+    "Unit 08 Forum": "2026-11-23 23:59",
+    "Unit 08 Pre-Class Notes (Chapter 15.1-15.4)": "2026-11-23 23:59",
+    "Unit 09 Forum": "2026-11-30 23:59",
+    "Unit 09 Pre-Class Notes (Chapter 16.1-16.5)": "2026-11-30 23:59",
+    "Unit 10 Forum": "2026-12-07 23:59",
+    "Unit 10 Pre-Class Notes (Chapter 17.1-17.4)": "2026-12-07 23:59",
+    "Unit 11 Forum": "2026-12-14 23:59",
+    "Unit 12 Forum": "NONE",
+    "Worksheets For Unit 01": "2026-10-08 23:59",
+    "Worksheets For Unit 02": "2026-10-15 23:59",
+    "Worksheets For Unit 03": "2026-10-22 23:59",
+    "Worksheets For Unit 04": "2026-10-29 23:59",
+    "Worksheets For Unit 05": "2026-11-05 22:59",
+    "Worksheets For Unit 07": "2026-11-19 23:59",
+    "Worksheets For Unit 08": "2026-11-26 23:59",
+    "Worksheets For Unit 09": "2026-12-03 23:59",
+    "Worksheets For Unit 10": "2026-12-10 23:59"
+   },
+   "notes": [],
+   "section": {
+    "class_on_noninstructional_days": true,
+    "days_of_week": [
+     "Tue"
+    ],
+    "tables": {
+     "143": {
+      "items": [
+       {
+        "name": "Assignment 1 - Shopping Cart - Opportunity #1",
+        "offsets": [
+         "-3 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 03 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Assignment 1 - Shopping Cart - Opportunity #2",
+        "offsets": [],
+        "relative_to": {
+         "type": "NO_DUE_DATE"
+        }
+       },
+       {
+        "name": "Assignment 2 - Ranked Choice Voting - Opportunity #1",
+        "offsets": [
+         "+7 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 04 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Assignment 2 - Ranked Choice Voting - Opportunity #2",
+        "offsets": [],
+        "relative_to": {
+         "type": "NO_DUE_DATE"
+        }
+       },
+       {
+        "name": "Assignment 3 - Student Services Desk - Opportunity #1",
+        "offsets": [
+         "-3 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 07 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Assignment 3 - Student Services Desk - Opportunity #2",
+        "offsets": [],
+        "relative_to": {
+         "type": "NO_DUE_DATE"
+        }
+       },
+       {
+        "name": "Assignment 4 - Reverse Polish Notation - Opportunity #1",
+        "offsets": [
+         "-3 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 08 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Assignment 4 - Reverse Polish Notation - Opportunity #2",
+        "offsets": [],
+        "relative_to": {
+         "type": "NO_DUE_DATE"
+        }
+       },
+       {
+        "name": "Introduce Yourself",
+        "offsets": [
+         "+1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "type": "FIRST_CLASS_OF_QUARTER"
+        }
+       },
+       {
+        "name": "Unit 02 Forum",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 02 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 03 Forum",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 03 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 04 Forum",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 04 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 05 Forum",
+        "offsets": [
+         "+7 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 04 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 06 Forum",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Midterm Exam: This is the Canvas entry for the In-Person Exam",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 07 Forum",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 07 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 08 Forum",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 08 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 09 Forum",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 09 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 10 Forum",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 10 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 11 Forum",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Final Exam: This is the Canvas entry for the In-Person Exam",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 12 Forum",
+        "offsets": [],
+        "relative_to": {
+         "type": "NO_DUE_DATE"
+        }
+       },
+       {
+        "name": "Coding Exercises: Unit 01 Review",
+        "offsets": [
+         "+2 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "type": "FIRST_CLASS_OF_QUARTER"
+        }
+       },
+       {
+        "name": "Coding Exercises: Unit 02 Pre-Work",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 01 Review",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Coding Exercises: Unit 03 Pre-Work",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 02 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Coding Exercises: Unit 04 Pre-Work",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 03 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Worksheets For Unit 01",
+        "offsets": [
+         "+2 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "type": "FIRST_CLASS_OF_QUARTER"
+        }
+       },
+       {
+        "name": "Worksheets For Unit 02",
+        "offsets": [
+         "+2 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 02 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Worksheets For Unit 03",
+        "offsets": [
+         "+2 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 03 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Worksheets For Unit 04",
+        "offsets": [
+         "+2 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 04 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Worksheets For Unit 05",
+        "offsets": [
+         "+9 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 04 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 01, Part 01: Pre-Class Notes",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "type": "FIRST_CLASS_OF_QUARTER"
+        }
+       },
+       {
+        "name": "Unit 01, Part 02 Pre-Class Notes (Chapter 10.1: ArrayList)",
+        "offsets": [],
+        "relative_to": {
+         "type": "FIRST_CLASS_OF_QUARTER"
+        }
+       },
+       {
+        "name": "Unit 02 Pre-Class Notes (Chapter 10.1 -10.2, 11.1-11.2)",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 02 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 03 Pre-Class Notes (Chapters 11.3, 12.1, 12.2)",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 03 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 04 Pre-Class Notes (Chapters 12.3, 13.1-13.3)",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 04 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Midterm Exam: This is the Canvas entry for the In-Person Exam",
+        "offsets": [
+         "+2 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 04 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Coding Exercises: Unit 07 Pre-Work",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Midterm Exam: This is the Canvas entry for the In-Person Exam",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Worksheets For Unit 07",
+        "offsets": [
+         "+2 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 07 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 07 Pre-Class Notes (Chapter 13.3-13.4; 14.1-14.3)",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 07 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Coding Exercises: Unit 08 Pre-Work",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 07 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Worksheets For Unit 08",
+        "offsets": [
+         "+2 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 08 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 08 Pre-Class Notes (Chapter 15.1-15.4)",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 08 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Coding Exercises: Unit 09 Pre-Work",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 08 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Worksheets For Unit 09",
+        "offsets": [
+         "+2 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 09 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 09 Pre-Class Notes (Chapter 16.1-16.5)",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 09 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Coding Exercises: Unit 10 Pre-Work",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 09 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Worksheets For Unit 10",
+        "offsets": [
+         "+2 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 10 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Unit 10 Pre-Class Notes (Chapter 17.1-17.4)",
+        "offsets": [
+         "-1 CALENDAR_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 10 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Hybrid Participation: Week 01",
+        "offsets": [],
+        "relative_to": {
+         "type": "FIRST_CLASS_OF_QUARTER"
+        }
+       },
+       {
+        "name": "Hybrid Participation: Week 02",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Hybrid Participation: Week 01",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Hybrid Participation: Week 03",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Hybrid Participation: Week 02",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Hybrid Participation: Week 04",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Hybrid Participation: Week 03",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Hybrid Participation: Week 05",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Hybrid Participation: Week 04",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Hybrid Participation: Week 07",
+        "offsets": [
+         "+2 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Hybrid Participation: Week 05",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Hybrid Participation: Week 08",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Hybrid Participation: Week 07",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Hybrid Participation: Week 09",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Hybrid Participation: Week 08",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Hybrid Participation: Week 10",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Hybrid Participation: Week 09",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Final Exam: This is the Canvas entry for the In-Person Exam",
+        "offsets": [
+         "+1 CLASS_DAY"
+        ],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 10 Pre-Work",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "Confirm that you've made plans to take the Midterm & final exams",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 01 Review",
+         "type": "ASSIGNMENT"
+        }
+       },
+       {
+        "name": "How would you like to be graded?",
+        "offsets": [],
+        "relative_to": {
+         "assignment_name": "Coding Exercises: Unit 01 Review",
+         "type": "ASSIGNMENT"
+        }
+       }
+      ]
+     }
+    }
+   }
+  }
+ },
+ "note": "Generated by scripts/record_grading_tool_dates.py; do not edit by hand.",
+ "term": {
+  "default_due_time": "23:59",
+  "first_day": "2026-09-30",
+  "last_day": "2026-12-18",
+  "noninstructional_days": [
+   {
+    "date": "2026-10-21",
+    "title": "Non-Instructional Day"
+   },
+   {
+    "date": "2026-11-11",
+    "title": "Holiday \u2013 Veterans Day"
+   },
+   {
+    "date": "2026-11-26",
+    "title": "Holiday \u2013 Thanksgiving"
+   },
+   {
+    "date": "2026-11-27",
+    "title": "Holiday \u2013 Native American Heritage Day"
+   }
+  ],
+  "time_zone": "US/Pacific"
+ }
+}

@@ -2749,6 +2749,94 @@ _IMPORT_ONLY_NOT_UPLOADED = (
 )
 
 
+_RELATIVE_DUE_DATES_HELP = """\
+# --- Relative due dates, used by `generate-due-dates` ---
+# Describe due dates as offsets from the start of the term. `generate-due-dates
+# TERM_FILE` turns them into absolute dates in the due_dates table, once per
+# term; after that you edit due_dates by hand. course_settings/term_dates.toml
+# shows the term file. Items are matched to content by title, like due_dates.
+#
+# Settings shared by every table (a table may set its own to override them):
+# days_of_week = ["Mon", "Wed"]            # any of Mon Tue Wed Thu Fri Sat Sun
+# class_on_noninstructional_days = false   # true or false
+# unlock_relative_default = "NONE"         # an offset, a list of offsets, or "NONE"
+# lock_relative_default = "+7 CALENDAR_DAY"
+#
+# Offsets: "+N CALENDAR_DAY", "-N CALENDAR_DAY", "+N CLASS_DAY", "-N CLASS_DAY",
+#   "Fri NEAREST_CALENDAR_DAY" (any weekday), "23:59 ABS_TIME" (any HH:MM).
+#
+# A table is [relative_due_dates.tables.NAME]; the term file (or --table) picks one.
+# Its `items` are rows like this one, and it may have ignore = ["Title", ...] for
+# content that does not exist this term:
+#   { name = "Week 1 Problem Set",                      # title, as in due_dates
+#     type = "assignment",                              # optional: assignment, discussion or quiz
+#     relative_to = { type = "START_OF_QUARTER" },      # or FIRST_CLASS_OF_QUARTER, NO_DUE_DATE,
+#                                                       # or { type = "ASSIGNMENT", assignment_name = "Other item" }
+#     offsets = ["+1 CLASS_DAY", "23:59 ABS_TIME"],
+#     unlock_offset = "NONE",                           # optional: an offset, a list, or "NONE"
+#     lock_offset = "+7 CALENDAR_DAY" }                 # optional
+"""
+
+
+def _relative_due_dates_section() -> tomlkit.items.Table:
+    """The ``[relative_due_dates]`` scaffolding: help comments and an empty default table."""
+    section = tomlkit.table()
+    toml_write.add_comment_text(section, _RELATIVE_DUE_DATES_HELP)
+    tables = tomlkit.table(is_super_table=True)
+    default = tomlkit.table()
+    default.add("items", tomlkit.array())
+    tables.add("default", default)
+    section.add("tables", tables)
+    return section
+
+
+TERM_EXAMPLE_NAME = "term_dates.toml"
+
+_TERM_EXAMPLE = """\
+# Term file for `generate-due-dates`: the dates that change every term.
+# Everything here is commented out. Remove the leading "# " from each line you
+# want, fill in your term's values, and run:
+#
+#   markdown-to-canvas generate-due-dates course_settings/term_dates.toml
+#
+# Nothing else reads this file, so it may live anywhere.
+
+# First and last day of the term (YYYY-MM-DD).
+# first_day = 2026-09-30
+# last_day = 2026-12-18
+
+# An IANA time zone name, e.g. America/New_York or America/Los_Angeles. Due
+# dates keep the same local time all term, and get the right UTC offset on each
+# side of a daylight-saving change.
+# time_zone = "America/Los_Angeles"
+
+# The time of day items are due unless an offset such as "17:00 ABS_TIME" says otherwise.
+# default_due_time = "23:59"
+
+# Days with no class. "+N CLASS_DAY" offsets skip them unless
+# class_on_noninstructional_days is true in course_settings.toml.
+# noninstructional_days = [
+#   { title = "Veterans Day", date = 2026-11-11 },
+#   { title = "Thanksgiving", date = 2026-11-26 },
+# ]
+
+# Which table of [relative_due_dates.tables] to use (optional when there is only one,
+# and --table overrides it).
+# relative_table = "default"
+"""
+
+
+def _write_term_example(output_dir: Path) -> None:
+    """Write the commented-out example term file, unless one is already there."""
+    path = output_dir / "course_settings" / TERM_EXAMPLE_NAME
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_TERM_EXAMPLE, encoding="utf-8")
+    print(f"Writing: course_settings/{TERM_EXAMPLE_NAME}")
+
+
+
 def _write_course_settings_toml(
     course_settings: dict[str, Any],
     manifest_meta: dict[str, str],
@@ -2870,12 +2958,17 @@ def _write_course_settings_toml(
     if sections:
         toml_write.fill_table(doc, sections)
 
+    # Last, so a key the user uncomments here stays inside its own section.
+    doc.add(tomlkit.nl())
+    doc.add("relative_due_dates", _relative_due_dates_section())
+
     content = tomlkit.dumps(doc)
 
     cs_dir = output_dir / "course_settings"
     cs_dir.mkdir(parents=True, exist_ok=True)
     (cs_dir / "course_settings.toml").write_text(content, encoding="utf-8")
     print("Writing: course_settings/course_settings.toml")
+    _write_term_example(output_dir)
 
 
 def _module_order_doc(entries: list[str]) -> tomlkit.TOMLDocument:

@@ -1,5 +1,16 @@
 # Possible Future Features
 
+## Other places to look for TODO items
+
+- Look in the todo/ folder for more items!
+- Look in the openspec/ folder
+
+## Registry of courses, term
+
+- So CLI args can just list the course, and not require the user to actually navigate to the folder
+- put it into a toml/whatever file in ~/.config/markdown-to-canvas/config.whatever
+- Also list out quarter info files
+
 ## Course flags: follow-on features beyond the shipped v1
 
 Course flags themselves, `published_if` (frontmatter), and due_dates
@@ -422,9 +433,27 @@ Caveats to address:
 - Must be running at the time of the move — missed events are silent failures
 - Cross-filesystem moves decompose into copy+delete with no way to correlate
 
-## In course_settings.toml, within due_dates, KEEP and CREATE_NONE_THEN_KEEP do the same thing
+## `generate-due-dates`: revisit lock and unlock handling
 
-Maybe remove KEEP?
+`generate-due-dates` writes `unlock_at` and `lock_at` as offsets from the item's
+own due date (`unlock_offset` / `lock_offset`, with `unlock_relative_default` /
+`lock_relative_default` as defaults; `KEEP` when there is no rule). That fixed
+distance from the due date was chosen to start with, and may not fit every
+course. Things to look at once it has been used for a term or two:
+
+- Offsets measured from something other than the item's own due date, for
+  example from the start of the term ("unlock everything on day one" is
+  `NONE` today, but "unlock Week 3 on the first Monday of week 3" has to be
+  written as an offset from that item's due date).
+- A rule for items with no due date (`NO_DUE_DATE`), where a lock rule gives
+  `KEEP` and a warning today.
+- Whether a no-rule item should leave an existing `CREATE_NONE_THEN_KEEP` or
+  hand-set lock date alone instead of overwriting it with `KEEP`.
+- `generate-due-dates` for repos that drive several Canvas sections on
+  different term lengths: `due_dates` is one array shared by all sections, so a
+  run yields one set of dates.
+- Warn when a computed due date falls outside the term file's `first_day` to
+  `last_day` (`last_day` is validated but otherwise unused).
 
 ## Announcements: possible follow-ups
 
@@ -566,7 +595,6 @@ Review these files and re-upload manually if needed (use --force-overwrite to sk
   assignments/worksheets/01-a-unit-worksheets.md
   assignments/worksheets/01-b-unit-worksheets.md
 
-- I thought that "NONE_THEN_KEEP" was redundant with "KEEP", and "NONE" means "always eliminate"?
 
 ---
 

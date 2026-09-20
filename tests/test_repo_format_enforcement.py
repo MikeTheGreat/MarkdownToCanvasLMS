@@ -22,6 +22,7 @@ from markdown_to_canvas.clean_manifest import (
 from markdown_to_canvas.cli import main
 from markdown_to_canvas.config import Config
 from markdown_to_canvas.course_guard import check_course
+from markdown_to_canvas.generate_due_dates import plan_generation
 from markdown_to_canvas.local_orphans import find_local_orphans
 from markdown_to_canvas.mv import run_mv
 from markdown_to_canvas.publish import run_publish
@@ -83,6 +84,8 @@ ENTRY_POINTS = {
     "run_plan": lambda r: run_plan(_cfg(), r, MagicMock()),
     "load_manifest": lambda r: load_manifest(r, _cfg()),
     "collect_title_items": lambda r: collect_title_items(r),
+    # the check comes before the term file is read, so a missing one is fine
+    "plan_generation": lambda r: plan_generation(r, r.parent / "no-such-term.toml"),
 }
 
 
@@ -104,7 +107,7 @@ def test_entry_point_refuses_out_of_date_repo(name, state, tmp_path, mocker) -> 
 
 
 NESTED_SETTINGS = (
-    'format_version = 1\n\n[late_policy]\nx = 1\ntab_configuration = [{ id = "modules" }]\n'
+    'format_version = 2\n\n[late_policy]\nx = 1\ntab_configuration = [{ id = "modules" }]\n'
 )
 
 
@@ -194,6 +197,12 @@ def cli_env(monkeypatch, mocker):
     )
 
 
+def _term_file(root: Path) -> Path:
+    path = root.parent / "term.toml"
+    path.write_text("first_day = 2026-09-30\n")
+    return path
+
+
 CLI_COMMANDS = {
     "update": lambda r: ["update", str(r)],
     "update-check-all": lambda r: ["update", str(r), "--check-all"],
@@ -205,6 +214,7 @@ CLI_COMMANDS = {
     "find-local-orphans": lambda r: ["find-local-orphans", str(r)],
     "find-canvas-orphans": lambda r: ["find-canvas-orphans", str(r)],
     "list-titles": lambda r: ["list-titles", str(r)],
+    "generate-due-dates": lambda r: ["generate-due-dates", str(_term_file(r)), str(r)],
 }
 
 
@@ -324,7 +334,7 @@ def test_upgrade_an_old_import_end_to_end(tmp_path, mocker) -> None:
     assert result.exit_code == 0, result.output
     data = tomllib.loads(settings.read_text())
     assert data["format_version"] == FORMAT_VERSION
-    assert len(data["upgraded_by"]) == 1 and data["upgraded_by"][0].endswith(": 0 -> 1")
+    assert len(data["upgraded_by"]) == 1 and data["upgraded_by"][0].endswith(f": 0 -> {FORMAT_VERSION}")
     assert "created_by" not in data
     assert data["tab_configuration"] == [{"id": "modules"}]
     assert "tab_configuration" not in data.get("default_post_policy", {})

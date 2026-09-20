@@ -82,7 +82,11 @@ Questions.
    Offsets are applied to local calendar dates and the zone's UTC offset is
    attached at the end. The grading tool adds `timedelta` to a `pytz`-localized
    value without re-localizing, so after a DST change its due time moves by an
-   hour (verified by running it: `23:59 PDT + 60 days` prints as `22:59 PST`).
+   hour (verified by running it: `23:59 PDT + 60 days` prints as `22:59 PST`; counting
+   backwards across the change it is an hour late, so an item due 23:59 on
+   Oct 31 came out as 00:59 on Nov 1 in one real course). Comparing all 170
+   dates of courses 101, 142 and 143 (tests/test_relative_dates_vs_grading_tool.py)
+   found 11 differences, all of exactly this kind.
    The user chose to keep the local time fixed. Results for each item are
    cached by item within a run, and the input offsets are never modified (the
    grading tool inserts into the list for `FIRST_CLASS_OF_QUARTER`, which
@@ -201,3 +205,20 @@ These were not confirmed and are assumptions carried into the specs and tasks:
 - Whether the CLI has an existing colour helper for the yellow diff or this
   needs `click.style`; either is acceptable.
 - The migration does not create the example term file.
+- Differences from the grading tool found while implementing, beyond the
+  daylight-saving one the user chose: `-N CLASS_DAY` goes to the previous class
+  day (the original only does with one or two class days a week; none of the
+  user's courses use a negative class-day offset); `days_of_week` is sorted into
+  week order (the original sorts with Sunday first, which is the same cycle);
+  an item anchored to an item with no due date is an error for the whole run
+  (the original reports an error for that one item and continues); unknown
+  keys, unreadable offsets and bad day abbreviations are errors.
+- Term-file dates and times are accepted either as TOML dates/times or as
+  strings.
+- The standard-library `zoneinfo` needs a time zone database, which Windows
+  does not have; the `tzdata` package is therefore a dependency on every
+  platform (small, pure Python, and harmless where the OS already has one).
+- `generate-due-dates` fixture: 142s and 143s (the summer courses) and 115
+  could not be used for the comparison because their config inherits from
+  another course or has dangling references, so the comparison covers 101, 142
+  and 143.

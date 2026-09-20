@@ -9,8 +9,11 @@ table (an empty `items` array) at the end of `course_settings.toml`, and
 record format version 2 in every `.manifest-*.toml`. It SHALL NOT change the
 file when a top-level `relative_due_dates` key already exists, and SHALL
 NOT create a term file. It SHALL preserve the comments, key order and
-formatting of the rest of the file. When the repo has no
-`course_settings.toml`, it SHALL add nothing beyond the version stamps.
+formatting of the rest of the file. It SHALL add the section only to a settings
+file whose own format version is below 2, so a current settings file whose
+manifests lag behind is not given the section. A repo with no
+`course_settings.toml` is given one by `upgrade` (migration 0 -> 1) and so
+receives the section as well.
 
 #### Scenario: Version 1 repo gains the section
 - **WHEN** a version-1 repo has no `relative_due_dates` key and the user runs `upgrade`
@@ -19,6 +22,10 @@ formatting of the rest of the file. When the repo has no
 #### Scenario: Section already present
 - **WHEN** a version-1 repo already has a `[relative_due_dates]` section
 - **THEN** that section is not modified and only the version stamps change
+
+#### Scenario: Manifest behind a current settings file
+- **WHEN** `course_settings.toml` is at version 2 without a `relative_due_dates` section and a manifest is at version 1
+- **THEN** `upgrade` stamps the manifest and does not add the section
 
 #### Scenario: Upgrade from version 0
 - **WHEN** a user runs `upgrade` on a version-0 repo

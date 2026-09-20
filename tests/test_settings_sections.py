@@ -40,6 +40,17 @@ class TestComputeSettingsSectionHashes:
         )
         assert compute_settings_section_hashes(base) == compute_settings_section_hashes(varied)
 
+    def test_relative_due_dates_affect_no_section(self) -> None:
+        base = {"title": "X", "late_policy": {"late_submission_deduction": 10}}
+        varied = dict(
+            base,
+            relative_due_dates={
+                "days_of_week": ["Mon", "Wed"],
+                "tables": {"default": {"items": [{"name": "HW1", "offsets": ["+1 CLASS_DAY"]}]}},
+            },
+        )
+        assert compute_settings_section_hashes(base) == compute_settings_section_hashes(varied)
+
     def test_unknown_top_level_key_counts_as_metadata(self) -> None:
         a = compute_settings_section_hashes({"title": "X"})
         b = compute_settings_section_hashes({"title": "X", "mystery_key": 42})
@@ -306,7 +317,7 @@ def test_manifest_without_section_hashes_migrates(tmp_path, mocker) -> None:
     with manifest_path.open("wb") as f:
         tomli_w.dump(
             {
-                "_repo_format": {"format_version": 1},
+                "_repo_format": {"format_version": 2},
                 "course_settings/course_settings.toml": {
                     "canvas_id": 0,
                     "canvas_type": "course_settings",
@@ -335,7 +346,7 @@ def test_mv_preserves_resolved_dates(tmp_path) -> None:
     with manifest_path.open("wb") as f:
         tomli_w.dump(
             {
-                "_repo_format": {"format_version": 1},
+                "_repo_format": {"format_version": 2},
                 "assignments/hw1.md": {
                     "canvas_id": 101,
                     "canvas_type": "assignment",
@@ -363,6 +374,27 @@ def test_mv_preserves_resolved_dates(tmp_path) -> None:
     }
 
 
+def test_relative_due_dates_edit_makes_no_course_update(tmp_path, mocker) -> None:
+    """Editing only [relative_due_dates] must not send course settings to Canvas."""
+    root = _make_repo(tmp_path)
+    course = _mock_canvas_course(mocker)
+    make_current(root)
+    run_sync(_cfg(), root)
+    assert course.update.call_count == 1
+    course.reset_mock()
+
+    settings_path = root / "course_settings" / "course_settings.toml"
+    settings_path.write_text(
+        settings_path.read_text()
+        + '\n[relative_due_dates.tables.default]\nitems = [{ name = "HW1", '
+        'relative_to = { type = "START_OF_QUARTER" }, offsets = ["+1 CLASS_DAY"] }]\n'
+    )
+
+    run_sync(_cfg(), root)
+
+    course.update.assert_not_called()
+
+
 def test_version_keys_change_makes_no_course_update(tmp_path, mocker) -> None:
     """upgrade only edits format_version / created_by / upgraded_by; the next
     update must not treat that as a course-metadata change."""
@@ -376,7 +408,7 @@ def test_version_keys_change_makes_no_course_update(tmp_path, mocker) -> None:
     settings_path = root / "course_settings" / "course_settings.toml"
     text = settings_path.read_text()
     settings_path.write_text(
-        text.replace("format_version = 1\n", 'format_version = 1\ncreated_by = "0.2.0"\n'
+        text.replace("format_version = 2\n", 'format_version = 2\ncreated_by = "0.2.0"\n'
                      'upgraded_by = ["0.2.1 on 2026-09-20: 0 -> 1"]\n', 1)
     )
     assert "upgraded_by" in settings_path.read_text()
@@ -389,7 +421,7 @@ def test_version_keys_change_makes_no_course_update(tmp_path, mocker) -> None:
 def test_version_keys_never_reach_the_metadata_payload(tmp_path, mocker) -> None:
     root = _make_repo(
         tmp_path,
-        'format_version = 1\ncreated_by = "0.2.0"\nupgraded_by = ["x"]\n'
+        'format_version = 2\ncreated_by = "0.2.0"\nupgraded_by = ["x"]\n'
         'title = "Test Course"\n',
     )
     course = _mock_canvas_course(mocker)

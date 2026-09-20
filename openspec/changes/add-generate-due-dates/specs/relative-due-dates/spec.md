@@ -56,9 +56,30 @@ the same `name`) as another item in the same table is an error.
 - **WHEN** `assignment_name` names an item that is not in the same table
 - **THEN** the calculation fails for that item with an error naming both items, and nothing is written
 
+#### Scenario: Anchored to an item with no due date
+- **WHEN** item "B" is anchored to item "A" and "A" is anchored to `NO_DUE_DATE`
+- **THEN** the calculation fails with an error naming "B" and "A", and nothing is written
+
 #### Scenario: Circular anchors
 - **WHEN** item A is anchored to B and B is anchored to A
 - **THEN** the calculation fails with an error naming the cycle, and nothing is written
+
+### Requirement: Unknown keys and unreadable values are errors
+
+A key that this capability does not define, in the `[relative_due_dates]`
+section, a table, an item, an item's `relative_to`, or the term file, SHALL be
+reported as an error naming the key and the allowed keys, and nothing SHALL be
+written. The same holds for an offset that does not follow the grammar, a
+class-day abbreviation that is not `Mon` through `Sun` (case is ignored), and
+a table or item of the wrong kind.
+
+#### Scenario: Misspelled key
+- **WHEN** an item has `lock_ofset = "+7 CALENDAR_DAY"`
+- **THEN** the command fails with an error naming `lock_ofset` and listing the allowed keys
+
+#### Scenario: Unreadable offset
+- **WHEN** an item has the offset `"+7 WEEKS"`
+- **THEN** the command fails with an error naming the item and the offset
 
 ### Requirement: Term file supplies the dates that change every term
 
@@ -85,8 +106,9 @@ the time zone has on that date.
 ### Requirement: Anchors and offsets resolve as in MikesGradingTool
 
 Every anchor and offset SHALL give the same date as MikesGradingTool's
-relative-due-date calculation for the same inputs, with one deliberate
-difference stated in the next requirement. The anchors are: `START_OF_QUARTER`
+relative-due-date calculation for the same inputs, with two deliberate
+differences: the daylight-saving rule in the next requirement, and `-N
+CLASS_DAY` (below). The anchors are: `START_OF_QUARTER`
 (the term's first day), `FIRST_CLASS_OF_QUARTER` (the first class day on or
 after the first day), `NO_DUE_DATE` (no due date), and `ASSIGNMENT` (the
 computed due date of the named item). The default due time is applied to the
@@ -94,10 +116,13 @@ anchor's date before offsets run. Offsets are applied in list order. They are:
 `+N CALENDAR_DAY` and `-N CALENDAR_DAY` (move N calendar days);
 `+N CLASS_DAY` and `-N CLASS_DAY` (move to the Nth next or previous day
 in `days_of_week`, skipping non-instructional days unless
-`class_on_noninstructional_days` is true); `<Day> NEAREST_CALENDAR_DAY`
+`class_on_noninstructional_days` is true; the grading tool's backward move
+only finds the previous class day when there are one or two class days a
+week, so `-N CLASS_DAY` follows the stated meaning instead of copying that); `<Day> NEAREST_CALENDAR_DAY`
 (move to the closest date, earlier or later, that falls on that weekday; a date
 already on that weekday does not move); and `HH:MM ABS_TIME` (replace the time of day, keep the
-date). An item anchored to `NO_DUE_DATE` has no due date.
+date). An item anchored to `NO_DUE_DATE` has no due date. `days_of_week` is read as a
+set of weekdays and used in week order, whatever order it is written in.
 
 #### Scenario: Class-day offset
 - **WHEN** the first day is Wednesday 2026-09-30, `days_of_week = ["Mon", "Wed"]`, and an item is anchored to `START_OF_QUARTER` with offsets `["+1 CLASS_DAY"]`
@@ -106,6 +131,14 @@ date). An item anchored to `NO_DUE_DATE` has no due date.
 #### Scenario: Class-day offset skips a non-instructional day
 - **WHEN** 2026-10-21 (a Wednesday) is listed in `noninstructional_days`, `class_on_noninstructional_days` is false, and an item anchored to another item due Monday 2026-10-19 has offsets `["+1 CLASS_DAY"]`
 - **THEN** its due date is Monday 2026-10-26
+
+#### Scenario: Previous class day
+- **WHEN** `days_of_week = ["Mon", "Wed", "Fri"]`, the first day is Wednesday 2026-09-30, and an item is anchored to `START_OF_QUARTER` with offsets `["-1 CLASS_DAY"]`
+- **THEN** its due date is Monday 2026-09-28
+
+#### Scenario: Class days written out of order
+- **WHEN** `days_of_week = ["Fri", "Wed", "Mon"]` and an item counts `+1 CLASS_DAY` from Wednesday 2026-09-30
+- **THEN** its due date is Friday 2026-10-02
 
 #### Scenario: Nearest weekday
 - **WHEN** an item's computed date is Wednesday 2026-10-07 and its next offset is `Fri NEAREST_CALENDAR_DAY`
@@ -124,8 +157,9 @@ date). An item anchored to `NO_DUE_DATE` has no due date.
 Offsets SHALL be applied to local calendar dates in the term's time zone, and
 the UTC offset SHALL be attached to the final local date and time. A due time
 of 23:59 SHALL therefore stay 23:59 local time on both sides of a
-daylight-saving change. (MikesGradingTool moves the local time by an hour
-after a change; this is the one intended difference from it.)
+daylight-saving change. (MikesGradingTool moves the local time by an hour when an
+item's own offsets cross a change: an hour early counting forward, an hour late
+counting backward, which can move a 23:59 due time to 00:59 on the next day.)
 
 #### Scenario: Due time survives a DST change
 - **WHEN** the time zone is `America/Los_Angeles`, the first day is 2026-09-30, the default due time is 23:59, and an item has offsets `["+60 CALENDAR_DAY"]`
@@ -141,8 +175,9 @@ element when it is used. The result is the item's `unlock_at` or `lock_at`.
 When an item has no `unlock_offset` (or `lock_offset`), the table's setting
 `unlock_relative_default` (or `lock_relative_default`) applies, then the
 shared one. When none is set, the field is `KEEP`. When an item has no due
-date and a rule for lock or unlock applies, the field is `KEEP` and a
-warning naming the item is printed.
+date and the rule for lock or unlock is an offset (not `NONE`), the field is
+`KEEP` and a warning naming the item is printed; a `NONE` rule needs no due
+date.
 
 #### Scenario: Lock a week after the due date
 - **WHEN** `lock_relative_default = "+7 CALENDAR_DAY"` and an item due `2026-10-05T23:59:00-07:00` has no `lock_offset`

@@ -263,7 +263,8 @@ def test_course_settings_toml_commented_keys_precede_headers_and_round_trip(tmp_
         {"late_submission_deduction_enabled": True},
         tmp_path,
     )
-    text = _settings_text(tmp_path)
+    # The [relative_due_dates] help comments deliberately follow their own header.
+    text = _settings_text(tmp_path).split("\n[relative_due_dates]", 1)[0]
     lines = text.splitlines()
     first_header = next(i for i, ln in enumerate(lines) if ln.startswith("["))
     commented = [i for i, ln in enumerate(lines) if ln.startswith("# ") and " = " in ln]

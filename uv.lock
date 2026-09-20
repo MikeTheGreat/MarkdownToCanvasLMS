@@ -234,6 +234,7 @@ dependencies = [
     { name = "requests" },
     { name = "tomli-w" },
     { name = "tomlkit" },
+    { name = "tzdata" },
 ]
 
 [package.optional-dependencies]
@@ -261,6 +262,7 @@ requires-dist = [
     { name = "requests", specifier = ">=2.31" },
     { name = "tomli-w", specifier = ">=1.0" },
     { name = "tomlkit", specifier = ">=0.12" },
+    { name = "tzdata", specifier = ">=2024.1" },
 ]
 provides-extras = ["dev", "publish"]
 

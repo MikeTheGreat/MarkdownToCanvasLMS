@@ -17,6 +17,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "pathspec>=0.12",  # gitignore-style pattern matching for ignore files
     "tomlkit>=0.12",  # comment-preserving TOML edits (upgrade, tab_configuration fix)
+    "tzdata>=2024.1",  # IANA time zone data for zoneinfo; Windows (and slim containers) have none
 ]
 
 [project.scripts]

@@ -26,7 +26,7 @@ from tomlkit.items import AoT, Array
 
 #: Keys whose list of dicts is always written as an inline array of inline tables.
 INLINE_TABLE_ARRAY_KEYS = frozenset(
-    {"tab_configuration", "due_dates", "ratings", "rules", "folders", "files"}
+    {"tab_configuration", "due_dates", "ratings", "rules", "folders", "files", "items"}
 )
 
 #: A scalar array longer than this (rendered on one line) is split one item per line.

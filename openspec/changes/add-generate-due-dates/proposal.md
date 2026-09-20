@@ -47,9 +47,9 @@ at the start of each quarter.
   `upgrade` is run.
 - A separate script in `scripts/` reads the grading tool's config (JSON with
   `//` comments) and prints the equivalent relative-due-dates TOML to stdout.
-- Housekeeping after the feature is done: delete `NEW_FEATURES.md` and
-  `RELATIVE_DUE_DATES.md`; add a TODO.md item to revisit the fixed-distance
-  lock/unlock handling.
+- Housekeeping after the feature is done: delete `NEW_FEATURES.md`; add a
+  TODO.md item to revisit the fixed-distance lock/unlock handling.
+  `RELATIVE_DUE_DATES.md` (the user's own notes) is left for the user to remove.
 
 ### Existing features considered
 
@@ -111,7 +111,7 @@ is removed when the change is done.
 - `imscc_import.py`: writes the new section and the example term file.
 - `sync.py`: `_NON_METADATA_SETTINGS_KEYS` gains `relative_due_dates`.
 - `scripts/`: new harvest script.
-- Docs: README.md, ARCHITECTURE.md, TODO.md; NEW_FEATURES.md and
-  RELATIVE_DUE_DATES.md removed at the end.
+- Docs: README.md, ARCHITECTURE.md, TESTING.md, TODO.md; NEW_FEATURES.md
+  removed at the end.
 - No Canvas API calls and no manifest layout changes. Manifests only receive
   the new version stamp through `upgrade`.

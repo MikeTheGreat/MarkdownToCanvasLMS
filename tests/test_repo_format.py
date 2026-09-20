@@ -203,7 +203,7 @@ def test_check_current_passes(tmp_path):
 
 def test_check_only_compares_versions_and_leaves_tab_configuration(tmp_path, capsys):
     """Placement is fixed once, by `upgrade`; a current version means it was."""
-    path = _settings(tmp_path, "format_version = 1\n" + NESTED)
+    path = _settings(tmp_path, f"format_version = {FORMAT_VERSION}\n" + NESTED)
     before = path.read_bytes()
     assert rf.check_repo_format(tmp_path) is None
     assert path.read_bytes() == before
@@ -235,15 +235,20 @@ def test_upgrade_old_repo(tmp_path, capsys):
     rf.run_upgrade(tmp_path, today=date(2026, 9, 20))
     text = path.read_text()
     data = tomllib.loads(text)
-    assert data["format_version"] == 1
-    assert data["upgraded_by"] == [f"{rf.tool_version()} on 2026-09-20: 0 -> 1"]
+    assert data["format_version"] == FORMAT_VERSION
+    assert data["upgraded_by"] == [
+        f"{rf.tool_version()} on 2026-09-20: 0 -> {FORMAT_VERSION}"
+    ]
     assert "created_by" not in data
     assert "# keep me\ntitle = 'x'\n" in text
-    assert text.startswith("format_version = 1\nupgraded_by")
-    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 1}
+    assert text.startswith(f"format_version = {FORMAT_VERSION}\nupgraded_by")
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {
+        "format_version": FORMAT_VERSION
+    }
     assert tomllib.loads(manifest.read_text())["a.md"] == {"canvas_id": 1}
     assert rf.check_repo_format(tmp_path) is None
-    assert "Migration 0 -> 1" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Migration 0 -> 1" in out and "Migration 1 -> 2" in out
 
 
 def test_upgrade_second_run_is_noop(tmp_path, capsys):
@@ -259,8 +264,9 @@ def test_upgrade_second_run_is_noop(tmp_path, capsys):
 def test_upgrade_creates_missing_settings(tmp_path):
     rf.run_upgrade(tmp_path)
     data = tomllib.loads((tmp_path / "course_settings/course_settings.toml").read_text())
-    assert data["format_version"] == 1
+    assert data["format_version"] == FORMAT_VERSION
     assert len(data["upgraded_by"]) == 1
+    assert data["relative_due_dates"] == {"tables": {"default": {"items": []}}}
 
 
 def test_upgrade_noop_writes_nothing(tmp_path, capsys):
@@ -284,35 +290,38 @@ def test_upgrade_refuses_newer(tmp_path):
 
 
 def test_upgrade_manifest_only_adds_no_entry(tmp_path):
-    path = _settings(tmp_path, "format_version = 1\nx = 1\n")
+    path = _settings(tmp_path, f"format_version = {FORMAT_VERSION}\nx = 1\n")
     manifest = _manifest(tmp_path)
     before = path.read_bytes()
     rf.run_upgrade(tmp_path)
     assert path.read_bytes() == before
-    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 1}
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {
+        "format_version": FORMAT_VERSION
+    }
 
 
 def test_upgrade_appends_second_entry(tmp_path):
-    fake = {1: lambda state: ["step"]}
-    _settings(tmp_path, "format_version = 1\n")
+    v = FORMAT_VERSION
+    fake = {v: lambda state: ["step"]}
+    _settings(tmp_path, f"format_version = {v}\n")
     rf.run_upgrade(tmp_path, today=date(2026, 1, 1))  # already current: no entry
     rf.run_upgrade(
-        tmp_path, migrations={**rf.MIGRATIONS, **fake}, target_version=2,
+        tmp_path, migrations={**rf.MIGRATIONS, **fake}, target_version=v + 1,
         today=date(2026, 2, 2),
     )
     _settings_text = (tmp_path / "course_settings/course_settings.toml").read_text()
     data = tomllib.loads(_settings_text)
-    assert data["format_version"] == 2
-    assert data["upgraded_by"] == [f"{rf.tool_version()} on 2026-02-02: 1 -> 2"]
+    assert data["format_version"] == v + 1
+    assert data["upgraded_by"] == [f"{rf.tool_version()} on 2026-02-02: {v} -> {v + 1}"]
     rf.run_upgrade(
-        tmp_path, migrations={**rf.MIGRATIONS, 2: lambda s: []}, target_version=3,
+        tmp_path, migrations={**rf.MIGRATIONS, v + 1: lambda s: []}, target_version=v + 2,
         today=date(2026, 3, 3),
     )
     data = tomllib.loads((tmp_path / "course_settings/course_settings.toml").read_text())
-    assert data["format_version"] == 3
+    assert data["format_version"] == v + 2
     assert data["upgraded_by"] == [
-        f"{rf.tool_version()} on 2026-02-02: 1 -> 2",
-        f"{rf.tool_version()} on 2026-03-03: 2 -> 3",
+        f"{rf.tool_version()} on 2026-02-02: {v} -> {v + 1}",
+        f"{rf.tool_version()} on 2026-03-03: {v + 1} -> {v + 2}",
     ]
 
 
@@ -361,7 +370,7 @@ def test_migration_renames_legacy_manifest(tmp_path):
     assert not legacy.exists()
     data = tomllib.loads(new.read_text())
     assert data["a.md"] == {"canvas_id": 1}
-    assert data["_repo_format"] == {"format_version": 1}
+    assert data["_repo_format"] == {"format_version": FORMAT_VERSION}
 
 
 def test_migration_legacy_and_current_both_present(tmp_path, capsys):
@@ -381,5 +390,59 @@ def test_migration_stamps_every_manifest(tmp_path):
     rf.run_upgrade(tmp_path)
     for name, key in ((".manifest-canvas.toml", "a.md"), (".manifest-canvas-sec-b.toml", "b.md")):
         data = tomllib.loads((tmp_path / name).read_text())
-        assert data["_repo_format"] == {"format_version": 1}
+        assert data["_repo_format"] == {"format_version": FORMAT_VERSION}
         assert list(k for k in data if k != "_repo_format") == [key]
+
+
+# --- migration 1 -> 2 ------------------------------------------------------
+
+def _v1_repo(tmp_path, body):
+    return _settings(tmp_path, "format_version = 1\n" + body)
+
+
+def test_migration_1_to_2_adds_empty_default_table(tmp_path):
+    body = '# c\ntitle = "x"\ndue_dates = [\n  { name = "A", due_at = "NONE" },\n]\n\n[late_policy]\nz = 1  # t\n'
+    path = _v1_repo(tmp_path, body)
+    manifest = _manifest(tmp_path, version=1, extra={"a.md": {"canvas_id": 1}})
+    rf.run_upgrade(tmp_path, today=date(2026, 9, 20))
+    text = path.read_text()
+    data = tomllib.loads(text)
+    assert data["format_version"] == 2
+    assert data["relative_due_dates"] == {"tables": {"default": {"items": []}}}
+    assert body in text  # everything already there is untouched
+    assert text.index("[relative_due_dates") > text.index("[late_policy]")
+    assert data["upgraded_by"] == [f"{rf.tool_version()} on 2026-09-20: 1 -> 2"]
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 2}
+    assert rf.check_repo_format(tmp_path) is None
+
+
+def test_migration_1_to_2_leaves_existing_section(tmp_path, capsys):
+    body = '[relative_due_dates]\ndays_of_week = ["Mon"]\n'
+    path = _v1_repo(tmp_path, body)
+    rf.run_upgrade(tmp_path)
+    data = tomllib.loads(path.read_text())
+    assert data["relative_due_dates"] == {"days_of_week": ["Mon"]}
+    assert data["format_version"] == 2
+    assert "already present" in capsys.readouterr().out
+
+
+def test_migration_1_to_2_noop_writes_nothing(tmp_path):
+    path = _v1_repo(tmp_path, "x = 1\n")
+    before = path.read_bytes()
+    rf.run_upgrade(tmp_path, noop=True)
+    assert path.read_bytes() == before
+
+
+def test_current_repo_is_not_given_the_section(tmp_path, capsys):
+    path = _settings(tmp_path, f"format_version = {FORMAT_VERSION}\nx = 1\n")
+    before = path.read_bytes()
+    rf.run_upgrade(tmp_path)
+    assert path.read_bytes() == before
+    assert "already current" in capsys.readouterr().out
+
+
+def test_manifest_lagging_does_not_add_section_to_current_settings(tmp_path):
+    path = _settings(tmp_path, f"format_version = {FORMAT_VERSION}\n" + NESTED)
+    _manifest(tmp_path, version=1)
+    rf.run_upgrade(tmp_path)  # the tab_configuration fix rewrites the file
+    assert "relative_due_dates" not in tomllib.loads(path.read_text())

@@ -27,7 +27,7 @@ from . import manifest as manifest_lib
 #: The format version this tool reads and writes. Increase it (and add a
 #: migration to MIGRATIONS) whenever a change makes the tool read an existing
 #: repo file differently. See CLAUDE.md.
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 
 SETTINGS_RELPATH = Path("course_settings") / "course_settings.toml"
 
@@ -258,9 +258,39 @@ def _migrate_0_to_1(state: UpgradeState) -> list[str]:
     return lines
 
 
+#: Section of course_settings.toml holding the relative due dates.
+RELATIVE_DUE_DATES_KEY = "relative_due_dates"
+
+
+def _migrate_1_to_2(state: UpgradeState) -> list[str]:
+    """Add the empty relative-due-dates section; stamp the manifests."""
+    lines: list[str] = []
+    if not settings_path(state.repo).exists() or read_repo_version(state.repo) >= 2:
+        pass  # nothing to edit, or the settings file is already at version 2
+    elif RELATIVE_DUE_DATES_KEY in state.settings_doc:
+        lines.append(f"{RELATIVE_DUE_DATES_KEY} is already present; left as it is")
+    else:
+        # A table header at the end of the file cannot capture existing keys.
+        section = tomlkit.parse(
+            f"[{RELATIVE_DUE_DATES_KEY}.tables.default]\nitems = []\n"
+        )
+        doc = state.settings_doc
+        if doc.body:
+            doc.add(tomlkit.nl())
+        doc.add(RELATIVE_DUE_DATES_KEY, section[RELATIVE_DUE_DATES_KEY])
+        lines.append(
+            f"Add an empty [{RELATIVE_DUE_DATES_KEY}.tables.default] table to "
+            f"{SETTINGS_RELPATH.name}"
+        )
+    for path in state.manifests:
+        lines.append(f"Record format version 2 in {path.name}")
+    return lines
+
+
 #: Ordered migrations, keyed by the version they migrate *from*.
 MIGRATIONS: dict[int, Migration] = {
     0: _migrate_0_to_1,
+    1: _migrate_1_to_2,
 }
 
 

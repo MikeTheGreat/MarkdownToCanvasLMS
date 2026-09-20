@@ -106,6 +106,11 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
   - [IMSCC import](#imscc-import)
     - [Verifying the import](#verifying-the-import)
   - [Listing content titles (`list-titles`)](#listing-content-titles-list-titles)
+  - [Generating due dates from offsets (`generate-due-dates`)](#generating-due-dates-from-offsets-generate-due-dates)
+    - [The term file](#the-term-file)
+    - [The `[relative_due_dates]` section](#the-relative_due_dates-section)
+    - [Offsets](#offsets)
+    - [Running it](#running-it)
   - [Resolving external-tool labels (`create-tool-aliases`)](#resolving-external-tool-labels-create-tool-aliases)
     - [Workflow](#workflow)
 
@@ -1055,9 +1060,9 @@ TOML — *does* re-upload it.)
 
 # ── Repo format (written by `import` and `upgrade`; do not edit) ─────────
 # These come first in the file. They are never sent to Canvas.
-format_version = 1                                 # the repo's file-format version
+format_version = 2                                 # the repo's file-format version
 created_by     = "0.2.1"                           # tool version that ran `import`
-upgraded_by    = ["0.2.2 on 2026-09-20: 0 -> 1"]   # one entry per `upgrade` run
+upgraded_by    = ["0.2.2 on 2026-09-20: 1 -> 2"]   # one entry per `upgrade` run
 
 # ── Course identity & display ────────────────────────────────────────────
 title        = "Intro to Programming"          # Canvas course name
@@ -1171,6 +1176,18 @@ late_submission_interval                = "day"  # "day" or "hour"
 late_submission_minimum_percent_enabled = false
 late_submission_minimum_percent         = 0.0    # floor: never deduct below this %
 
+# ── Relative due dates (see "Generating due dates from offsets") ─────────
+# Offsets from the start of the term; `generate-due-dates` turns them into the
+# absolute dates of the due_dates table above. `import` writes an empty one.
+[relative_due_dates]
+days_of_week = ["Mon", "Wed"]
+lock_relative_default = "+7 CALENDAR_DAY"
+
+[relative_due_dates.tables.default]
+items = [
+    { name = "Week 1 Problem Set", relative_to = { type = "START_OF_QUARTER" }, offsets = ["+1 CLASS_DAY"] },
+]
+
 # ── Course flags (conditional content) ───────────────────────────────────
 # Boolean switches referenced by <!-- #if flag --> directives in Markdown
 # bodies; flip one value here to switch the whole course between offerings.
@@ -1265,10 +1282,13 @@ or one of these sentinel values (case-insensitive):
 | --- | --- |
 | `"2025-02-01T23:59:00"` | Set this date on Canvas |
 | `"NONE"` | Actively **clear** this date on Canvas |
-| `"KEEP"` | Leave whatever Canvas currently has (don't send this field) |
+| `"KEEP"` | Never send this field, whether the item is new or already exists. A brand-new item gets whatever Canvas defaults to (or whatever the frontmatter sets) |
 | `""` (empty string) | Same as `KEEP`, but prints a warning suggesting you use an explicit value |
-| `"CREATE_NONE_THEN_KEEP"` | Clear the date when creating a new item; on subsequent updates, act as `KEEP` |
+| `"CREATE_NONE_THEN_KEEP"` | Clear the date when the item is first created on Canvas; on every later update, act as `KEEP` |
+| `"NONE"` | Clear the date on every update, not just on create |
 
+`KEEP` and `CREATE_NONE_THEN_KEEP` behave identically for an item that already
+exists on Canvas. They differ only on the first upload of a new item.
 `CREATE_NONE_THEN_KEEP` is useful for `lock_at` — it clears any lock date
 imported from a previous term when the assignment is first created, but leaves
 it alone if you later set one by hand in Canvas.
@@ -1299,6 +1319,12 @@ During `update`, the tool prints warnings for:
 
 Use [`list-titles`](#listing-content-titles-list-titles) to see all available
 titles and their current due dates.
+
+If you plan the term as offsets ("due four class days after the start of the
+quarter, locks a week later") rather than as calendar dates, the
+[`generate-due-dates`](#generating-due-dates-from-offsets-generate-due-dates)
+command computes this table from a relative schedule at the start of each term.
+After that you edit `due_dates` by hand as usual.
 
 #### Pinned resources (`pinned_resources`)
 
@@ -2432,7 +2458,7 @@ format version it was written in (see [Upgrading a repo](#upgrading-a-repo-upgra
 # .manifest-canvas.toml — local; never commit this file
 
 [_repo_format]
-format_version = 1
+format_version = 2
 
 ["pages/syllabus.md"]
 canvas_id   = 11111
@@ -2480,14 +2506,14 @@ version it was written in. A repo with no `format_version` is version 0, which
 is every repo created before this feature existed.
 
 `update`, `mv`, `publish`, `prune`, `clean-manifest`, `find-local-orphans`,
-`find-canvas-orphans` and `list-titles` check both the repo and every
+`find-canvas-orphans`, `list-titles` and `generate-due-dates` check both the repo and every
 `.manifest-*.toml` in it before they read content, write a file or change
 anything on Canvas. If a version differs from the tool's, the command stops and
 changes nothing:
 
 ```text
-Error: This course repo is format version 0 but this tool (markdown-to-canvas 0.2.1) uses format version 1. Run `markdown-to-canvas upgrade` first.
-Error: course_settings/course_settings.toml is format version 2 but this tool (markdown-to-canvas 0.2.1) only understands format version 1. Update markdown-to-canvas.
+Error: This course repo is format version 0 but this tool (markdown-to-canvas 0.2.1) uses format version 2. Run `markdown-to-canvas upgrade` first.
+Error: course_settings/course_settings.toml is format version 3 but this tool (markdown-to-canvas 0.2.1) only understands format version 2. Update markdown-to-canvas.
 ```
 
 A manifest that is older than the repo is named in the message. This happens
@@ -2529,6 +2555,12 @@ the legacy file is unused and leaves it), and records version 1 in every
 manifest. `update`, `prune` and `clean-manifest` no longer rename the legacy
 manifest themselves.
 
+Migration 1 to 2 adds an empty `[relative_due_dates.tables.default]` table at
+the end of `course_settings.toml` (see
+[Generating due dates from offsets](#generating-due-dates-from-offsets-generate-due-dates)),
+unless the file already has a `relative_due_dates` key, and records version 2 in
+every manifest. It does not create a term file.
+
 `upgrade` also checks that `tab_configuration` is a top-level key. The tool
 only reads it there, so when it is nested under a section
 (`[default_post_policy]`, for example) `upgrade` moves it to the top level,
@@ -2555,6 +2587,8 @@ markdown-to-canvas import course-export.imscc ./my-course-repo
 ```
 
 This converts pages, assignments, discussions, announcements, quizzes, question banks, modules, and course settings to local files ready for use with this tool. A `canvas.toml` skeleton is written with the Canvas domain and course ID pre-filled from the export metadata.
+
+`import` also writes an empty `[relative_due_dates.tables.default]` section at the end of `course_settings.toml` (with the shared settings commented out, and every allowed value listed) and, unless the file is already there, a fully commented-out `course_settings/term_dates.toml` that shows the [term file](#the-term-file) format. See [Generating due dates from offsets](#generating-due-dates-from-offsets-generate-due-dates).
 
 Every top-level folder the tool recognizes (`pages/`, `assignments/`, `discussions/`, `announcements/`, `quizzes/`, `question_banks/`, `modules/`, `snippets/`, `assets/`, `course_settings/`) is created even if the course has nothing to put in it, so the repo layout always matches [How it works](#how-it-works) and there's an obvious place to add new content later. A starter `.gitignore` and `.canvasignore` are also written — both cover common OS/editor/Office junk files, plus commented-out examples of course-specific patterns (per-term-only material, feedback drafts) you can uncomment or adapt as the course grows. `.canvasignore` also actively excludes `course_definition/**` — instructor reference material (scope-and-sequence docs, curriculum outcome guides) that should never be uploaded to Canvas — and `question_banks/**`, since Canvas's API cannot create or update question banks. If the export contains any question banks, `import` prints a warning saying they cannot be re-uploaded.
 
@@ -2650,6 +2684,185 @@ This is useful when setting up the centralized `due_dates` table in
 Due dates shown reflect centralized overrides when present.
 
 ---
+
+## Generating due dates from offsets (`generate-due-dates`)
+
+A course usually has the same schedule every term: "Problem Set 1 is due four
+class days after the term starts, and locks a week later". `generate-due-dates`
+lets you write that schedule once, as offsets, and turns it into the absolute
+dates of the [`due_dates`](#centralized-due-dates) table at the start of each
+term. After that `due_dates` is yours: edit any date by hand and run `update` as
+usual. The command changes only your local `course_settings.toml`; it never
+contacts Canvas.
+
+```bash
+# Show what would change, without writing anything
+markdown-to-canvas generate-due-dates course_settings/term_dates.toml --noop
+
+# Compute the dates, show the changes, and ask before writing them
+markdown-to-canvas generate-due-dates course_settings/term_dates.toml [REPO]
+
+# Then send them to Canvas as usual
+markdown-to-canvas update
+```
+
+It works from two inputs: a **term file** that holds what changes each term
+(dates, holidays, time zone), and a **relative table** in `course_settings.toml`
+that holds the schedule. The term file is a required argument, so a new term
+needs a new term file and no edit to the schedule.
+
+### The term file
+
+A TOML file; the path is whatever you pass on the command line. `import` writes
+a fully commented-out example, `course_settings/term_dates.toml`, if there is not
+one already. Remove the leading `# ` from the lines you want and fill in your
+values:
+
+```toml
+first_day = 2026-09-30
+last_day = 2026-12-18
+time_zone = "America/Los_Angeles"    # an IANA name, so daylight-saving time is handled
+default_due_time = "23:59"
+relative_table = "quarter11"         # optional: which table to use (see below)
+noninstructional_days = [
+  { title = "Veterans Day", date = 2026-11-11 },
+  { title = "Thanksgiving", date = 2026-11-26 },
+]
+```
+
+All keys except `relative_table` and `noninstructional_days` are required, and a
+misspelled key is an error.
+
+### The `[relative_due_dates]` section
+
+All the settings live in one section of `course_settings.toml`, so they stay out
+of the top-level keys. `import` writes an empty one, and `upgrade` adds one to
+older repos.
+
+```toml
+[relative_due_dates]
+# Shared by every table below (a table may set its own to override):
+days_of_week = ["Mon", "Wed"]              # Mon Tue Wed Thu Fri Sat Sun, in any order
+class_on_noninstructional_days = false     # default false
+unlock_relative_default = "NONE"           # see "Lock and unlock dates" below
+lock_relative_default = "+7 CALENDAR_DAY"
+
+[relative_due_dates.tables.quarter11]      # one table per schedule
+ignore = ["Week 10 Problem Set"]           # optional: titles that don't exist in this schedule
+items = [
+    { name = "Introduce Yourself", relative_to = { type = "FIRST_CLASS_OF_QUARTER" } },
+    { name = "Week 1 Problem Set", relative_to = { type = "START_OF_QUARTER" }, offsets = ["+2 CLASS_DAY"] },
+    { name = "Week 1 Discussion", type = "discussion", relative_to = { type = "ASSIGNMENT", assignment_name = "Week 1 Problem Set" }, offsets = ["-1 CALENDAR_DAY"], unlock_offset = "NONE" },
+    { name = "Midterm Quiz", type = "quiz", relative_to = { type = "NO_DUE_DATE" } },
+]
+
+[relative_due_dates.tables.summer8]        # e.g. a shorter summer term
+days_of_week = ["Mon", "Tue", "Wed", "Thu"]
+items = [ ... ]
+```
+
+Each item has:
+
+| Key | Meaning |
+| --- | --- |
+| `name` | The title of an assignment, discussion or quiz, matched the way `due_dates` entries are. |
+| `type` | Optional: `assignment`, `discussion` or `quiz`. Needed only when two items share a title. |
+| `relative_to` | Where counting starts: `{ type = "START_OF_QUARTER" }` (the term's `first_day`), `{ type = "FIRST_CLASS_OF_QUARTER" }` (the first class day on or after it), `{ type = "NO_DUE_DATE" }` (the item gets `due_at = "NONE"`), or `{ type = "ASSIGNMENT", assignment_name = "Other item" }` (the other item's due *date*; the time of day starts again at `default_due_time`). An item can be relative only to another item of the same table that has a due date. |
+| `offsets` | A list of offsets applied in order (below). May be empty. |
+| `unlock_offset`, `lock_offset` | Optional. How far from the item's own due date it unlocks or locks. |
+
+Tables are named, and one run uses one of them: the one named by `--table`, else
+by `relative_table` in the term file, else the only one. If there are several
+and none is chosen, the command lists their names and stops. That is how one
+repo can carry both an 11-week and an 8-week schedule. The `ignore` list quiets
+the warnings below for titles that belong to another table.
+
+### Offsets
+
+| Offset | Meaning |
+| --- | --- |
+| `"+7 CALENDAR_DAY"`, `"-2 CALENDAR_DAY"` | Move that many calendar days. |
+| `"+1 CLASS_DAY"`, `"-1 CLASS_DAY"` | Move to the next or previous day in `days_of_week`, skipping the term file's `noninstructional_days` unless `class_on_noninstructional_days` is true. Counting from a day that is not a class day lands on the first class day. |
+| `"Fri NEAREST_CALENDAR_DAY"` | Move to the closest date, earlier or later, that is a Friday (any weekday abbreviation). A date already on a Friday does not move. |
+| `"17:00 ABS_TIME"` | Set the time of day; the date stays. |
+
+Every item starts at `default_due_time` on its starting date, so
+`["+3 CALENDAR_DAY"]` alone means "three days later at 23:59". The time stays the
+same clock time all term: 23:59 remains 23:59 on both sides of a daylight-saving
+change, and each date gets the UTC offset in force on that day.
+
+**Lock and unlock dates.** `unlock_offset` and `lock_offset` use the same
+offsets, counted from the item's own due date (so `"-7 CALENDAR_DAY"` unlocks a
+week before it is due). Each may be one string or a list, for example
+`["+7 CALENDAR_DAY", "08:00 ABS_TIME"]`. The value `"NONE"` clears the date;
+"unlock everything at the start of the quarter" is `unlock_relative_default =
+"NONE"`. An item with no `unlock_offset` or `lock_offset` of its own uses the
+table's `unlock_relative_default` / `lock_relative_default`, then the shared
+ones; with none at all, the entry gets `"KEEP"` (leave the Canvas value alone).
+An item with no due date that has an offset rule for lock or unlock gets `"KEEP"`
+and a warning.
+
+### Running it
+
+`generate-due-dates` calculates every date first and shows what would change,
+in yellow for real changes:
+
+```text
+Repo:      /home/me/cs142
+Relative table: quarter11
+  changed: Week 1 Problem Set: due_at: 2026-01-01T00:00:00-08:00 -> 2026-10-05T23:59:00-07:00, lock_at: KEEP -> 2026-10-12T23:59:00-07:00
+  added:   Week 1 Discussion (discussion): unlock_at=NONE, due_at=2026-10-07T23:59:00-07:00, lock_at=2026-10-14T23:59:00-07:00
+  unchanged: 41 entries
+Write these dates into due_dates? [y/N]:
+```
+
+Nothing is written until you answer yes. With `--noop` it shows the changes and
+stops. Without a terminal (a script) it refuses unless you pass `--yes`, which
+skips the question but still prints the changes. If nothing would change it says
+so and does not ask.
+
+For each item of the table, an existing `due_dates` entry with the same `name`
+(and `type`, when both give one) gets its `due_at`, `unlock_at` and `lock_at`
+replaced; other keys of the entry, such as `only_if`, are kept. An item with no
+entry gets a new one. Entries the table has no item for are left alone, and
+comments and formatting elsewhere in the file are kept. The command always
+computes every item and never looks at course flags: `update` applies `only_if`
+afterwards, as it does for hand-written entries. Because a run overwrites the
+three dates of every item in the table, hand edits made since the last run show
+up in the changes as `old -> new`; run it once at the start of a term rather
+than after you start editing.
+
+It prints warnings, each naming the table or tables responsible:
+
+* An item that matches no assignment, discussion or quiz (in the relative
+  table, and in `due_dates` too if it has an entry there).
+* An assignment, discussion or quiz that is in neither the relative table nor
+  `due_dates`, or that has a `due_dates` entry but no item in the table.
+* A notice listing `due_dates` entries the table did not produce (for example
+  left from another table), which stay as they are.
+
+Titles in the table's `ignore` list are not reported. A problem in the settings,
+such as an unknown key, an unreadable offset, an item relative to a missing
+item, or a circular chain, stops the run with an error naming it before anything
+is written.
+
+The arithmetic is a port of the calculation in MikesGradingTool, with these
+differences. Counting across a daylight-saving change
+keeps the clock time (the grading tool's dates drift by an hour there). `-N
+CLASS_DAY` goes to the previous class day even with three or more class days a
+week. An item relative to an item with no due date is an error. To bring an
+existing grading-tool course over, `scripts/harvest_relative_due_dates.py
+CONFIG.json COURSE` prints its schedule as a `[relative_due_dates]` section to
+paste into `course_settings.toml`, and `... CONFIG.json --term [COURSE]` prints
+the matching term file (first and last day, time zone, default due time and
+holidays) to save as `course_settings/term_dates.toml`. The script needs only
+[`uv`](https://docs.astral.sh/uv/) (it declares its one dependency inline), so
+you can copy it anywhere on your `PATH`, run `chmod +x` on it, and run it by
+name.
+
+One `due_dates` array is shared by every section of a repo that drives several
+Canvas courses, so a run produces one set of dates. Sections that need different
+term lengths need separate repos, or hand-edited entries.
 
 ## Resolving external-tool labels (`create-tool-aliases`)
 
