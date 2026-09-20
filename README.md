@@ -2805,14 +2805,22 @@ and a warning.
 ### Running it
 
 `generate-due-dates` calculates every date first and shows what would change,
-in yellow for real changes:
+in yellow for real changes. Fields are listed alphabetically, and when both the old
+and new value are dates they are printed on two lines with the values in the same
+columns, so you can see which part changed:
 
 ```text
 Repo:      /home/me/cs142
 Relative table: quarter11
-  changed: Week 1 Problem Set: due_at: 2026-01-01T00:00:00-08:00 -> 2026-10-05T23:59:00-07:00, lock_at: KEEP -> 2026-10-12T23:59:00-07:00
-  added:   Week 1 Discussion (discussion): unlock_at=NONE, due_at=2026-10-07T23:59:00-07:00, lock_at=2026-10-14T23:59:00-07:00
-  unchanged: 41 entries
+Week 1 Problem Set:
+	due_at: 2026-01-01T00:00:00-08:00
+	     -> 2026-10-05T23:59:00-07:00
+	lock_at: KEEP -> 2026-10-12T23:59:00-07:00
+Week 1 Discussion (discussion) (new entry):
+	due_at: 2026-10-07T23:59:00-07:00
+	lock_at: 2026-10-14T23:59:00-07:00
+	unlock_at: NONE
+41 unchanged entries
 Write these dates into due_dates? [y/N]:
 ```
 

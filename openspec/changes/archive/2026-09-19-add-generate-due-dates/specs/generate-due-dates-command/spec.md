@@ -49,9 +49,13 @@ SHALL NOT contact Canvas.
 ### Requirement: Changes are shown before anything is written
 
 Unless `--noop` is given, the command SHALL calculate all dates first, print
-one line per entry that would be added or changed, and ask the user to
-confirm before writing. A changed entry SHALL show each changed field's old
-and new value. Lines for changes SHALL be shown in yellow when the output is a
+each entry that would be added or changed, and ask the user to confirm before
+writing. An entry is shown as its name on one line (marked "(new entry)" when
+added) followed by the fields in alphabetical order, indented with a tab: `field: old -> new`
+for a changed field, `field: value` for an added entry. When the old and new
+value of a changed field are both dates, they are printed on two lines
+(`field: old`, then `-> new` right-aligned under the field name) so the values
+start in the same column. Lines for changes SHALL be shown in yellow when the output is a
 terminal; entries whose computed values equal the current ones SHALL be
 listed as unchanged, in normal colour, or counted in a summary line. If the
 user declines, nothing is written. If nothing would change, the command says

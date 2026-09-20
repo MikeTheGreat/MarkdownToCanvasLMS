@@ -168,8 +168,18 @@ def test_noop_prints_the_diff_and_writes_nothing(tmp_path):
     before = _settings_text(root)
     result = _run(root, _term(tmp_path), "--noop")
     assert result.exit_code == 0, result.output
-    assert "changed: Week 1 Problem Set" in result.output
-    assert "added:   Week 1 Discussion (discussion)" in result.output
+    assert (
+        "Week 1 Problem Set:\n"
+        "\tdue_at: 2000-01-01T00:00:00-08:00\n"
+        "\t     -> 2026-10-05T23:59:00-07:00\n"
+        "\tlock_at: KEEP -> 2026-10-12T23:59:00-07:00\n"
+    ) in result.output
+    assert (
+        "Week 1 Discussion (discussion) (new entry):\n"
+        "\tdue_at: 2026-10-07T23:59:00-07:00\n"
+        "\tlock_at: 2026-10-14T23:59:00-07:00\n"
+        "\tunlock_at: NONE\n"
+    ) in result.output
     assert "--noop" in result.output
     assert _settings_text(root) == before
 
@@ -177,8 +187,10 @@ def test_noop_prints_the_diff_and_writes_nothing(tmp_path):
 def test_diff_lines_for_changes_are_yellow(tmp_path):
     root = _repo(tmp_path)
     result = _run(root, _term(tmp_path), "--noop", color=True)
-    assert "\x1b[33m  changed: Week 1 Problem Set" in result.output
-    assert "\x1b[33m  added:" in result.output
+    assert "\x1b[33mWeek 1 Problem Set:" in result.output
+    assert "\x1b[33m\tdue_at: 2000-01-01T00:00:00-08:00" in result.output
+    assert "\x1b[33m\t     -> 2026-10-05T23:59:00-07:00" in result.output
+    assert "\x1b[33mWeek 1 Discussion (discussion) (new entry):" in result.output
     unchanged_or_header = [l for l in result.output.splitlines() if l.startswith("Relative table")]
     assert unchanged_or_header and "\x1b[33m" not in unchanged_or_header[0]
 
@@ -196,7 +208,7 @@ def test_yes_writes_without_asking(tmp_path):
     root = _repo(tmp_path)
     result = _run(root, _term(tmp_path), "--yes")
     assert result.exit_code == 0, result.output
-    assert "changed: Week 1 Problem Set" in result.output  # the diff is still shown
+    assert "Week 1 Problem Set:\n\tdue_at:" in result.output  # the diff is still shown
     entries = _entries(root)
     assert entries["Week 1 Problem Set"]["due_at"] == "2026-10-05T23:59:00-07:00"
     assert entries["Week 1 Problem Set"]["lock_at"] == "2026-10-12T23:59:00-07:00"
@@ -233,7 +245,7 @@ def test_hand_edited_entry_is_shown_as_overwritten(tmp_path):
     path = root / "course_settings" / "course_settings.toml"
     path.write_text(_settings_text(root).replace("2026-10-05T23:59:00-07:00", "2026-10-06T12:00:00-07:00"))
     result = _run(root, term, "--noop")
-    assert "2026-10-06T12:00:00-07:00 -> 2026-10-05T23:59:00-07:00" in result.output
+    assert "\tdue_at: 2026-10-06T12:00:00-07:00\n\t     -> 2026-10-05T23:59:00-07:00" in result.output
 
 
 def test_bad_term_file_and_bad_table_are_reported_without_a_traceback(tmp_path):
@@ -469,3 +481,29 @@ def test_generated_dates_reach_canvas_through_update_and_only_if_still_applies(t
     run_sync(cfg, root)
     dropped = course.create_assignment.call_args.kwargs["assignment"]
     assert "due_at" not in dropped or dropped["due_at"] != "2026-10-05T23:59:00-07:00"
+
+
+def test_field_lines_are_alphabetical_and_datetimes_line_up():
+    plan = gd.GenerationPlan(
+        table_name="t", warnings=[], notices=[], settings_path=Path("x"), source_text="",
+        changes=[
+            gd.EntryChange(
+                "Space Needle", None, "changed",
+                fields={
+                    "unlock_at": ("CREATE_NONE_THEN_KEEP", "KEEP"),
+                    "due_at": ("2026-04-18T06:59:00", "2026-10-21T23:59:00-07:00"),
+                    "lock_at": ("CREATE_NONE_THEN_KEEP", "KEEP"),
+                },
+            )
+        ],
+    )
+    lines = [text for text, _ in gd.render_plan(plan)]
+    assert lines[1:] == [
+        "Space Needle:",
+        "\tdue_at: 2026-04-18T06:59:00",
+        "\t     -> 2026-10-21T23:59:00-07:00",
+        "\tlock_at: CREATE_NONE_THEN_KEEP -> KEEP",
+        "\tunlock_at: CREATE_NONE_THEN_KEEP -> KEEP",
+    ]
+    # the two date values start in the same column
+    assert lines[2].index("2026") == lines[3].index("2026")

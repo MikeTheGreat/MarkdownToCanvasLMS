@@ -62,7 +62,7 @@ The format check SHALL be part of the tool's library operations, not only of
 the command-line layer, so that every code path that reads a course repo
 performs it. The operations behind `update` (including `--check-all`),
 `mv`, `publish`, `prune`, `clean-manifest`, `find-local-orphans`,
-`find-canvas-orphans` and `list-titles` SHALL check the format version of
+`find-canvas-orphans`, `list-titles` and `generate-due-dates` SHALL check the format version of
 the repo and of every `.manifest-*.toml` in it before reading content files,
 writing any file, or making any change on Canvas. If any of them differs from
 the tool's current format version, the operation SHALL fail with an error
@@ -90,6 +90,10 @@ SHALL NOT perform this check. `upgrade` performs its own version handling
 #### Scenario: Library call without the CLI
 - **WHEN** code calls the library operation behind `update` (or any other listed command) directly on a version-0 repo
 - **THEN** the operation raises the format error before reading content or writing any file
+
+#### Scenario: generate-due-dates on an old repo
+- **WHEN** a user runs `generate-due-dates` on a version-1 repo
+- **THEN** the command exits with an error telling the user to run `upgrade`, and writes nothing
 
 ### Requirement: upgrade keeps tab_configuration at the top level
 
@@ -133,8 +137,8 @@ comments, key order and formatting of `course_settings.toml` except where a
 migration changes them. It SHALL NOT contact Canvas.
 
 #### Scenario: Upgrade an old repo
-- **WHEN** a user runs `upgrade` on a version-0 repo and the tool's format version is 1
-- **THEN** migration 0 -> 1 is applied, each change is printed, `format_version = 1` is written, and every manifest records version 1
+- **WHEN** a user runs `upgrade` on a version-0 repo and the tool's format version is 2
+- **THEN** migrations 0 -> 1 and 1 -> 2 are applied, each change is printed, `format_version = 2` is written, and every manifest records version 2
 - **AND** comments elsewhere in `course_settings.toml` are unchanged
 
 #### Scenario: Already current
@@ -198,6 +202,39 @@ placement check that `upgrade` runs after the migrations.
 #### Scenario: Other commands no longer rename the legacy manifest
 - **WHEN** `update`, `prune` or `clean-manifest` runs on a version-1 repo
 - **THEN** no manifest is renamed
+
+### Requirement: Migration 1 to 2
+
+Migration 1 -> 2 SHALL add an empty `[relative_due_dates.tables.default]`
+table (an empty `items` array) at the end of `course_settings.toml`, and
+record format version 2 in every `.manifest-*.toml`. It SHALL NOT change the
+file when a top-level `relative_due_dates` key already exists, and SHALL
+NOT create a term file. It SHALL preserve the comments, key order and
+formatting of the rest of the file. It SHALL add the section only to a settings
+file whose own format version is below 2, so a current settings file whose
+manifests lag behind is not given the section. A repo with no
+`course_settings.toml` is given one by `upgrade` (migration 0 -> 1) and so
+receives the section as well.
+
+#### Scenario: Version 1 repo gains the section
+- **WHEN** a version-1 repo has no `relative_due_dates` key and the user runs `upgrade`
+- **THEN** `course_settings.toml` ends with `[relative_due_dates.tables.default]` and an empty `items` array, the file's other content is unchanged, `format_version = 2` is written, and every manifest records version 2
+
+#### Scenario: Section already present
+- **WHEN** a version-1 repo already has a `[relative_due_dates]` section
+- **THEN** that section is not modified and only the version stamps change
+
+#### Scenario: Manifest behind a current settings file
+- **WHEN** `course_settings.toml` is at version 2 without a `relative_due_dates` section and a manifest is at version 1
+- **THEN** `upgrade` stamps the manifest and does not add the section
+
+#### Scenario: Upgrade from version 0
+- **WHEN** a user runs `upgrade` on a version-0 repo
+- **THEN** migration 0 -> 1 and then migration 1 -> 2 are applied and each change is printed
+
+#### Scenario: Current repo untouched
+- **WHEN** a user runs `upgrade` on a version-2 repo
+- **THEN** it reports the repo is already current and changes no file
 
 ### Requirement: Version keys do not affect Canvas
 

@@ -79,6 +79,16 @@ def _same_value(old: Any, new: str) -> bool:
     return a.tzinfo is not None and b.tzinfo is not None and a == b
 
 
+def _is_datetime(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        datetime.fromisoformat(value.strip())
+    except ValueError:
+        return False
+    return True
+
+
 def _matches_entry(entry: dict[str, Any], name: str, item_type: str | None) -> bool:
     if entry.get("name") != name:
         return False
@@ -237,21 +247,28 @@ def render_plan(plan: GenerationPlan) -> list[tuple[str, bool]]:
     lines: list[tuple[str, bool]] = [(f"Relative table: {plan.table_name}", False)]
     unchanged = 0
     for change in plan.changes:
-        label = f"{change.name}" + (f" ({change.type})" if change.type else "")
         if change.kind == "unchanged":
             unchanged += 1
-        elif change.kind == "added":
-            values = ", ".join(f"{k}={change.values[k]}" for k in DATE_KEYS)
-            lines.append((f"  added:   {label}: {values}", True))
-        else:
-            parts = ", ".join(
-                f"{k}: {'(absent)' if old is None else old} -> {new}"
-                for k, (old, new) in change.fields.items()
-            )
-            lines.append((f"  changed: {label}: {parts}", True))
+            continue
+        label = change.name + (f" ({change.type})" if change.type else "")
+        if change.kind == "added":
+            lines.append((f"{label} (new entry):", True))
+            for key in sorted(DATE_KEYS):
+                lines.append((f"\t{key}: {change.values[key]}", True))
+            continue
+        lines.append((f"{label}:", True))
+        for key in sorted(change.fields):
+            old, new = change.fields[key]
+            prefix = f"{key}: "
+            if _is_datetime(old) and _is_datetime(new):
+                # Two lines, values in the same columns, so the part that changed stands out.
+                lines.append((f"\t{prefix}{old}", True))
+                lines.append((f"\t{'-> '.rjust(len(prefix))}{new}", True))
+            else:
+                lines.append((f"\t{prefix}{'(absent)' if old is None else old} -> {new}", True))
     if unchanged:
-        lines.append((f"  unchanged: {unchanged} entr{'y' if unchanged == 1 else 'ies'}", False))
-    lines.extend((f"  {n}", False) for n in plan.notices)
+        lines.append((f"{unchanged} unchanged entr{'y' if unchanged == 1 else 'ies'}", False))
+    lines.extend((n, False) for n in plan.notices)
     return lines
 
 
