@@ -8,8 +8,16 @@
 ## Registry of courses, term
 
 - So CLI args can just list the course, and not require the user to actually navigate to the folder
-- put it into a toml/whatever file in ~/.config/markdown-to-canvas/config.whatever
-- Also list out quarter info files
+- put it into a toml file in ~/.config/markdown-to-canvas/config.toml
+  - essentially the file will be a list of CLI key to path, for example:
+  142 : /home/mike/Dropbox/Work/Courses/_IT_CS_143/mpanitz-IT-CS-143/
+    - feel free to adjust details / spacing / etc.
+- Inside ~/.config/markdown-to-canvas/terms are info files for different terms, such as 2026Fall.toml
+  - terms can then be listed by filename, leaving off the .toml part
+- The goal is to be able to run something like this:
+markdown-to-canvas update 142
+or
+markdown-to-canvas generate-due-dates 142 2026Fall # note the .toml ending is ommited
 
 ## Course flags: follow-on features beyond the shipped v1
 
@@ -594,7 +602,6 @@ The following resources were NOT uploaded because Canvas has a newer version.
 Review these files and re-upload manually if needed (use --force-overwrite to skip this check):
   assignments/worksheets/01-a-unit-worksheets.md
   assignments/worksheets/01-b-unit-worksheets.md
-
 
 ---
 
