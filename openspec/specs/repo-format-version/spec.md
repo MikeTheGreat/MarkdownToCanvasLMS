@@ -62,8 +62,9 @@ The format check SHALL be part of the tool's library operations, not only of
 the command-line layer, so that every code path that reads a course repo
 performs it. The operations behind `update` (including `--check-all`),
 `mv`, `publish`, `prune`, `clean-manifest`, `find-local-orphans`,
-`find-canvas-orphans`, `list-titles` and `generate-due-dates` SHALL check the format version of
-the repo and of every `.manifest-*.toml` in it before reading content files,
+`find-canvas-orphans`, `list-titles`, `generate-due-dates` and `cp` SHALL check the format version of
+the repo and of every `.manifest-*.toml` in it (for `cp`, both the source and the
+destination repo) before reading content files,
 writing any file, or making any change on Canvas. If any of them differs from
 the tool's current format version, the operation SHALL fail with an error
 (the command exits with a non-zero status) and change nothing. `import`,
@@ -94,6 +95,10 @@ SHALL NOT perform this check. `upgrade` performs its own version handling
 #### Scenario: generate-due-dates on an old repo
 - **WHEN** a user runs `generate-due-dates` on a version-1 repo
 - **THEN** the command exits with an error telling the user to run `upgrade`, and writes nothing
+
+#### Scenario: cp with an old destination
+- **WHEN** a user runs `cp` from a current source repo into a destination repo at an older format version
+- **THEN** the command exits with an error naming the destination repo and telling the user to run `upgrade`, and writes nothing in either repo
 
 ### Requirement: upgrade keeps tab_configuration at the top level
 

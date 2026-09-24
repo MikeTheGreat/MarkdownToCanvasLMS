@@ -1033,6 +1033,95 @@ check, which is correct — only typed input carries the intent.
 This subcommand is purely local — it never contacts Canvas. Run `update` after
 moving files to push the changes.
 
+## `cp` Subcommand
+
+Copies content from one course repo into another, with what it depends on
+(`src/markdown_to_canvas/cp.py`). The cross-repo counterpart of `mv`, and like
+it purely local: no Canvas calls, no manifest reads or writes, no `git add`.
+
+```text
+markdown-to-canvas cp [--noop/-n] [--verbose/-v] [--overwrite] SRC... COURSE_DIR
+```
+
+The source repo is found by walking up from each SRC (all must share one);
+`COURSE_DIR` goes through `_resolve_course` like every other course argument
+and is required. `check_repo_format` runs on both repos before anything is read;
+a destination failure is re-raised with the destination path prefixed.
+
+**Files keep their repo-relative paths.** That is what makes the copy work
+without link rewriting: a copied file's relative links (`../assets/…`,
+`../snippets/…`) resolve in the destination exactly as they did in the source.
+There is deliberately no destination sub-path argument.
+
+**Two phases.** `build_copy_plan()` returns a `CopyPlan` and writes nothing;
+`run_cp()` prints it and writes only when there is no unresolved conflict (and
+not under `--noop`), so a copy happens in full or not at all. Returning `False`
+(conflicts, no `--overwrite`) makes the CLI exit 1.
+
+**Dependency walk** (`_Planner.walk`), a worklist over repo-relative keys:
+
+- References come from `local_orphans.collect_local_refs` (run under
+  `_quiet()`), the same walker `find-local-orphans` uses, so the two agree on
+  what a file references: body links and images after snippet expansion,
+  `annotatable_attachment`, module items, quiz description and question files,
+  question-bank questions. Conditionals are not applied, so every `#if` branch's
+  references are copied. `sync._get_file_refs` is not used because it skips
+  quizzes.
+- `assets/…` refs are copied. From a module file, every item is followed as a
+  copied item (content and asset items alike). Any other content ref is
+  recorded in `links_not_followed` with whether the destination already has
+  that path, and filtered out at the end if the target got selected anyway.
+- Snippets come from `convert.find_referenced_snippets` on the raw text (which
+  also catches `PASTE_SNIPPET_INTO_FRONTMATTER`), plus each quiz/bank question
+  file.
+- Any key inside `quizzes/<name>/` or `question_banks/<name>/` expands to the
+  whole folder (a quiz or bank syncs as one unit).
+- Files matched by the source `.canvasignore` — directly or through an ignored
+  parent directory — are skipped and listed.
+
+**Classification** (`_Planner.classify`): `new`, `identical` (byte compare;
+skipped), `conflict`, or `snippet-kept`. A snippet that was pulled in as a
+dependency (not named on the command line) and differs in the destination is
+kept as the destination's, even with `--overwrite` — course-specific snippets
+such as `CANVAS_COURSE_ID` must not be replaced. A snippet named as SRC follows
+the normal conflict rule.
+
+**Rubrics** (`_plan_rubrics`), for copied assignments and discussions with a
+string `rubric:` (frontmatter snippets expanded first): a title the destination
+already has is used as-is, with a warning when criteria/ratings
+(`description`, `long_description`, `points`) differ. Otherwise the source's
+raw `[[rubrics]]` block — split at top-level `[[rubrics]]` header lines by
+`split_rubric_blocks()` and titled by parsing each block alone — is appended as
+text, once per title. Raw text rather than `tomlkit`/`toml_write` so the
+commented-out import metadata survives. The resulting text is parsed with
+`tomllib` before anything is written; invalid TOML or a missing title aborts.
+Numeric `rubric:` values only warn. `update` currently attaches rubrics to
+assignments only (see TODO "Add discussion rubric support"), so a copied
+discussion's rubric lands in `rubrics.toml` but is not associated on Canvas yet.
+
+**`module_order.toml`**: a copied module's name (path under `modules/`) is
+appended to `order` with `tomlkit`, keeping comments — only when the file
+already exists in the destination and does not list it.
+
+**Warnings** (`_plan_warnings`, never fatal; copied files stay byte-identical):
+string `assignment_group_id` not among the destination's `[[assignment_groups]]`
+titles; numeric `assignment_group_id` / `group_category_id` / `final_grader_id`;
+flags from `find_referenced_flags` / `find_referenced_flags_in_frontmatter` not
+defined in the destination (`course_settings.toml` `[course_flags]` plus every
+`course_settings/canvas*.toml`); graded items whose title appears in the source's
+`due_dates` (`name`) or any `relative_due_dates` table item; same title and
+content type as a different destination file; `/courses/<id>/` URLs matching a
+`course_id` read with plain `tomllib` from the source's `canvas*.toml` (no token
+needed).
+
+**Fresh mtimes.** Files are written with `shutil.copyfile`, not `copy2`. With
+`copy2` an overwritten destination file could keep a source mtime older than its
+own manifest `last_synced`, and `update` would never upload it.
+
+None of the other core subcommands (`update`, `import`, `mv`, `publish`) changed
+for `cp`: it only writes files `update` already reads, and the rest act on one
+repo as they find it.
+
 ## Orphan detection (`find-local-orphans` / `find-canvas-orphans`)
 
 Two independent implementations of "what does nothing point at?", from opposite

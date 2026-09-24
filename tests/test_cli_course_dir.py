@@ -266,7 +266,7 @@ def test_the_manifest_follows_the_entry_config(home, tmp_path, unrelated):
 
 COURSE_COMMANDS = [
     "update", "publish", "prune", "clean-manifest", "upgrade", "generate-due-dates",
-    "list-titles", "find-canvas-orphans", "find-local-orphans", "emit-workflow",
+    "list-titles", "find-canvas-orphans", "find-local-orphans", "emit-workflow", "cp",
 ]
 
 

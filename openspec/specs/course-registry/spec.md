@@ -42,8 +42,9 @@ looked up.
 
 Every subcommand that acts on an existing course directory (`update`, `publish`,
 `prune`, `clean-manifest`, `upgrade`, `generate-due-dates`, `list-titles`,
-`find-canvas-orphans`, `find-local-orphans` and `emit-workflow`) SHALL take its
-argument under the name `COURSE_DIR`. When the argument is given, the tool SHALL
+`find-canvas-orphans`, `find-local-orphans`, `emit-workflow` and `cp`) SHALL take its
+argument under the name `COURSE_DIR`. For `cp`, `COURSE_DIR` names the
+destination course and follows its `SRC` arguments. When the argument is given, the tool SHALL
 first treat it as a path, and use it as typed, without walking up, if a
 directory exists there. If no directory exists at that path, the tool SHALL look
 the argument up as a registry key. If it is not a key either, the command SHALL
@@ -52,15 +53,16 @@ registered course and lists the registered keys. A registered path that is not
 an existing directory SHALL fail with an error naming the key and the path.
 
 When the argument is omitted, every one of these subcommands except `prune`
-SHALL walk up from the current directory to the nearest directory containing
+and `cp` SHALL walk up from the current directory to the nearest directory containing
 `course_settings/course_settings.toml`, and fail with an error asking for the
-argument when there is none. `prune` SHALL keep `COURSE_DIR` as a required
+argument when there is none. `prune` and `cp` SHALL keep `COURSE_DIR` as a required
 argument. `find-canvas-orphans`, `find-local-orphans`, `list-titles` and
 `emit-workflow` SHALL walk up like the others instead of defaulting to the
 current directory.
 
 `mv` and `import` are not covered: `mv` derives its course directory from the
-paths it is given, and `import` names a directory to create.
+paths it is given, and `import` names a directory to create. `cp` derives its
+source course directory from its `SRC` paths in the same way as `mv`.
 
 #### Scenario: Path wins over a key
 - **WHEN** the registry has key `142` and the current directory contains a directory named `142`
@@ -85,6 +87,14 @@ paths it is given, and `import` names a directory to create.
 #### Scenario: prune requires an argument
 - **WHEN** the user runs `prune --delete` from inside a course with no `COURSE_DIR`
 - **THEN** the command exits with a usage error and contacts nothing
+
+#### Scenario: cp requires a destination
+- **WHEN** the user runs `cp pages/intro.md` with no destination
+- **THEN** the command exits with a usage error and writes nothing
+
+#### Scenario: cp destination by key
+- **WHEN** the registry has key `143` and no directory `143` exists in the current directory
+- **THEN** `cp pages/intro.md 143` copies into the registered directory and prints `Course dir:` with that directory and key
 
 #### Scenario: Help text
 - **WHEN** the user runs `--help` for any of the listed subcommands

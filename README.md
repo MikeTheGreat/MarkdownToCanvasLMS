@@ -78,6 +78,7 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
   - [Removing content (`prune`)](#removing-content-prune)
   - [Checking the manifest against the course (`clean-manifest`)](#checking-the-manifest-against-the-course-clean-manifest)
   - [Moving and renaming files (`mv`)](#moving-and-renaming-files-mv)
+  - [Copying content between courses (`cp`)](#copying-content-between-courses-cp)
   - [Finding unreferenced content](#finding-unreferenced-content)
     - [`find-local-orphans` — the repo](#find-local-orphans--the-repo)
       - [`-v` / `--verbose` — showing what refers to what](#-v----verbose--showing-what-refers-to-what)
@@ -886,7 +887,8 @@ markdown-to-canvas mv --noop pages/old.md pages/new.md
 
 **Restrictions:**
 
-* Both source and destination must be within the same course repo
+* Both source and destination must be within the same course repo (to copy
+  content into a different course, use [`cp`](#copying-content-between-courses-cp))
 * Cannot move across content-type directories (e.g. `pages/` to `assignments/`)
 * The destination's parent directory must already exist — this prevents accidental
   renames of intermediate path components due to typos. To rename multiple levels,
@@ -895,6 +897,116 @@ markdown-to-canvas mv --noop pages/old.md pages/new.md
 
 This command is purely local — it never contacts Canvas. Run `update` afterward
 to push the changes.
+
+---
+
+## Copying content between courses (`cp`)
+
+Use `cp` to copy pages, assignments, discussions, announcements, quizzes,
+question banks or whole modules from one course repo into another. It copies
+what the content needs along with it: images and other assets, snippets, and
+rubrics.
+
+```text
+Usage: markdown-to-canvas cp [OPTIONS] SRC... COURSE_DIR
+
+Options:
+  -n, --noop     Show what would be copied without writing anything.
+  -v, --verbose  List every file, including ones already identical in the
+                 destination.
+  --overwrite    Replace destination files that differ from the source
+                 (snippets the destination already has are still kept).
+```
+
+SRC is one or more files or folders inside a course repo; the source course is
+the repo they are in. COURSE_DIR is the destination course, as a path or a
+registered course key (see [Naming a course](#naming-a-course-course_dir-the-registry-and-terms)).
+Every file is copied to the **same path** in the destination
+(`assignments/hw1.md` lands at `assignments/hw1.md`), so the relative links
+inside it keep working.
+
+```bash
+# From inside the IT 142 repo, copy an assignment into the course registered as 143
+gg cp assignments/hw1.md 143
+
+# Copy a whole module: the module file plus every item it lists
+gg cp modules/week-1.md ~/courses/it143
+
+# See what would happen first
+gg cp --noop modules/week-1.md 143
+```
+
+**What gets copied with each item:**
+
+* Every file under `assets/` it links to or shows as an image, including images
+  that come from a snippet it includes, and its `annotatable_attachment`.
+* Every snippet it includes (block, inline `$...$`, and
+  `PASTE_SNIPPET_INTO_FRONTMATTER`).
+* For a quiz: the whole quiz folder, plus the assets and snippets its
+  description and questions use. Naming any file inside the folder copies the
+  whole quiz. Question banks work the same way.
+* For a module: every item the module lists (pages, assignments, discussions,
+  quizzes, and linked files), each with its own assets and snippets. If the
+  destination has `course_settings/module_order.toml`, the module is added to
+  the end of its `order` list.
+* For a folder: every file in it.
+* Content inside every `#if` branch counts, whatever the flags are set to.
+
+**What is not copied:**
+
+* Links to other pages, assignments, discussions or quizzes (outside a module's
+  item list) are not followed. The link is left exactly as it is, and `cp` lists
+  each one, saying whether the destination already has a file at that path. If
+  it doesn't, `update` on the destination reports the broken link as an error
+  and skips uploading that item until you fix it (copy the target too, or
+  change the link).
+* Nothing in `course_settings/` is copied except rubric blocks and the
+  `module_order.toml` entry described here. `cp course_settings/...` is an error.
+* Files matched by the source's `.canvasignore` are skipped and listed.
+* Manifests are not read or changed, and nothing is `git add`ed.
+
+**Files that already exist in the destination.** `cp` works out the whole copy
+before writing anything. A file that is byte-identical in the destination is
+skipped. If any file exists with *different* content, `cp` lists every such file
+and copies **nothing**; re-run with `--overwrite` to replace them. The exception
+is snippets: when a snippet that was pulled in as a dependency already exists in
+the destination, the destination's version is kept, even with `--overwrite`, and
+`cp` says so. This keeps course-specific snippets such as
+`snippets/inline/CANVAS_COURSE_ID.md` correct. A snippet you name on the command
+line is treated like any other file.
+
+**Rubrics.** For each copied assignment or discussion whose frontmatter names a
+rubric by title, `cp` checks the destination's `course_settings/rubrics.toml`:
+
+* If a rubric with that title is already there, it is used and not changed. If
+  its criteria or ratings differ from the source's, `cp` warns you.
+* If not, the source's `[[rubrics]]` block (with its comments) is appended to
+  the destination's `rubrics.toml`, which is created if needed. The rest of the
+  file is left untouched.
+* A numeric rubric ID only produces a warning, since the ID belongs to the
+  source course.
+
+`update` does not attach rubrics to discussions yet (only to assignments), so a
+copied discussion's rubric is added to `rubrics.toml` but not associated on
+Canvas.
+
+**Warnings.** Copied files are never edited. `cp` warns about values that won't
+work in the destination:
+
+* an `assignment_group_id` name that the destination's `course_settings.toml`
+  does not define, and numeric `assignment_group_id`, `group_category_id` or
+  `final_grader_id` values;
+* course flags (in `#if` directives or `published_if`) that the destination does
+  not define;
+* items whose dates are set in the source's `due_dates` or `relative_due_dates`
+  (those dates stay in the source's `course_settings.toml`);
+* an item with the same title and type as a different file already in the
+  destination;
+* absolute Canvas URLs that point at the source course (`/courses/<id>/...`),
+  which are common in imported courses.
+
+`cp` never contacts Canvas. Run `update` on the destination course afterwards
+to upload what was copied.
 
 ---
 

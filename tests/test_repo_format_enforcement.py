@@ -22,6 +22,7 @@ from markdown_to_canvas.clean_manifest import (
 from markdown_to_canvas.cli import main
 from markdown_to_canvas.config import Config
 from markdown_to_canvas.course_guard import check_course
+from markdown_to_canvas.cp import run_cp
 from markdown_to_canvas.generate_due_dates import plan_generation
 from markdown_to_canvas.local_orphans import find_local_orphans
 from markdown_to_canvas.mv import run_mv
@@ -62,6 +63,13 @@ def _build(tmp_path: Path, state: str) -> Path:
     return root
 
 
+def _current_dest(root: Path) -> Path:
+    """A separate, current-format course repo for `cp` to copy into."""
+    dest = root.parent / "cp-dest"
+    make_current(dest)
+    return dest
+
+
 def _snapshot(root: Path) -> dict[str, bytes]:
     return {
         str(p.relative_to(root)): p.read_bytes()
@@ -79,6 +87,7 @@ ENTRY_POINTS = {
         r / ".manifest-canvas.toml", _cfg(), "Course", assume_yes=True
     ),
     "run_mv": lambda r: run_mv(r / "pages" / "a.md", r / "pages" / "b.md"),
+    "run_cp": lambda r: run_cp([r / "pages" / "a.md"], _current_dest(r)),
     "run_publish": lambda r: run_publish(r, r / "site"),
     "find_local_orphans": lambda r: find_local_orphans(r),
     "run_plan": lambda r: run_plan(_cfg(), r, MagicMock()),
@@ -207,6 +216,7 @@ CLI_COMMANDS = {
     "update": lambda r: ["update", str(r)],
     "update-check-all": lambda r: ["update", str(r), "--check-all"],
     "mv": lambda r: ["mv", str(r / "pages" / "a.md"), str(r / "pages" / "b.md")],
+    "cp": lambda r: ["cp", str(r / "pages" / "a.md"), str(_current_dest(r))],
     "publish": lambda r: ["publish", str(r)],
     "prune": lambda r: ["prune", str(r), "--manifest-only"],
     "clean-manifest": lambda r: ["clean-manifest", str(r), "--no-canvas-check"],

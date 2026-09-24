@@ -16,7 +16,9 @@ path relative to a registered course instead, for example `update 142 -t
 pages/week1.md`, or a `KEY:path` form such as `mv 142:pages/a.md 142:pages/b.md`
 (also usable for `-t`/`-s`). Open points: how a `KEY:` prefix interacts with a
 path that really contains a colon, and whether `mv` should refuse two different
-keys in one command.
+keys in one command. The same `KEY:path` form would let `cp` name its SRC paths
+from outside the source course (`cp 142:assignments/hw1.md 143`); today `cp`
+finds its source course from the SRC paths, like `mv`.
 
 ## Course flags: follow-on features beyond the shipped v1
 
@@ -75,6 +77,18 @@ Canvas appears to derive `read_only` itself from the rubric's association count
 freshly-created one `false`), which would make the flag not settable via the API
 at all. Worth confirming before spending more effort on it, since these two
 fields are accepted by `rubrics.toml` and silently do nothing.
+
+## Add discussion rubric support
+
+`rubric:` / `use_for_grading:` frontmatter only works on assignments:
+`sync._apply_rubric` is called from `_upload_assignment` but not from
+`_upload_discussion`, so a `rubric:` key on a discussion is ignored. A graded
+discussion has an underlying Canvas assignment (`assignment_id` on the
+discussion topic), so the rubric association would go on that assignment.
+Things to handle: ungraded discussions (no assignment — warn), removal when the
+key is dropped (`rubric_settings` on the discussion's assignment), and
+`_repair_rubric_associations` re-associating discussions as well as
+assignments. See `todo/RUBRIC_ISSUES.md` before starting.
 
 ## Implement the dropped course settings as real settings
 

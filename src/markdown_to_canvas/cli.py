@@ -43,6 +43,7 @@ from .clean_manifest import (
 from .config import Config, find_repo_root
 from .config import load as load_config
 from .course_guard import CourseGuardError, check_course
+from .cp import CpError, run_cp
 from .generate_due_dates import apply_plan, plan_generation, render_plan
 from .imscc_import import run_import
 from .local_orphans import find_local_orphans
@@ -292,6 +293,55 @@ def mv_cmd(src: Path, dest: str, noop: bool, verbose: bool) -> None:
         die(f"git mv failed: {e}")
     except Exception as e:
         die(str(e))
+
+
+@main.command(name="cp", no_args_is_help=True)
+@click.argument("srcs", nargs=-1, required=True, type=click.Path(path_type=Path), metavar="SRC...")
+@_course_dir_argument(required=True)
+@click.option(
+    "--noop",
+    "-n",
+    is_flag=True,
+    default=False,
+    help="Show what would be copied without writing anything.",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    default=False,
+    help="List every file, including ones already identical in the destination.",
+)
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    default=False,
+    help="Replace destination files that differ from the source (snippets the "
+    "destination already has are still kept).",
+)
+def cp_cmd(srcs: tuple[Path, ...], course_dir: str, noop: bool, verbose: bool, overwrite: bool) -> None:
+    """Copy content, with its assets, snippets and rubrics, into another course.
+
+    SRC is one or more files or folders in a course repo (pages, assignments,
+    discussions, announcements, quizzes, question banks, modules, assets or
+    snippets). COURSE_DIR is the destination course: a path or a registered
+    course key. Files keep their repo-relative paths. A module brings the items
+    it lists; other links to pages/assignments/etc. are left as they are and
+    listed. If any destination file differs, nothing is copied unless
+    --overwrite is given.
+
+    Purely local: run `update` on the destination afterwards.
+    """
+    dest, _ = _resolve_course(course_dir)
+    _ensure_pandoc()
+    try:
+        ok = run_cp(list(srcs), dest, noop=noop, verbose=verbose, overwrite=overwrite)
+    except (CpError, RepoFormatError) as e:
+        die(str(e))
+    except Exception as e:
+        die(str(e))
+    if not ok:
+        sys.exit(1)
 
 
 @main.command(name="import", no_args_is_help=True)
