@@ -1,4 +1,5 @@
 import os
+import shlex
 import subprocess
 import sys
 import tomllib
@@ -35,10 +36,10 @@ from . import manifest as manifest_lib
 from . import repo_format
 from .clean_manifest import (
     apply_clean,
+    list_course,
     load_manifest,
-    plan_invalidate_all,
+    plan_clean,
     print_plan,
-    run_plan,
 )
 from .config import Config, find_repo_root
 from .config import load as load_config
@@ -50,6 +51,7 @@ from .local_orphans import find_local_orphans
 from .local_orphans import print_report as print_local_orphan_report
 from .mv import run_mv
 from .orphans import find_orphans, print_report
+from . import pair_manifest
 from .publish import run_publish
 from .relative_dates import RelativeDueDatesError
 from .repo_format import RepoFormatError, run_upgrade
@@ -593,7 +595,7 @@ def find_local_orphans_cmd(course_dir: str | None, verbose: bool) -> None:
     print_local_orphan_report(find_local_orphans(repo), verbose=verbose)
 
 
-@main.command(name="clean-manifest")
+@main.command(name="fix-manifest")
 @_course_dir_argument()
 @click.option(
     "--config",
@@ -602,20 +604,36 @@ def find_local_orphans_cmd(course_dir: str | None, verbose: bool) -> None:
     help="Path to canvas.toml (default: <COURSE_DIR>/course_settings/canvas.toml)",
 )
 @click.option(
+    "--clean",
+    is_flag=True,
+    default=False,
+    help="Remove entries whose Canvas item is not in the configured course.",
+)
+@click.option(
+    "--pair-canvas-with-local",
+    "pair_titles",
+    is_flag=True,
+    default=False,
+    help=(
+        "Add entries for local files that have none, pairing each with the "
+        "Canvas item of the same type and title."
+    ),
+)
+@click.option(
+    "--force-pair",
+    "force_pairs",
+    multiple=True,
+    metavar="LOCAL_PATH=CANVAS_ID",
+    help=(
+        "Pair this local file with this Canvas item (a page takes its page ID). "
+        "Repeatable. Replaces an existing entry for the file."
+    ),
+)
+@click.option(
     "--apply",
     is_flag=True,
     default=False,
     help="Make the changes. Without it, only report what would change.",
-)
-@click.option(
-    "--no-canvas-check",
-    "no_canvas_check",
-    is_flag=True,
-    default=False,
-    help=(
-        "Do not check Canvas; treat every entry as invalid. For a deliberate course "
-        "switch, where no ID can match anyway."
-    ),
 )
 @click.option(
     "--yes",
@@ -623,38 +641,53 @@ def find_local_orphans_cmd(course_dir: str | None, verbose: bool) -> None:
     "assume_yes",
     is_flag=True,
     default=False,
-    help="With --apply, skip the confirmation when the manifest records a different course.",
+    help="With --clean --apply, skip the confirmation when the manifest records a different course.",
 )
 @_handle_cli_errors
-def clean_manifest_cmd(
+def fix_manifest_cmd(
     course_dir: str | None,
     config: Path | None,
+    clean: bool,
+    pair_titles: bool,
+    force_pairs: tuple[str, ...],
     apply: bool,
-    no_canvas_check: bool,
     assume_yes: bool,
 ) -> None:
-    """Remove manifest entries whose Canvas object is not in the configured course.
+    """Check the manifest against the course and connect local files to Canvas items.
 
-    Checks every manifest entry's Canvas ID against the live course (by type),
-    and reports entries that point at something missing: deleted in Canvas,
-    belonging to a different course (canvas.toml's course_id was changed), or
-    recorded as the wrong type. Files that link to a removed entry are marked
-    for re-sync so the next update re-renders their links. Canvas is only read,
-    never changed.
+    --clean checks every manifest entry's Canvas ID against the live course (by
+    type) and removes entries that point at something missing: deleted in
+    Canvas, belonging to a different course (canvas.toml's course_id was
+    changed), or recorded as the wrong type. Files that link to a removed entry
+    are marked for re-sync so the next update re-renders their links.
 
-    Without --apply this is a report. --apply edits the manifest and records the
-    configured course as the manifest's course (see update's course check).
+    --pair-canvas-with-local adds an entry for each local file that has none,
+    pairing it with the Canvas item of the same type whose title matches
+    (ignoring case, whitespace, curly quotes and dashes). Use it after import or
+    cp, when the course already holds the content, so update does not create
+    duplicates. Files are matched by their path below assets/. Similar but
+    unequal titles are listed as --force-pair arguments to copy.
 
-    --no-canvas-check skips the Canvas lookups and treats every entry as invalid,
-    which is what a deliberate move to a different course means: Canvas object IDs
-    are unique per object, so none of the recorded IDs can exist in the new course.
+    --force-pair LOCAL_PATH=CANVAS_ID pairs one file with one Canvas item.
+
+    At least one of the three is required. With several, the clean runs first,
+    then the forced pairs, then the title matching. Canvas is only read, never
+    changed. Without --apply this is a report; --apply edits the manifest and
+    records the configured course as the manifest's course.
 
     COURSE_DIR is the course content directory: a path or a registered course
     key. If omitted, the enclosing course is found by walking up from the
     current directory.
     """
+    if not (clean or pair_titles or force_pairs):
+        die("give at least one of --clean, --pair-canvas-with-local, --force-pair.")
+    try:
+        forced = pair_manifest.parse_force_pairs(force_pairs)
+    except pair_manifest.PairError as e:
+        die(str(e))
+    config_given = config
     repo, config = _resolve_course(course_dir, config)
-    if not no_canvas_check:
+    if clean:
         _ensure_pandoc()
     if config is None:
         config = repo / "course_settings" / "canvas.toml"
@@ -664,25 +697,72 @@ def clean_manifest_cmd(
     course = get_course(cfg)
     click.echo(f"Course:    {course.name}")
 
-    if no_canvas_check:
-        manifest, manifest_path = load_manifest(repo, cfg)
-        plan = plan_invalidate_all(manifest)
-    else:
-        try:
-            manifest, manifest_path, plan = run_plan(cfg, repo, course)
-        except requests.exceptions.ConnectionError:
-            raise
-        except Exception as e:
-            die(f"could not list the course's contents on Canvas ({e}); nothing was changed.")
+    manifest, manifest_path = load_manifest(repo, cfg)
     stored = manifest_lib.get_course_identity(manifest)
     switching = stored is not None and not manifest_lib.same_course(
         stored, cfg.base_url, cfg.course_id
     )
+    pairing = bool(pair_titles or forced)
+    if switching and pairing and not clean:
+        die(
+            f"{manifest_path.name} records course {stored['course_id']} "
+            f"('{stored.get('course_name', '')}'), so its Canvas IDs belong to that "
+            f"course. Add --clean to remove them before pairing with course "
+            f"{cfg.course_id}."
+        )
 
+    try:
+        listing = list_course(course)
+    except requests.exceptions.ConnectionError:
+        raise
+    except Exception as e:
+        die(f"could not list the course's contents on Canvas ({e}); nothing was changed.")
+
+    clean_plan = None
+    working = manifest
+    if clean:
+        clean_plan = plan_clean(manifest, listing.ids, cfg, repo)
+        # Pairing sees the manifest as it will be after the clean, in a dry run too.
+        working = {k: v for k, v in manifest.items() if k not in clean_plan.removals}
+
+    pair_plan = None
+    if pairing:
+        local_items, scan_errors = pair_manifest.collect_local_items(repo)
+        try:
+            pair_plan = pair_manifest.plan_pairing(
+                working, listing, local_items, forced, match_titles=pair_titles
+            )
+        except pair_manifest.PairError as e:
+            die(f"{e}\nNothing was changed.")
+        pair_plan.scan_errors = scan_errors
+
+    # The suggested command repeats this run's options, then adds the new pairs.
+    command_prefix = ["markdown-to-canvas", "fix-manifest"]
+    if course_dir is not None:
+        command_prefix.append(shlex.quote(course_dir))
+    if config_given is not None:
+        command_prefix += ["--config", shlex.quote(str(config_given))]
+    if clean:
+        command_prefix.append("--clean")
+    if pair_titles:
+        command_prefix.append("--pair-canvas-with-local")
+    command_prefix += [f"--force-pair {shlex.quote(v)}" for v in force_pairs]
+    command_prefix.append("--apply")
+
+    def report(applied: bool) -> None:
+        if clean_plan is not None:
+            print_plan(clean_plan, applied=applied)
+        if pair_plan is not None:
+            pair_manifest.print_plan(pair_plan, applied=applied, command_prefix=command_prefix)
+
+    has_changes = bool(
+        (clean_plan is not None and clean_plan.has_changes)
+        or (pair_plan is not None and pair_plan.has_changes)
+    )
     if not apply:
-        print_plan(plan, applied=False)
+        report(applied=False)
         click.echo()
-        if plan.has_changes or switching or stored is None:
+        if has_changes or switching or stored is None:
             click.echo(f"Nothing changed. Re-run with --apply to update {manifest_path.name}.")
         return
 
@@ -693,7 +773,7 @@ def clean_manifest_cmd(
                 f"('{stored.get('course_name', '')}'); re-run with --yes to switch it "
                 f"to {cfg.course_id} ('{course.name}')."
             )
-        print_plan(plan, applied=False)
+        report(applied=False)
         click.echo()
         if not click.confirm(
             f"Switch {manifest_path.name} from course {stored['course_id']} "
@@ -702,12 +782,18 @@ def clean_manifest_cmd(
         ):
             die("Stopped; nothing was changed.")
 
-    apply_clean(manifest, manifest_path, plan, cfg, course.name)
-    print_plan(plan, applied=True)
+    if clean_plan is not None:
+        apply_clean(manifest, manifest_path, clean_plan, cfg, course.name)
+    if pair_plan is not None:
+        pair_manifest.apply_pairing(manifest, pair_plan)
+        manifest_lib.set_course_identity(
+            manifest, manifest_path, cfg.base_url, cfg.course_id, course.name
+        )
+    report(applied=True)
     click.echo()
     click.secho(
         f"{manifest_path.name} updated; it now records course {cfg.course_id} "
-        f"('{course.name}'). Run update to upload what was removed.",
+        f"('{course.name}'). Run update to upload the local files.",
         fg="green",
     )
 

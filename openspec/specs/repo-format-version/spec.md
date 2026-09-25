@@ -61,7 +61,7 @@ first keys of the `course_settings.toml` it creates.
 The format check SHALL be part of the tool's library operations, not only of
 the command-line layer, so that every code path that reads a course repo
 performs it. The operations behind `update` (including `--check-all`),
-`mv`, `publish`, `prune`, `clean-manifest`, `find-local-orphans`,
+`mv`, `publish`, `prune`, `fix-manifest`, `find-local-orphans`,
 `find-canvas-orphans`, `list-titles`, `generate-due-dates` and `cp` SHALL check the format version of
 the repo and of every `.manifest-*.toml` in it (for `cp`, both the source and the
 destination repo) before reading content files,
@@ -209,7 +209,7 @@ placement check that `upgrade` runs after the migrations.
 - **THEN** after `upgrade` the repo is at version 1 and `tab_configuration` is a top-level key
 
 #### Scenario: Other commands no longer rename the legacy manifest
-- **WHEN** `update`, `prune` or `clean-manifest` runs on a version-1 repo
+- **WHEN** `update`, `prune` or `fix-manifest` runs on a version-1 repo
 - **THEN** no manifest is renamed
 
 ### Requirement: Migration 1 to 2

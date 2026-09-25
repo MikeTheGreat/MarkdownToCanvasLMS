@@ -692,28 +692,120 @@ def _object_key(canvas_type: str, entry: dict[str, Any]):
     return entry["canvas_url"] if canvas_type == "page" else entry["canvas_id"]
 
 
-def list_course_object_ids(course) -> dict[str, set[int]]:
-    """Every Canvas object id in the course, per manifest canvas_type.
+class CanvasObject(NamedTuple):
+    """One pairable Canvas item, as fix-manifest lists it.
 
-    Used by clean-manifest. Exceptions propagate on purpose: a failed listing
+    ``title`` is what a local file is matched against: the title or name for
+    content and modules, the path below "course files/" for files.
+    ``canvas_url`` is the page slug for pages and the download URL for files.
+    """
+
+    canvas_type: str
+    canvas_id: int
+    title: str
+    published: bool
+    has_submissions: bool = False
+    canvas_url: str | None = None
+    size: int | None = None
+
+
+class CourseListing(NamedTuple):
+    # Every object id per manifest canvas_type (what fix-manifest --clean checks).
+    ids: dict[str, set[int]]
+    # Pairable items per canvas_type; the assignment list leaves out the
+    # assignments that belong to graded discussions and quizzes.
+    items: dict[str, list[CanvasObject]]
+
+
+#: submission_types of an assignment that is really a graded discussion or quiz.
+_NON_ASSIGNMENT_SUBMISSION_TYPES = {"discussion_topic", "online_quiz"}
+
+COURSE_FILES_FOLDER = "course files"
+
+
+def _canvas_file_path(folder_name: str, display_name: str) -> str:
+    """A Canvas file's path as upload_asset lays it out: below "course files/"."""
+    if folder_name == COURSE_FILES_FOLDER:
+        return display_name
+    if folder_name.startswith(COURSE_FILES_FOLDER + "/"):
+        return f"{folder_name[len(COURSE_FILES_FOLDER) + 1:]}/{display_name}"
+    return f"{folder_name}/{display_name}" if folder_name else display_name
+
+
+def list_course_objects(course) -> CourseListing:
+    """Every page, assignment, topic, quiz, module and file in the course.
+
+    One paginated listing per type (plus the folder list, for file paths).
+    Used by fix-manifest. Exceptions propagate on purpose: a failed listing
     must never be mistaken for "the course has none of these".
     """
-    topics = {t.id for t in course.get_discussion_topics()}
-    announcements = {
-        t.id for t in course.get_discussion_topics(only_announcements=True)
-    }
-    modules = {m.id for m in course.get_modules()}
-    return {
-        "page": {p.page_id for p in course.get_pages()},
-        "assignment": {a.id for a in course.get_assignments()},
+    def obj(canvas_type, canvas_id, title, raw, **extra) -> CanvasObject:
+        return CanvasObject(
+            canvas_type,
+            int(canvas_id),
+            title or "",
+            bool(getattr(raw, "published", False)),
+            **extra,
+        )
+
+    pages = [
+        obj("page", p.page_id, p.title, p, canvas_url=p.url) for p in course.get_pages()
+    ]
+    all_assignments = list(course.get_assignments())
+    assignments = [
+        obj(
+            "assignment", a.id, a.name, a,
+            has_submissions=bool(getattr(a, "has_submitted_submissions", False)),
+        )
+        for a in all_assignments
+        if not _NON_ASSIGNMENT_SUBMISSION_TYPES
+        & set(getattr(a, "submission_types", None) or [])
+    ]
+    discussions = [
+        obj("discussion", t.id, t.title, t) for t in course.get_discussion_topics()
+    ]
+    announcements = [
+        obj("announcement", t.id, t.title, t)
+        for t in course.get_discussion_topics(only_announcements=True)
+    ]
+    quizzes = [obj("quiz", q.id, q.title, q) for q in course.get_quizzes()]
+    modules = [obj("module", m.id, m.name, m) for m in course.get_modules()]
+    folders = {f.id: f.full_name for f in course.get_folders()}
+    files = [
+        CanvasObject(
+            "file",
+            int(f.id),
+            _canvas_file_path(folders.get(getattr(f, "folder_id", None), ""), f.display_name),
+            not getattr(f, "locked", False),
+            canvas_url=getattr(f, "url", None),
+            size=getattr(f, "size", None),
+        )
+        for f in course.get_files()
+    ]
+
+    topic_ids = {t.canvas_id for t in discussions} | {t.canvas_id for t in announcements}
+    module_ids = {m.canvas_id for m in modules}
+    ids = {
+        "page": {p.canvas_id for p in pages},
+        "assignment": {a.id for a in all_assignments},
         # A topic's announcement flag can change on Canvas, so accept either list.
-        "discussion": topics | announcements,
-        "announcement": topics | announcements,
-        "quiz": {q.id for q in course.get_quizzes()},
-        "module": modules,
-        "external_module": modules,
-        "file": {f.id for f in course.get_files()},
+        "discussion": topic_ids,
+        "announcement": topic_ids,
+        "quiz": {q.canvas_id for q in quizzes},
+        "module": module_ids,
+        "external_module": module_ids,
+        "file": {f.canvas_id for f in files},
     }
+    items = {
+        "page": pages,
+        "assignment": assignments,
+        "discussion": discussions,
+        "announcement": announcements,
+        "quiz": quizzes,
+        "module": modules,
+        "file": files,
+    }
+    return CourseListing(ids, items)
 
 
 def get_syllabus_body(course) -> str:

@@ -369,21 +369,6 @@ Note `find-local-orphans` does cover the repo-side equivalent (unreferenced
 files under `assets/`), so this gap only affects files that reached Canvas some
 other way.
 
-## `--rebuild-manifest`: re-sync manifest from Canvas
-
-If the manifest file is lost, corrupted, or drifts out of sync with Canvas, a `--rebuild-manifest` flag would walk the live Canvas course and reconstruct the manifest from what actually exists there.
-
-How it would work:
-
-- Query Canvas for all pages, assignments, discussions, files, and modules in the course
-- For each item, match it back to a local file by title or URL slug
-- Write the Canvas IDs into a fresh manifest
-- Report any Canvas items that could not be matched to a local file (orphans), and any local files that have no corresponding Canvas item
-
-This is a recovery/diagnostic tool, not part of the normal sync flow.
-
-`clean-manifest` already covers the common repair case (entries whose Canvas ID is not in the configured course are removed, and the next `update` re-creates them). A rebuild would still be needed to recover a lost manifest without creating duplicates in Canvas.
-
 ## `download` subcommand: download Canvas course to local Markdown structure
 
 A `download` subcommand would do the reverse of the main sync: pull content from an existing Canvas course and write it out as a local Markdown repo, suitable for then being managed by this tool.

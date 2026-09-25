@@ -1,4 +1,4 @@
-"""Unit + CLI tests: clean-manifest."""
+"""Unit + CLI tests: fix-manifest --clean."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from click.testing import CliRunner
 
 from markdown_to_canvas import manifest as manifest_lib
+from markdown_to_canvas.canvas_api import CourseListing
 from markdown_to_canvas.clean_manifest import apply_clean, check_entries, plan_clean
 from markdown_to_canvas.config import Config
 
@@ -24,6 +25,10 @@ def _ids(**kwargs: set[int]) -> dict[str, set[int]]:
     }
     ids.update(kwargs)
     return ids
+
+
+def _listing(**kwargs: set[int]) -> CourseListing:
+    return CourseListing(_ids(**kwargs), {})
 
 
 def test_removes_ids_missing_from_course_and_keeps_present_ones() -> None:
@@ -145,16 +150,16 @@ def test_cli_report_changes_nothing_and_apply_cleans(tmp_path, mocker, monkeypat
 
     mocker.patch("markdown_to_canvas.cli.get_course", return_value=SimpleNamespace(name="Fall"))
     mocker.patch(
-        "markdown_to_canvas.canvas_api.list_course_object_ids",
-        return_value=_ids(page={1, 2}, module={7}),
+        "markdown_to_canvas.canvas_api.list_course_objects",
+        return_value=_listing(page={1, 2}, module={7}),
     )
 
-    result = CliRunner().invoke(main, ["clean-manifest", str(root)])
+    result = CliRunner().invoke(main, ["fix-manifest", str(root), "--clean"])
     assert result.exit_code == 0, result.output
     assert "Would remove 1 entries" in result.output
     assert path.read_bytes() == before
 
-    result = CliRunner().invoke(main, ["clean-manifest", str(root), "--apply"])
+    result = CliRunner().invoke(main, ["fix-manifest", str(root), "--clean", "--apply"])
     assert result.exit_code == 0, result.output
     assert "assets/sheet.pdf" not in manifest_lib.load(path)
 
@@ -171,15 +176,15 @@ def test_cli_apply_switching_course_needs_yes_without_terminal(tmp_path, mocker,
     before = path.read_bytes()
     mocker.patch("markdown_to_canvas.cli.get_course", return_value=SimpleNamespace(name="Fall"))
     mocker.patch(
-        "markdown_to_canvas.canvas_api.list_course_object_ids",
-        return_value=_ids(page={1, 2}, module={7}),
+        "markdown_to_canvas.canvas_api.list_course_objects",
+        return_value=_listing(page={1, 2}, module={7}),
     )
 
-    result = CliRunner().invoke(main, ["clean-manifest", str(root), "--apply"])
+    result = CliRunner().invoke(main, ["fix-manifest", str(root), "--clean", "--apply"])
     assert result.exit_code == 1
     assert path.read_bytes() == before
 
-    result = CliRunner().invoke(main, ["clean-manifest", str(root), "--apply", "--yes"])
+    result = CliRunner().invoke(main, ["fix-manifest", str(root), "--clean", "--apply", "--yes"])
     assert result.exit_code == 0, result.output
     loaded = manifest_lib.load(path)
     assert manifest_lib.get_course_identity(loaded)["course_id"] == 200
@@ -201,27 +206,29 @@ def test_list_failure_aborts_without_changes(tmp_path, mocker, monkeypatch) -> N
     course.get_files.side_effect = RuntimeError("500 from Canvas")
     mocker.patch("markdown_to_canvas.cli.get_course", return_value=course)
 
-    result = CliRunner().invoke(main, ["clean-manifest", str(root), "--apply"])
+    result = CliRunner().invoke(main, ["fix-manifest", str(root), "--clean", "--apply"])
     assert result.exit_code == 1
     assert "could not list the course's contents" in result.output
     assert path.read_bytes() == before
 
 
-def test_invalidate_all_skips_canvas(tmp_path, mocker, monkeypatch) -> None:
-    """--no-canvas-check removes every entry without listing the course."""
+def test_cli_requires_a_mode(tmp_path, mocker, monkeypatch) -> None:
     from markdown_to_canvas.cli import main
 
     monkeypatch.setenv("CANVAS_API_TOKEN", "tok")
     root = _repo(tmp_path)
-    (root / "course_settings" / "canvas.toml").write_text(f'base_url = "{BASE}"\ncourse_id = 200\n')
-    path = root / ".manifest-canvas.toml"
-    manifest_lib.flush(path, _repo_manifest())
+    get_course = mocker.patch("markdown_to_canvas.cli.get_course")
 
-    mocker.patch("markdown_to_canvas.cli.get_course", return_value=SimpleNamespace(name="Fall"))
-    listing = mocker.patch("markdown_to_canvas.canvas_api.list_course_object_ids")
+    result = CliRunner().invoke(main, ["fix-manifest", str(root), "--apply"])
 
-    result = CliRunner().invoke(main, ["clean-manifest", str(root), "--no-canvas-check", "--apply"])
+    assert result.exit_code == 1
+    assert "--clean, --pair-canvas-with-local, --force-pair" in result.output
+    get_course.assert_not_called()
 
-    assert result.exit_code == 0, result.output
-    listing.assert_not_called()
-    assert set(manifest_lib.load(path)) == {manifest_lib.COURSE_KEY, manifest_lib.FORMAT_KEY}
+
+def test_old_name_and_no_canvas_check_are_gone() -> None:
+    from markdown_to_canvas.cli import main
+
+    assert "clean-manifest" not in main.commands
+    result = CliRunner().invoke(main, ["fix-manifest", "--clean", "--no-canvas-check"])
+    assert result.exit_code == 2

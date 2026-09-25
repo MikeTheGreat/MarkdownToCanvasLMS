@@ -6,7 +6,6 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 from click.testing import CliRunner
@@ -17,7 +16,6 @@ from markdown_to_canvas.clean_manifest import (
     check_entries,
     load_manifest,
     plan_invalidate_all,
-    run_plan,
 )
 from markdown_to_canvas.cli import main
 from markdown_to_canvas.config import Config
@@ -90,7 +88,6 @@ ENTRY_POINTS = {
     "run_cp": lambda r: run_cp([r / "pages" / "a.md"], _current_dest(r)),
     "run_publish": lambda r: run_publish(r, r / "site"),
     "find_local_orphans": lambda r: find_local_orphans(r),
-    "run_plan": lambda r: run_plan(_cfg(), r, MagicMock()),
     "load_manifest": lambda r: load_manifest(r, _cfg()),
     "collect_title_items": lambda r: collect_title_items(r),
     # the check comes before the term file is read, so a missing one is fine
@@ -219,8 +216,8 @@ CLI_COMMANDS = {
     "cp": lambda r: ["cp", str(r / "pages" / "a.md"), str(_current_dest(r))],
     "publish": lambda r: ["publish", str(r)],
     "prune": lambda r: ["prune", str(r), "--manifest-only"],
-    "clean-manifest": lambda r: ["clean-manifest", str(r), "--no-canvas-check"],
-    "clean-manifest-canvas": lambda r: ["clean-manifest", str(r)],
+    "fix-manifest-clean": lambda r: ["fix-manifest", str(r), "--clean"],
+    "fix-manifest-pair": lambda r: ["fix-manifest", str(r), "--pair-canvas-with-local"],
     "find-local-orphans": lambda r: ["find-local-orphans", str(r)],
     "find-canvas-orphans": lambda r: ["find-canvas-orphans", str(r)],
     "list-titles": lambda r: ["list-titles", str(r)],

@@ -76,7 +76,7 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
     - [`-s` — single target (no traversal)](#-s--single-target-no-traversal)
     - [Combining `-t` and `-s`](#combining--t-and--s)
   - [Removing content (`prune`)](#removing-content-prune)
-  - [Checking the manifest against the course (`clean-manifest`)](#checking-the-manifest-against-the-course-clean-manifest)
+  - [Checking and repairing the manifest (`fix-manifest`)](#checking-and-repairing-the-manifest-fix-manifest)
   - [Moving and renaming files (`mv`)](#moving-and-renaming-files-mv)
   - [Copying content between courses (`cp`)](#copying-content-between-courses-cp)
   - [Finding unreferenced content](#finding-unreferenced-content)
@@ -282,7 +282,7 @@ runs independent — Canvas IDs and `last_synced` times are per course, so
 syncing section B does not make section A look up to date, and a `-t`/`-s`
 run against one section never touches the other's IDs. Commit all of them.
 
-`--config` is accepted by `update`, `prune`, `clean-manifest`, and `find-canvas-orphans`. `mv`
+`--config` is accepted by `update`, `prune`, `fix-manifest`, and `find-canvas-orphans`. `mv`
 has no `--config`: a rename is a repo-wide fact, so it rewrites every
 `.manifest-*.toml` it finds in the repo root.
 
@@ -329,7 +329,7 @@ per repo.
 ### Naming a course: `COURSE_DIR`, the registry and terms
 
 Every command that acts on a course takes an optional `COURSE_DIR` argument:
-`update`, `publish`, `prune`, `clean-manifest`, `upgrade`, `generate-due-dates`,
+`update`, `publish`, `prune`, `fix-manifest`, `upgrade`, `generate-due-dates`,
 `list-titles`, `find-canvas-orphans`, `find-local-orphans` and `emit-workflow`.
 (`mv` takes file paths and works out the course from them; `import` names a
 directory to create.) A course directory does not have to be a git repo.
@@ -389,7 +389,7 @@ markdown-to-canvas list-titles 142
   config, exactly as it does with `--config` (`.manifest-canvas-sec-a.toml` for
   `canvas-sec-a.toml`).
 - `config` matters to the commands that read a `canvas.toml`: `update`,
-  `publish`, `prune`, `clean-manifest`, `find-canvas-orphans` and `list-titles`.
+  `publish`, `prune`, `fix-manifest`, `find-canvas-orphans` and `list-titles`.
   The others ignore it.
 - The registry is read only when a key has to be looked up. A path, or a course
   found by walking up, works even if the registry file is missing or broken.
@@ -458,7 +458,7 @@ before anything is uploaded to it.
 - **Same course recorded** — the run continues with no prompt.
 - **No course recorded** — you are asked to confirm before it is recorded. This
   covers a first sync (a new manifest) and a manifest written before this check
-  existed. In the second case, answer no and run `clean-manifest` first if the
+  existed. In the second case, answer no and run `fix-manifest --clean` first if the
   manifest may have been used with another course.
 - **A different course recorded** — the recorded and requested courses are
   printed together and you are asked whether to change. Answering yes clears
@@ -467,8 +467,10 @@ before anything is uploaded to it.
   to the old course — Canvas IDs are unique per object, so none of them can exist
   in the new one. **If the new course already holds a copy of this content (for
   example it was copied from the old course inside Canvas), this leaves
-  duplicates.** Answering no changes nothing, which is what you want if
-  `canvas.toml` is simply wrong.
+  duplicates.** In that case answer no, delete the manifest, and run
+  `fix-manifest --pair-canvas-with-local` to connect the local files to the
+  copies (see "Checking and repairing the manifest"). Answering no changes
+  nothing, which is also what you want if `canvas.toml` is simply wrong.
 
 `-y`/`--yes` answers yes to any of these prompts, which is needed when there is
 no terminal (a script or CI job). Without a terminal and without `--yes`, the run
@@ -763,37 +765,66 @@ anything on Canvas; it only forgets the local bookkeeping.
 
 ---
 
-## Checking the manifest against the course (`clean-manifest`)
+## Checking and repairing the manifest (`fix-manifest`)
+
+`fix-manifest` repairs the manifest's connection between local files and Canvas
+items. It has two jobs, chosen with options:
+
+- `--clean` removes entries whose Canvas item is not in the course.
+- `--pair-canvas-with-local` connects local files that have no entry to Canvas
+  items that already exist, by title. `--force-pair` connects one file to one
+  Canvas item that you name.
+
+```text
+Usage: markdown-to-canvas fix-manifest [OPTIONS] [COURSE_DIR]
+
+Options:
+  --config PATH                   Path to canvas.toml  [default: <COURSE_DIR>/course_settings/canvas.toml]
+  --clean                         Remove entries whose Canvas item is not in
+                                  the configured course.
+  --pair-canvas-with-local        Add entries for local files that have none,
+                                  pairing each with the Canvas item of the same
+                                  type and title.
+  --force-pair LOCAL_PATH=CANVAS_ID
+                                  Pair this local file with this Canvas item (a
+                                  page takes its page ID). Repeatable. Replaces
+                                  an existing entry for the file.
+  --apply                         Make the changes. Without it, only report
+                                  what would change.
+  -y, --yes                       With --clean --apply, skip the confirmation
+                                  when the manifest records a different course.
+  --help                          Show this message and exit.
+```
+
+At least one of `--clean`, `--pair-canvas-with-local` and `--force-pair` is
+required. When several are given, the clean runs first, then the `--force-pair`
+pairs, then the title matching. Without `--apply` nothing is written; the report
+shows what would change. That preview already accounts for the clean, so a file
+whose bad entry the clean would remove shows up as paired in the same report.
+
+Canvas itself is only read, never changed. If listing the course fails, nothing
+is changed. After `--apply`, the manifest records the configured course (see
+"Which course a manifest belongs to").
+
+```bash
+# Report only: nothing is changed
+markdown-to-canvas fix-manifest --clean --pair-canvas-with-local
+
+# Do both
+markdown-to-canvas fix-manifest --clean --pair-canvas-with-local --apply
+
+# Then upload
+markdown-to-canvas update
+```
+
+### Removing bad entries (`--clean`)
 
 The manifest trusts its Canvas IDs indefinitely. An ID stops being valid when
 `canvas.toml` is pointed at a different course after a sync, when the item is
 deleted directly in Canvas, or when an older version of the tool recorded the
 wrong type. `update` does not notice: the entry's `last_synced` says it is up to
 date, so the item is skipped and every page that links to it keeps linking to the
-bad ID. `clean-manifest` finds and removes those entries.
-
-```text
-Usage: markdown-to-canvas clean-manifest [OPTIONS] [COURSE_DIR]
-
-Options:
-  --config PATH  Path to canvas.toml  [default: <COURSE_DIR>/course_settings/canvas.toml]
-  --apply           Make the changes. Without it, only report what would change.
-  --no-canvas-check Do not check Canvas; treat every entry as invalid.
-  -y, --yes         With --apply, skip the confirmation when the manifest records
-                    a different course.
-  --help            Show this message and exit.
-```
-
-```bash
-# Report only: nothing is changed
-markdown-to-canvas clean-manifest
-
-# Remove the bad entries and mark what links to them for re-sync
-markdown-to-canvas clean-manifest --apply
-
-# Then upload what was removed
-markdown-to-canvas update
-```
+bad ID. `--clean` finds and removes those entries.
 
 It lists the course's pages, assignments, discussions, announcements, quizzes,
 modules and files once each, then checks every manifest entry:
@@ -818,18 +849,88 @@ from snippets) is marked for re-sync, and `course_settings.toml`'s `front_page` 
 re-renders those files. They are listed in the report because any edits made to
 them directly in Canvas will be overwritten.
 
-If listing the course fails, nothing is changed. Canvas itself is only read,
-never changed: removed items that still exist in some other course stay there.
+If the manifest records a different course, `--clean --apply` asks you to
+confirm the switch first (or needs `--yes` when there is no terminal).
 
-After `--apply`, the manifest records the configured course (see "Which course a
-manifest belongs to"). If it recorded a different course, you are asked to
-confirm the switch first.
+To empty the manifest completely, delete the `.manifest-*.toml` file. The next
+`update` asks you to confirm the course and then treats the repo as a first sync.
 
-`--no-canvas-check` skips every Canvas lookup and treats all entries as invalid.
-That is what moving a repo to a different course means, so `update` uses the same
-shortcut when you confirm a course change: no recorded ID can exist in the new
-course, so there is nothing to look up. Use it directly when you want the
-manifest emptied without waiting for the listings.
+### Connecting local files to existing Canvas items (`--pair-canvas-with-local`)
+
+A local file with no manifest entry is new as far as `update` is concerned, so
+`update` creates it in Canvas. That makes duplicates when the course already
+holds the item. This happens after:
+
+- `import`, which does not write manifest entries;
+- `cp` from another course, when this course already has a copy of the content
+  (for example because it was itself imported from Canvas);
+- a lost or deleted manifest;
+- moving the repo to a course that was copied from the old one inside Canvas.
+
+`--pair-canvas-with-local` gives each such file the entry of the Canvas item
+that matches it:
+
+- **Content** (pages, assignments, discussions, announcements, quizzes) and
+  **modules** match by title within the same type: a page "Syllabus" never
+  matches an assignment "Syllabus". The local title is the frontmatter `title`,
+  or else the file name (the folder name for a quiz), the same rule `update`
+  uses. The type comes from the folder, as in `update`. Assignments that belong
+  to graded discussions and quizzes are not offered as assignments.
+- **Titles are compared loosely**: case, runs of whitespace, curly quotes versus
+  straight ones, the different dash characters, and HTML entities such as
+  `&amp;` are ignored. Pairs that match only this way are marked in the report.
+- **Files under `assets/`** match by path: `assets/img/a.png` matches the Canvas
+  file `a.png` in the folder `course files/img`.
+- Only files the manifest has no entry for are paired, and only with Canvas
+  items no entry already points to. Files matched by `.canvasignore` are left
+  out.
+
+**Several items with one title.** Local files are taken in path order. A Canvas
+item whose title matches exactly is preferred; after that, published items come
+before unpublished ones, then items with submissions, then the oldest (lowest
+ID). Every such group is listed with the items that were not used.
+
+**What the next `update` does.** A new entry has no `last_synced`, so the next
+`update` uploads the local file over the Canvas item. That renders its links
+with this course's IDs, and it also overwrites any edits made to the item
+directly in Canvas. The report says how many items this applies to. A file under
+`assets/` whose size equals the Canvas copy's size is marked as synced instead,
+so unchanged files are not uploaded again.
+
+**Similar titles.** For a local file left unpaired, the most similar unpaired
+Canvas item of the same type is suggested when the titles are close enough
+(similarity 0.6 or more). Suggestions are never applied automatically. Each one
+is printed as a `--force-pair` argument, followed by a complete command that
+contains all of them:
+
+```text
+Similar titles (1). These are not paired. To pair one, pass its line to fix-manifest:
+  --force-pair pages/lab3.md=2   # page "Lab 3: Loops" ~ "Lab 3 - Loops" (0.88)
+
+Or all of them at once (delete the lines you do not want):
+markdown-to-canvas fix-manifest --pair-canvas-with-local --apply \
+  --force-pair pages/lab3.md=2
+```
+
+The report also lists local files with no Canvas match (the next `update`
+creates them), Canvas items with no local file, and existing entries whose Canvas
+title differs from the local title.
+
+### Pairing one file by hand (`--force-pair`)
+
+`--force-pair LOCAL_PATH=CANVAS_ID` connects one local file to one Canvas item.
+Give it once per pair. The path is relative to the course directory. The ID is
+the number the report prints; for a page that is the page ID, not the URL slug.
+A forced pair replaces an entry the file already has.
+
+It is refused, and nothing is written, when the file is not one `update` would
+sync, when the course has no item of the file's type with that ID, when another
+manifest entry already points to that item, or when two `--force-pair` options
+name the same file or item. Every problem is listed at once.
+
+`--force-pair` works on its own, without title matching. Like
+`--pair-canvas-with-local`, it is refused when the manifest records a different
+course unless `--clean` is also given.
 
 ---
 
@@ -964,6 +1065,12 @@ gg cp --noop modules/week-1.md 143
   `module_order.toml` entry described here. `cp course_settings/...` is an error.
 * Files matched by the source's `.canvasignore` are skipped and listed.
 * Manifests are not read or changed, and nothing is `git add`ed.
+
+**If the destination course already has the content in Canvas**, the copied
+files have no manifest entries, so `update` would create a second copy of each.
+Run `fix-manifest --pair-canvas-with-local` in the destination first to connect
+the copied files to the existing Canvas items (see "Checking and repairing the
+manifest").
 
 **Files that already exist in the destination.** `cp` works out the whole copy
 before writing anything. A file that is byte-identical in the destination is
@@ -2720,7 +2827,7 @@ If the manifest is lost you can re-run the tool against a fresh Canvas course, o
 
 The tool does **not** detect Canvas-side deletions during `update`. If you delete an item in Canvas (e.g. an image in Canvas Files) but the local file is unchanged, the next `update` run will silently skip it — the local mtime is still older than `last_synced`, so `needs_sync` returns false and no upload occurs. The manifest entry remains, pointing at a now-dead Canvas ID. Any pages that embed the deleted file will show broken links.
 
-To fix this, run `clean-manifest --apply` and then `update` (see "Checking the manifest against the course"). That removes the dead entry, marks the pages that link to it for re-sync, and the `update` uploads the file again and re-renders those pages with its new ID.
+To fix this, run `fix-manifest --clean --apply` and then `update` (see "Checking and repairing the manifest"). That removes the dead entry, marks the pages that link to it for re-sync, and the `update` uploads the file again and re-renders those pages with its new ID.
 
 For a single known file you can also touch it and the files that link to it, then run `update`:
 
@@ -2739,7 +2846,7 @@ an integer `format_version` as its first key, and every manifest records the
 version it was written in. A repo with no `format_version` is version 0, which
 is every repo created before this feature existed.
 
-`update`, `mv`, `publish`, `prune`, `clean-manifest`, `find-local-orphans`,
+`update`, `mv`, `publish`, `prune`, `fix-manifest`, `find-local-orphans`,
 `find-canvas-orphans`, `list-titles` and `generate-due-dates` check both the repo and every
 `.manifest-*.toml` in it before they read content, write a file or change
 anything on Canvas. If a version differs from the tool's, the command stops and
@@ -2786,7 +2893,7 @@ and adds no `upgraded_by` entry.
 Migration 0 to 1 renames a legacy `.canvas-manifest.toml` to
 `.manifest-canvas.toml` (when that name is free; if both exist, it warns that
 the legacy file is unused and leaves it), and records version 1 in every
-manifest. `update`, `prune` and `clean-manifest` no longer rename the legacy
+manifest. `update`, `prune` and `fix-manifest` no longer rename the legacy
 manifest themselves.
 
 Migration 1 to 2 adds an empty `[relative_due_dates.tables.default]` table at
@@ -2832,6 +2939,8 @@ markdown-to-canvas import course-export.imscc ./my-course-repo
 ```
 
 This converts pages, assignments, discussions, announcements, quizzes, question banks, modules, and course settings to local files ready for use with this tool. A `canvas.toml` skeleton is written with the Canvas domain and course ID pre-filled from the export metadata.
+
+`import` does not write a manifest. If you will sync the imported repo back to the course it was exported from (or to a copy of it), run `fix-manifest --pair-canvas-with-local` before the first `update`. Otherwise `update` creates a duplicate of every item (see "Checking and repairing the manifest").
 
 `import` also writes an empty `[relative_due_dates.tables.default]` section at the end of `course_settings.toml` (with the shared settings commented out, and every allowed value listed) and, unless the file is already there, a fully commented-out `course_settings/term_dates.toml` that shows the [term file](#the-term-file) format. See [Generating due dates from offsets](#generating-due-dates-from-offsets-generate-due-dates).
 

@@ -109,7 +109,7 @@ def check_course(
             "belong to (it was written by an older version of markdown-to-canvas).\n"
             "Check the course named above. If this manifest may have been used with "
             "a different course (for example, course_id in canvas.toml was changed "
-            "after an update), answer no and run `markdown-to-canvas clean-manifest` "
+            "after an update), answer no and run `markdown-to-canvas fix-manifest --clean` "
             "first."
         )
     else:

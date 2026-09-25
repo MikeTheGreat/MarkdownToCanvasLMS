@@ -202,7 +202,7 @@ format version (see "Repo format version and `upgrade`").
 ### Course-directory resolution
 
 Every command that acts on an existing course takes `COURSE_DIR` and resolves it the same
-way: `update`, `publish`, `prune`, `clean-manifest`, `upgrade`, `generate-due-dates`,
+way: `update`, `publish`, `prune`, `fix-manifest`, `upgrade`, `generate-due-dates`,
 `list-titles`, `find-canvas-orphans`, `find-local-orphans` and `emit-workflow`. The
 argument is declared once, by `cli._course_dir_argument()`, as a plain string (not a
 `click.Path`, which would reject a registry key) with `course_registry.complete_course` as
@@ -500,39 +500,80 @@ As with local modules, Canvas-only modules are repositioned only when
 Canvas's insert-and-shift positioning keeps a correctly placed module in place
 while other modules are re-synced around it.
 
-## `clean-manifest` Subcommand
+## `fix-manifest` Subcommand
 
 ```text
-Usage: markdown-to-canvas clean-manifest [OPTIONS] [COURSE_DIR]
+Usage: markdown-to-canvas fix-manifest [OPTIONS] [COURSE_DIR]
 
-  --config PATH  Path to canvas.toml (default: <COURSE_DIR>/course_settings/canvas.toml)
-  --apply           Make the changes. Without it, only report what would change.
-  --no-canvas-check Do not check Canvas; treat every entry as invalid.
-  -y, --yes         With --apply, skip the confirmation when switching courses.
+  --config PATH                   Path to canvas.toml
+  --clean                         Remove entries whose Canvas item is not in the course.
+  --pair-canvas-with-local        Add entries for unpaired local files by title.
+  --force-pair LOCAL_PATH=CANVAS_ID
+                                  Pair one file with one Canvas item (repeatable).
+  --apply                         Make the changes. Without it, only report.
+  -y, --yes                       With --clean --apply, skip the course-switch confirmation.
 ```
 
-`--no-canvas-check` runs `plan_invalidate_all` instead of steps 1–3 below (no
-listing, no referrer scan, so Pandoc is not required either). It is the same path
-the stored-course check takes for a confirmed course change.
+Renamed from `clean-manifest` (2026-09-24; the old name was dropped with no
+alias, and so was its `--no-canvas-check` option, which duplicated deleting the
+manifest and `update`'s own course-change path; `plan_invalidate_all` stays
+because `course_guard` uses it). The CLI wrapper is `cli.fix_manifest_cmd`. It
+dies unless at least one of `--clean`, `--pair-canvas-with-local`,
+`--force-pair` is given; `--force-pair` values are parsed before anything else,
+so a malformed one fails before Canvas is contacted.
 
-Implemented in `clean_manifest.py`; the CLI wrapper is `cli.clean_manifest_cmd`.
+Order of work in `fix_manifest_cmd`:
+
+1. Resolve the course, `_ensure_pandoc()` only with `--clean` (the referrer scan
+   converts Markdown; pairing does not), `get_course`, then
+   `clean_manifest.load_manifest` (repo format check + load).
+2. Pairing without `--clean` on a manifest whose `_canvas_course` differs from
+   the configured course → `die()`: the entries' IDs belong to the other course
+   and would sit next to new ones.
+3. `clean_manifest.list_course(course)` → `capi.list_course_objects(course)`,
+   one listing for both jobs. Any exception except `ConnectionError` becomes
+   `die()` before anything is written.
+4. `--clean`: `plan_clean(manifest, listing.ids, ...)`. Pairing then runs on
+   `working`, a shallow copy of the manifest without `clean_plan.removals`, so a
+   dry run shows the pairs the clean frees up.
+5. Pairing: `pair_manifest.collect_local_items(repo)` then
+   `pair_manifest.plan_pairing(working, listing, local_items, forced,
+   match_titles=pair_titles)`. A `PairError` → `die()`.
+6. Without `--apply`: print both reports and stop. With `--apply`: the
+   course-switch confirmation (only reachable with `--clean`, because of step
+   2), `apply_clean` (flushes and records the course), `apply_pairing` +
+   `set_course_identity` (flushes), then the reports.
+
+### `capi.list_course_objects`
+
+Returns `CourseListing(ids, items)`. `ids` is `{canvas_type: set(ids)}` for
+`--clean`: pages by `page_id`, all assignments, discussion topics ∪
+announcements (used for both `discussion` and `announcement`, since a topic's
+announcement flag can change), classic quizzes, modules (also used for
+`external_module`), files. `items` holds `CanvasObject` tuples for pairing, per
+type. The assignment pool leaves out assignments whose `submission_types`
+contains `discussion_topic` or `online_quiz`: those are graded discussions and
+quizzes, and pairing an `assignments/` file with one would point it at the
+wrong object. For files, `title` is the path below `course files/`, built from
+`course.get_folders()` `full_name` plus `display_name` (the name
+`upload_asset` uploads under); `published` is `not locked`; `size` is kept for
+the re-upload decision. Exceptions propagate on purpose so a failed listing is
+never read as "the course has none". This replaced `list_course_object_ids`.
+
+### `--clean`
+
+Implemented in `clean_manifest.py`.
 Removes manifest entries whose Canvas object is not in the configured course,
 without any title/slug matching (each entry already names its Canvas ID). This is
 the repair path for three failure modes `update` cannot see because
 `last_synced` says the entry is current: `course_id` changed after a sync, an item
 deleted directly in Canvas, and a wrong type recorded by an older version (links to
-`modules/*.md` once stub-created pages). It is also the only way to switch a
+`modules/*.md` once stub-created pages). It is also a way to switch a
 manifest that records one course to another (see the stored-course check).
 
 Canvas is only read. Pandoc is required (the referrer scan converts Markdown).
 
-1. `capi.list_course_object_ids(course)` makes one paginated list call per type
-   and returns `{canvas_type: set(ids)}`: pages by `page_id`, assignments,
-   discussion topics ∪ announcements (used for both `discussion` and
-   `announcement`, since a topic's announcement flag can change), classic quizzes,
-   modules (also used for `external_module`), files. Exceptions propagate; the CLI
-   turns any failure into `die()` before anything is written, so a failed listing
-   is never read as "the course has none".
+1. The ids come from `listing.ids` (above).
 2. `check_entries(manifest, canvas_ids, config)` is pure:
    - skips the reserved course entry;
    - fixed-type folders (`_FOLDER_TYPES`: `modules/` → module, `assets/` → file,
@@ -577,6 +618,75 @@ Not handled: a page renamed on Canvas keeps its old `canvas_url` in the manifest
 (use `find-canvas-orphans`); links already rendered to an object that still exists
 but is the wrong one (e.g. a discussion linking to a stray page stub) are not
 detected, since the referenced entry itself is valid.
+
+### `--pair-canvas-with-local` and `--force-pair`
+
+Implemented in `pair_manifest.py`. Connects local files that have no entry to
+Canvas items that already exist, so `update` does not create duplicates after
+`import`, a `cp` into a course that already holds the content, a lost manifest,
+or a move to a course copied inside Canvas. Neither `import` nor `cp` writes
+manifest entries; `import`'s internal imscc identifiers are not kept in the
+local files, so the title is the only thing left to match on.
+
+`collect_local_items(repo)` lists what `update` would sync, with the ignore
+matcher applied: `.md` files in content folders (every top-level folder except
+`_NON_CONTENT_DIRS`, the same list as `sync._phase_content`), typed by
+`infer_canvas_type`; `quizzes/<q>/<q>.md`; `modules/*.md`; and everything under
+`assets/` (walked like `sync._walk_assets`, so an ignored folder hides its
+contents), whose `title` is the path below `assets/` and which carries its size.
+Titles follow `update`: frontmatter `title`, else the stem (the folder name for
+a quiz). Frontmatter snippets are not expanded. A YAML error puts the file in
+`scan_errors` instead.
+
+`plan_pairing(manifest, listing, local_items, force_pairs, match_titles)` is
+pure:
+
+- `_claimed(manifest)` maps (pool, Canvas id) → manifest key. Discussion and
+  announcement entries claim both topic pools; `external_module` claims the
+  module pool. Claimed items are never paired again.
+- Forced pairs are checked first; every problem is collected and raised as one
+  `PairError` (file not in `local_items`, no item of the file's type with that
+  id, item claimed by another key, a file or item named twice). A forced pair
+  may replace the file's own entry (`Pairing.replaced`). Forced items are then
+  added to the claimed map.
+- Existing entries whose Canvas item's normalized title differs from the local
+  one go to `title_mismatches` (report only).
+- With `match_titles`, per type: unclaimed Canvas items and entry-less local
+  files are grouped by `normalize_title` (`html.unescape`, NFKC, `_QUOTES`
+  folding curly quotes and dashes, whitespace collapsed, `casefold`).
+  `_pair_group` pairs a group: each local file (path order) first takes a
+  candidate whose stripped title is identical, then the rest are zipped with the
+  remaining candidates in `_tie_break` order (published, has submissions, lowest
+  id). `has_submissions` is `has_submitted_submissions`, which only assignments
+  report. Groups with more than one item on either side go to `duplicates`.
+- Suggestions: `difflib.SequenceMatcher` ratio of the normalized titles between
+  leftover local files and leftover Canvas items of the same type, taken
+  greedily from the highest score so each side appears at most once, down to
+  `SUGGESTION_THRESHOLD` (0.6). They are only printed.
+
+`apply_pairing` writes `{canvas_id, canvas_type}` with the type from the local
+side (so a topic in `announcements/` is recorded as an announcement even when
+Canvas lists it as a discussion), plus `canvas_url` for pages (slug) and files
+(download URL). There is no `last_synced`, for the same reason `--clean`'s
+re-sync marking drops it (see above): the next update must render the file's
+links with this course's IDs, and `_canvas_is_newer` must not skip it. Modules
+and quizzes get no `canvas_item_ids` / `canvas_question_ids`; their sync clears
+and rebuilds the items and questions anyway. Files are the exception: when the
+local size equals the Canvas `size`, the entry gets `last_synced = now`
+(`file_is_current`), since a file has no links to render and re-uploading
+identical bytes only costs time. A same-size file with different bytes is
+missed; touching it re-uploads it.
+
+Referrers of newly paired files are not marked for re-sync. A file already
+synced that links to an entry-less file would have stub-created that file and
+recorded it, so an entry-less file has no synced referrers, except ones the
+clean in the same run already marked.
+
+`print_plan` prints suggestions as `--force-pair <shlex-quoted key=id>` with the
+titles and score in a shell comment, then one complete command. The command is
+built in the CLI (`command_prefix`) from this run's course argument, `--config`,
+mode flags and `--force-pair` values, plus `--apply`, so pasting it repeats the
+run with the new pairs added.
 
 ## `import` Subcommand
 
@@ -841,7 +951,7 @@ Done. Wrote course repo to: ./my-course/
 | `mv` | `mv.run_mv`, right after the repo root is found |
 | `publish` | `publish.run_publish` |
 | `find-local-orphans` | `local_orphans.find_local_orphans` |
-| `clean-manifest` | `clean_manifest.run_plan` and `clean_manifest.load_manifest` (used by the `--no-canvas-check` branch) |
+| `fix-manifest` | `clean_manifest.load_manifest` |
 | `list-titles` | `sync.collect_title_items` |
 | `generate-due-dates` | `generate_due_dates.plan_generation` |
 | `find-canvas-orphans` | `cli.find_canvas_orphans_cmd`, since `orphans.find_orphans(course)` never receives the repo |
@@ -876,7 +986,7 @@ markdown-to-canvas generate-due-dates TERM_FILE [COURSE_DIR] [--table NAME] [--n
 
 **Lock and unlock** offsets are applied to the item's own due date. Resolution order: the item's `unlock_offset` / `lock_offset`, the table's default, the shared default, then `KEEP`. `NONE` is only valid alone and yields `"NONE"` with no due date needed; any other rule with no due date yields `KEEP` and a warning.
 
-**Plan and apply.** `plan_generation(repo, term_path, table_name)` calls `check_repo_format`, reads `course_settings.toml` once (text and parsed), computes the dates, and compares each item with the entry `_find_entry` matches (same `name`; types must agree when both give one). Values are compared as strings, case-insensitively for sentinels, and as instants when both parse as aware datetimes, so `23:59-07:00` and `06:59Z` the next day are unchanged. The result is a `GenerationPlan` (per-entry `EntryChange` of kind added / changed / unchanged, warnings, notices, and the source text). `render_plan` gives lines flagged as real changes; the CLI prints those with `click.secho(fg="yellow")`, which click strips when the output is not a terminal. `apply_plan` refuses if the file no longer equals the source text (entry indices come from that text), then edits a `tomlkit` document in place: changed entries have their keys assigned, and added entries are appended to the existing array (inline array or `[[due_dates]]` blocks). When there is no `due_dates` key, the array is inserted before the first table header through `repo_format._insert_key`, since appending would put it inside the last table. Confirmation follows `clean-manifest`: no terminal and no `--yes` is an error when there is something to write; nothing to write never prompts; `--noop` stops after printing.
+**Plan and apply.** `plan_generation(repo, term_path, table_name)` calls `check_repo_format`, reads `course_settings.toml` once (text and parsed), computes the dates, and compares each item with the entry `_find_entry` matches (same `name`; types must agree when both give one). Values are compared as strings, case-insensitively for sentinels, and as instants when both parse as aware datetimes, so `23:59-07:00` and `06:59Z` the next day are unchanged. The result is a `GenerationPlan` (per-entry `EntryChange` of kind added / changed / unchanged, warnings, notices, and the source text). `render_plan` gives lines flagged as real changes; the CLI prints those with `click.secho(fg="yellow")`, which click strips when the output is not a terminal. `apply_plan` refuses if the file no longer equals the source text (entry indices come from that text), then edits a `tomlkit` document in place: changed entries have their keys assigned, and added entries are appended to the existing array (inline array or `[[due_dates]]` blocks). When there is no `due_dates` key, the array is inserted before the first table header through `repo_format._insert_key`, since appending would put it inside the last table. Confirmation follows `fix-manifest --clean`: no terminal and no `--yes` is an error when there is something to write; nothing to write never prompts; `--noop` stops after printing.
 
 **Warnings** (`title_warnings`) compare the table, `due_dates` and the content titles (`sync.iter_gradeable_content`, frontmatter `title`, else the file stem, the same source as `_check_due_dates_coverage`), report each title once, and name the table(s) responsible. `ignore` titles are skipped in the "no item" warning and the leftover notice. Course flags and `published_if` are not evaluated, since the relative table has no flags; `ignore` covers items that do not exist in a term.
 
@@ -1703,7 +1813,7 @@ The tool maintains a manifest in the course repo that maps local file paths to t
 
 **One manifest per `canvas.toml`.** The file name is derived from the config in use (`manifest.manifest_name_for(config_path)`): `course_settings/canvas.toml` → `.manifest-canvas.toml`, `course_settings/canvas-sec-a.toml` → `.manifest-canvas-sec-a.toml`. `Config.config_path` carries the path `config.load()` read, and `run_sync`/`run_targeted_sync`/`run_prune` derive the manifest path from it, so pointing `--config` at a second course (another section, a sandbox) keeps two independent sets of Canvas IDs and `last_synced` times in one repo. `find-canvas-orphans` takes `--config` too but reads no manifest; `publish` and `import` touch none.
 
-**Stored course (`_canvas_course`).** The manifest name tracks the config file, not the course inside it, so editing `course_id` in `canvas.toml` silently keeps every old Canvas ID (observed: 83 assets uploaded to a Spring course kept their Spring ids after `canvas.toml` moved to Fall, so they were never uploaded to Fall and 24 pages kept linking to the Spring copies). The manifest therefore holds a reserved entry `manifest.COURSE_KEY = "_canvas_course"` with `canvas_type = "course_identity"` (`COURSE_TYPE`), `base_url`, `course_id`, `course_name`, `recorded_at`. Helpers in `manifest.py`: `is_reserved_key` (covers this entry and the format stamp below), `get_course_identity`, `set_course_identity` (writes and flushes), `same_course` (base_url compared case-insensitively without trailing slash), `has_content_entries`. Every place that walks the whole manifest skips reserved entries with `is_reserved_key`: `run_prune`, `clean_manifest` (`check_entries`, `plan_invalidate_all`), `course_guard`, `has_content_entries`, and `mv.compute_manifest_updates` (which passes them through unchanged); `_phase_due_dates` ignores them (no `resolved_dates`).
+**Stored course (`_canvas_course`).** The manifest name tracks the config file, not the course inside it, so editing `course_id` in `canvas.toml` silently keeps every old Canvas ID (observed: 83 assets uploaded to a Spring course kept their Spring ids after `canvas.toml` moved to Fall, so they were never uploaded to Fall and 24 pages kept linking to the Spring copies). The manifest therefore holds a reserved entry `manifest.COURSE_KEY = "_canvas_course"` with `canvas_type = "course_identity"` (`COURSE_TYPE`), `base_url`, `course_id`, `course_name`, `recorded_at`. Helpers in `manifest.py`: `is_reserved_key` (covers this entry and the format stamp below), `get_course_identity`, `set_course_identity` (writes and flushes), `same_course` (base_url compared case-insensitively without trailing slash), `has_content_entries`. Every place that walks the whole manifest skips reserved entries with `is_reserved_key`: `run_prune`, `clean_manifest` (`check_entries`, `plan_invalidate_all`), `pair_manifest._claimed`, `course_guard`, `has_content_entries`, and `mv.compute_manifest_updates` (which passes them through unchanged); `_phase_due_dates` ignores them (no `resolved_dates`).
 
 `course_guard.check_course(manifest_path, config, course_name, assume_yes, confirm, interactive)` is called from `cli._guard_course` after `get_course()` in `update` (full and `-t`/`-s`) and `prune --delete/--unpublish`; not in `update --check-all` or `prune --manifest-only` (no Canvas contact). It lives in the CLI layer, so `run_sync` and friends (and their tests) are unaffected. Outcomes (every prompt defaults to no; the CLI has already printed the repo, course id, base URL and course name, which is what the person is being asked to check):
 

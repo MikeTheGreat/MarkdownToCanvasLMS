@@ -20,7 +20,7 @@ stop and ask the user.
 
 - `src/markdown_to_canvas/orphans.py` (the whole module, ~200 lines).
 - `src/markdown_to_canvas/cli.py`: `find_canvas_orphans_cmd` (~line 410) and
-  `clean_manifest_cmd` (~line 500) for the existing confirm/TTY pattern.
+  `fix_manifest_cmd` (~line 650) for the existing confirm/TTY pattern.
 - `src/markdown_to_canvas/canvas_api.py`: `_GETTERS`, `DELETABLE_TYPES`,
   `delete_content()` (~lines 670-810), `get_syllabus_body()`.
 - `src/markdown_to_canvas/sync.py`: `run_prune()`, `_in_use_resources()`,

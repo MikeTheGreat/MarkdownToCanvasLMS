@@ -1,4 +1,4 @@
-"""clean-manifest: drop manifest entries whose Canvas object is not in the course.
+"""fix-manifest --clean: drop manifest entries whose Canvas object is not in the course.
 
 The manifest trusts its Canvas IDs indefinitely. An ID goes bad when canvas.toml
 is pointed at a different course after a sync, when the object is deleted in
@@ -251,14 +251,9 @@ def load_manifest(
     return manifest_lib.load(manifest_path), manifest_path
 
 
-def run_plan(config: Config, repo_root: Path, course) -> tuple[
-    manifest_lib.ManifestDict, Path, CleanPlan
-]:
-    manifest, manifest_path = load_manifest(repo_root, config)
+def list_course(course) -> capi.CourseListing:
     click.echo("Listing the course's pages, assignments, discussions, quizzes, modules and files...")
-    canvas_ids = capi.list_course_object_ids(course)
-    plan = plan_clean(manifest, canvas_ids, config, repo_root)
-    return manifest, manifest_path, plan
+    return capi.list_course_objects(course)
 
 
 def print_plan(plan: CleanPlan, applied: bool) -> None:

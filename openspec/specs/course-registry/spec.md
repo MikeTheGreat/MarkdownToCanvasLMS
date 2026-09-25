@@ -41,7 +41,7 @@ looked up.
 ### Requirement: Course argument resolution
 
 Every subcommand that acts on an existing course directory (`update`, `publish`,
-`prune`, `clean-manifest`, `upgrade`, `generate-due-dates`, `list-titles`,
+`prune`, `fix-manifest`, `upgrade`, `generate-due-dates`, `list-titles`,
 `find-canvas-orphans`, `find-local-orphans`, `emit-workflow` and `cp`) SHALL take its
 argument under the name `COURSE_DIR`. For `cp`, `COURSE_DIR` names the
 destination course and follows its `SRC` arguments. When the argument is given, the tool SHALL

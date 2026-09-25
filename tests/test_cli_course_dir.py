@@ -140,14 +140,14 @@ def test_emit_workflow_walks_up_and_by_key(home, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "command", ["find-local-orphans", "list-titles", "upgrade", "clean-manifest"]
+    "command", ["find-local-orphans", "list-titles", "upgrade", "fix-manifest"]
 )
 def test_key_works_for_more_commands(command, home, tmp_path, unrelated):
     course = make_course(tmp_path)
     register(home, f'[courses]\n142 = "{course}"\n')
     args = [command, "142"]
-    if command == "clean-manifest":
-        args.append("--no-canvas-check")  # needs Canvas otherwise; only checking the header
+    if command == "fix-manifest":
+        args.append("--pair-canvas-with-local")  # a mode is required; only checking the header
     result = run(*args)
     assert first_line(result) == f"Course dir: {course.resolve()}  (course 142)"
 
@@ -265,7 +265,7 @@ def test_the_manifest_follows_the_entry_config(home, tmp_path, unrelated):
 # ---------------------------------------------------------------------------
 
 COURSE_COMMANDS = [
-    "update", "publish", "prune", "clean-manifest", "upgrade", "generate-due-dates",
+    "update", "publish", "prune", "fix-manifest", "upgrade", "generate-due-dates",
     "list-titles", "find-canvas-orphans", "find-local-orphans", "emit-workflow", "cp",
 ]
 
