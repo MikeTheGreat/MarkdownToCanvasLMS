@@ -2601,7 +2601,7 @@ def test_tab_configuration_misplaced_under_section_is_left_alone(
     (root / "course_settings").mkdir(parents=True)
     settings = root / "course_settings" / "course_settings.toml"
     settings.write_text(
-        'format_version = 3\ntitle = "Intro to CS"\n\n[late_policy]\n'
+        'format_version = 4\ntitle = "Intro to CS"\n\n[late_policy]\n'
         "missing_submission_deduction_enabled = false\n\n"
         'tab_configuration = [\n    { id = "modules" },\n]\n'
     )
@@ -5826,3 +5826,101 @@ def test_sync_module_replaces_page_entry_with_new_module(mock_course, mocker, tm
     assert written["modules/lecture-01.md"]["canvas_type"] == "module"
     assert written["modules/lecture-01.md"]["canvas_id"] == 8080
     assert "Delete that stray item in Canvas" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Snippet links are relative to the snippet file
+# ---------------------------------------------------------------------------
+
+
+def test_snippet_links_rebased_for_deep_page_and_quiz_question(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    """A snippet's image path (relative to the snippet) reaches Canvas as the
+    uploaded file's URL from a deep page and from a quiz question; a snippet
+    link that escapes the repo blocks only the file that includes it."""
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    root = _quiz_course_root(tmp_path)
+    (root / "assets").mkdir()
+    (root / "assets" / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (root / "snippets").mkdir()
+    (root / "snippets" / "logo.md").write_text("![logo](../assets/logo.png)\n")
+    (root / "snippets" / "bad.md").write_text("![old](../../assets/logo.png)\n")
+    (root / "pages" / "week1").mkdir(parents=True)
+    (root / "pages" / "week1" / "deep.md").write_text(
+        "---\ntitle: Deep\n---\n\n[x](../../snippets/logo.md)\n"
+    )
+    (root / "pages" / "week1" / "bad.md").write_text(
+        "---\ntitle: Bad\n---\n\n[x](../../snippets/bad.md)\n"
+    )
+    q_file = root / "quizzes" / "a-quiz" / "questions" / "explain-something.md"
+    q_file.write_text(q_file.read_text() + "\n[x](../../../snippets/logo.md)\n")
+
+    mock_course.upload.return_value = (
+        True, {"id": 77777, "url": "https://school.instructure.com/files/77777/download"},
+    )
+    mock_course.create_page.side_effect = lambda **kw: _mock_page(1, kw["wiki_page"]["title"].lower())
+    quiz = _mock_quiz(12345)
+    mock_course.create_quiz.return_value = quiz
+    mock_course.get_quiz.return_value = quiz
+    quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
+
+    make_current(root)
+    had_errors = run_sync(_config(), root)
+
+    assert had_errors is True
+    out = capsys.readouterr().out
+    assert "Skipping upload due to errors: pages/week1/bad.md" in out
+    assert "snippets/bad.md" in out and "../../assets/logo.png" in out
+
+    page_bodies = {
+        c.kwargs["wiki_page"]["title"]: c.kwargs["wiki_page"].get("body", "")
+        for c in mock_course.create_page.call_args_list
+    }
+    deep_body = page_bodies.get("Deep", "")
+    assert "files/77777" in deep_body, page_bodies
+    assert "Bad" not in page_bodies
+
+    question_texts = [
+        c.kwargs["question"]["question_text"] for c in quiz.create_question.call_args_list
+    ]
+    assert any("files/77777" in t for t in question_texts), question_texts
+
+
+def test_targeted_sync_follows_snippet_link_from_deep_page(mock_course, mocker, tmp_path) -> None:
+    """-t on a deep page uploads an asset linked only from its snippet."""
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    (root / "course_settings").mkdir(parents=True)
+    (root / "course_settings" / "course_settings.toml").write_text("")
+    (root / "assets").mkdir()
+    (root / "assets" / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (root / "snippets").mkdir()
+    (root / "snippets" / "logo.md").write_text("![logo](../assets/logo.png)\n")
+    (root / "pages" / "week1").mkdir(parents=True)
+    deep = root / "pages" / "week1" / "deep.md"
+    deep.write_text("---\ntitle: Deep\n---\n\n[x](../../snippets/logo.md)\n")
+    mock_course.upload.return_value = (
+        True, {"id": 77777, "url": "https://school.instructure.com/files/77777/download"},
+    )
+    mock_course.create_page.return_value = _mock_page(1, "deep")
+
+    make_current(root)
+    run_targeted_sync(_config(), root, [str(deep)], [])
+
+    uploaded = [str(c.args[0]) for c in mock_course.upload.call_args_list]
+    assert any(u.endswith("assets/logo.png") for u in uploaded), uploaded
+
+
+def test_staleness_probe_includes_nested_snippets(tmp_path) -> None:
+    """A page is stale when a snippet included by one of its snippets changes."""
+    from markdown_to_canvas.sync import _file_referenced_snippets
+
+    snippets = tmp_path / "snippets"
+    snippets.mkdir()
+    (snippets / "outer.md").write_text("[i](inner.md)")
+    (snippets / "inner.md").write_text("INNER")
+    page = tmp_path / "pages" / "p.md"
+    page.parent.mkdir()
+    page.write_text("---\ntitle: P\n---\n\n[o](../snippets/outer.md)\n")
+    assert (snippets / "inner.md").resolve() in _file_referenced_snippets(page, snippets)

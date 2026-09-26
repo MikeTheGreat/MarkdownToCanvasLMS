@@ -84,7 +84,7 @@ def test_check_all_ignores_and_preserves_stale_manifest(course_root, no_canvas, 
         'canvas_type = "page"\n'
         'canvas_url = "syllabus"\n'
         'last_synced = "2999-12-31T00:00:00+00:00"\n'
-        "\n[_repo_format]\nformat_version = 3\n"
+        "\n[_repo_format]\nformat_version = 4\n"
     )
     before = manifest_path.read_bytes()
 
@@ -406,6 +406,27 @@ def test_cli_check_all_exit_code_on_problems(course_root, no_canvas, monkeypatch
 
     assert result.exit_code == 1
     assert "Check complete; please fix the problems listed above" in result.output
+
+
+def test_cli_check_all_fails_on_snippet_link_outside_repo(
+    course_root, no_canvas, monkeypatch
+) -> None:
+    """A snippet link that points outside the repo from the snippet's folder is
+    an error, so --check-all exits non-zero."""
+    from markdown_to_canvas.cli import main
+
+    _write_canvas_toml(course_root)
+    monkeypatch.delenv("CANVAS_API_TOKEN", raising=False)
+    (course_root / "snippets" / "old-style.md").write_text("![](../../assets/images/fig.png)\n")
+    (course_root / "pages" / "old.md").write_text(
+        "---\ntitle: Old\n---\n\n[x](../snippets/old-style.md)\n"
+    )
+
+    result = CliRunner().invoke(main, ["update", str(course_root), "--check-all"])
+
+    assert result.exit_code == 1
+    assert "snippets/old-style.md" in result.output
+    assert "outside the course repo" in result.output
 
 
 def test_check_all_accepts_canvas_only_module_order_entry(

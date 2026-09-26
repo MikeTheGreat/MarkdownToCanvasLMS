@@ -102,7 +102,7 @@ def test_multiple_snippets_expanded(tmp_path: Path) -> None:
     assert "[B](" not in result
 
 
-def test_nested_snippet_prints_error_inner_not_expanded(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
+def test_nested_snippet_is_expanded(tmp_path: Path, capsys: pytest.CaptureFixture) -> None:
     snippets_dir, _ = _make_snippet(
         tmp_path, "outer.md", "Outer text. [Inner](inner.md) more text."
     )
@@ -111,15 +111,115 @@ def test_nested_snippet_prints_error_inner_not_expanded(tmp_path: Path, capsys: 
     source.parent.mkdir()
     text = "[Outer](../snippets/outer.md)\n"
     result = preprocess_snippets(text, source, snippets_dir)
-    # outer snippet content IS included
-    assert "Outer text." in result
-    # inner snippet link left as plain link, not expanded
-    assert "INNER CONTENT" not in result
-    assert "[Inner](inner.md)" in result
-    # error printed
-    captured = capsys.readouterr()
-    assert "ERROR" in captured.out
-    assert "nested" in captured.out.lower()
+    assert result == "Outer text. INNER CONTENT more text.\n"
+    assert capsys.readouterr().out == ""
+
+
+def test_nested_snippet_links_rebased_through_each_level(tmp_path: Path) -> None:
+    """Each snippet's links are relative to that snippet; after two pastes the
+    image path is correct from the includer."""
+    repo = tmp_path / "repo"
+    (repo / "snippets" / "block" / "deep").mkdir(parents=True)
+    (repo / "snippets" / "block" / "outer.md").write_text("[i](deep/inner.md)\n")
+    (repo / "snippets" / "block" / "deep" / "inner.md").write_text(
+        "![logo](../../../assets/logo.png)\n"
+    )
+    source = repo / "pages" / "week1" / "x.md"
+    source.parent.mkdir(parents=True)
+    result = preprocess_snippets(
+        "[o](../../snippets/block/outer.md)\n", source, repo / "snippets"
+    )
+    assert result.strip() == "![logo](../../assets/logo.png)"
+
+
+def test_inline_snippet_inside_block_snippet(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    (repo / "snippets" / "inline").mkdir(parents=True)
+    (repo / "snippets" / "inline" / "C.md").write_text("https://x.edu/courses/1\n")
+    (repo / "snippets" / "block").mkdir()
+    (repo / "snippets" / "block" / "footer.md").write_text(
+        "[Grades]($../inline/C.md$/grades) by [Mike](../inline/name.md)\n"
+    )
+    (repo / "snippets" / "inline" / "name.md").write_text("Mike Panitz\n")
+    source = repo / "pages" / "week1" / "x.md"
+    source.parent.mkdir(parents=True)
+    result = preprocess_snippets(
+        "[f](../../snippets/block/footer.md)\n", source, repo / "snippets"
+    )
+    assert result.strip() == "[Grades](https://x.edu/courses/1/grades) by Mike Panitz"
+
+
+def test_nested_snippet_depth_limit_stops_a_cycle(tmp_path: Path) -> None:
+    snippets_dir, _ = _make_snippet(tmp_path, "loop.md", "again [x](loop.md)")
+    source = tmp_path / "pages" / "notes.md"
+    source.parent.mkdir()
+    errors: list[str] = []
+    result = preprocess_snippets("[x](../snippets/loop.md)", source, snippets_dir, errors)
+    assert len(errors) == 1
+    assert "nested more than 10 levels deep" in errors[0]
+    assert "snippets/loop.md -> snippets/loop.md" in errors[0]
+    assert "pages/notes.md" in errors[0]
+    # Ten levels were pasted; the eleventh reference is left unexpanded (and,
+    # like any snippet link, rebased onto the includer).
+    assert result.count("again") == 10
+    assert result.endswith("[x](../snippets/loop.md)")
+
+
+def test_ten_levels_of_nesting_is_allowed(tmp_path: Path) -> None:
+    snippets_dir = tmp_path / "snippets"
+    snippets_dir.mkdir()
+    for n in range(1, 10):
+        (snippets_dir / f"s{n}.md").write_text(f"{n} [x](s{n + 1}.md)")
+    (snippets_dir / "s10.md").write_text("10")
+    source = tmp_path / "pages" / "notes.md"
+    source.parent.mkdir()
+    errors: list[str] = []
+    result = preprocess_snippets("[x](../snippets/s1.md)", source, snippets_dir, errors)
+    assert errors == []
+    assert result == "1 2 3 4 5 6 7 8 9 10"
+
+
+def test_non_file_links_in_a_snippet_are_not_snippet_refs(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """https:, mailto:, #anchor links and links with titles inside a snippet
+    are ordinary links, not (nested) snippet references."""
+    snippets_dir, _ = _make_snippet(
+        tmp_path, "s.md",
+        "[m](https://x.edu/inbox#a) [e](mailto:a@x.edu) [t](#top) "
+        '[o](../pages/o.md "Office")',
+    )
+    source = tmp_path / "pages" / "notes.md"
+    source.parent.mkdir()
+    errors: list[str] = []
+    result = preprocess_snippets("[s](../snippets/s.md)", source, snippets_dir, errors)
+    assert errors == []
+    assert capsys.readouterr().out == ""
+    assert result == '[m](https://x.edu/inbox#a) [e](mailto:a@x.edu) [t](#top) [o](../pages/o.md "Office")'
+
+
+def test_block_snippet_ref_with_title(tmp_path: Path) -> None:
+    snippets_dir, _ = _make_snippet(tmp_path, "tip.md", "TIP")
+    source = tmp_path / "pages" / "notes.md"
+    source.parent.mkdir()
+    result = preprocess_snippets('[x](../snippets/tip.md "Tip")', source, snippets_dir)
+    assert result == "TIP"
+
+
+def test_find_referenced_snippets_follows_nesting(tmp_path: Path) -> None:
+    snippets_dir = tmp_path / "snippets"
+    (snippets_dir / "inline").mkdir(parents=True)
+    (snippets_dir / "a.md").write_text("[b](b.md) $inline/c.md$")
+    (snippets_dir / "b.md").write_text("[a](a.md)")  # a cycle must not hang the probe
+    (snippets_dir / "inline" / "c.md").write_text("C")
+    source = tmp_path / "pages" / "notes.md"
+    source.parent.mkdir()
+    found = find_referenced_snippets("[a](../snippets/a.md)", source, snippets_dir)
+    assert found == {
+        (snippets_dir / "a.md").resolve(),
+        (snippets_dir / "b.md").resolve(),
+        (snippets_dir / "inline" / "c.md").resolve(),
+    }
 
 
 def test_snippet_content_from_fixture() -> None:
@@ -665,3 +765,138 @@ class TestMarkdownToHtmlTimeout:
         from markdown_to_canvas.convert import markdown_to_html
 
         assert "<p>hi</p>" in markdown_to_html("hi")
+
+
+# ---------------------------------------------------------------------------
+# preprocess_snippets: snippet links are relative to the snippet file
+# ---------------------------------------------------------------------------
+
+
+def _paste(tmp_path: Path, snippet_rel: str, snippet_text: str, includer_rel: str,
+           errors: list[str] | None = None) -> str:
+    """Write snippet_rel (under the repo) and paste it into includer_rel."""
+    repo = tmp_path / "repo"
+    snippet = repo / snippet_rel
+    snippet.parent.mkdir(parents=True, exist_ok=True)
+    snippet.write_text(snippet_text)
+    includer = repo / includer_rel
+    includer.parent.mkdir(parents=True, exist_ok=True)
+    import os
+    ref = os.path.relpath(snippet, includer.parent)
+    return preprocess_snippets(f"[x]({ref})\n", includer, repo / "snippets", errors)
+
+
+def test_snippet_link_rebased_for_deeper_includer(tmp_path: Path) -> None:
+    result = _paste(tmp_path, "snippets/policy.md", "![logo](../assets/logo.png)",
+                    "pages/week1/intro.md")
+    assert result.strip() == "![logo](../../assets/logo.png)"
+
+
+def test_snippet_link_unchanged_for_includer_at_snippet_depth(tmp_path: Path) -> None:
+    result = _paste(tmp_path, "snippets/policy.md", "[s](../pages/syllabus.md)", "pages/a.md")
+    assert result.strip() == "[s](../pages/syllabus.md)"
+
+
+def test_snippet_in_subfolder(tmp_path: Path) -> None:
+    result = _paste(tmp_path, "snippets/labs/header.md", "![](../../assets/lab.png)",
+                    "pages/lab1.md")
+    assert result.strip() == "![](../assets/lab.png)"
+
+
+def test_snippet_link_for_top_level_includer(tmp_path: Path) -> None:
+    result = _paste(tmp_path, "snippets/policy.md", "![](../assets/a.png)",
+                    "course_settings/syllabus.md")
+    assert result.strip() == "![](../assets/a.png)"
+
+
+def test_snippet_angle_bracket_link_with_title(tmp_path: Path) -> None:
+    result = _paste(tmp_path, "snippets/s.md", '[notes](<../assets/My Notes.pdf> "Notes")',
+                    "pages/week1/x.md")
+    assert result.strip() == '[notes](<../../assets/My Notes.pdf> "Notes")'
+
+
+def test_snippet_raw_html_image_and_anchor(tmp_path: Path) -> None:
+    result = _paste(
+        tmp_path, "snippets/s.md",
+        '<img src="../assets/a.png" alt="A"> <a href="../pages/b.md">b</a>',
+        "pages/week1/x.md",
+    )
+    assert '<img src="../../assets/a.png" alt="A">' in result
+    assert '<a href="../b.md">' in result
+
+
+def test_snippet_fragment_kept(tmp_path: Path) -> None:
+    result = _paste(tmp_path, "snippets/s.md", "[faq](../pages/faq.md#late-work)",
+                    "pages/week1/x.md")
+    assert result.strip() == "[faq](../faq.md#late-work)"
+
+
+@pytest.mark.parametrize(
+    "link",
+    [
+        "[h](https://example.edu/help)",
+        "![](data:image/png;base64,iVBORw0KGgo=)",
+        "[m](mailto:a@example.edu)",
+        "[top](#top)",
+        "[root](/courses/1/pages/x)",
+        "[g]($../snippets/inline/C.md$/grades)",
+    ],
+)
+def test_snippet_links_not_rebased(tmp_path: Path, link: str) -> None:
+    result = _paste(tmp_path, "snippets/s.md", link, "pages/week1/x.md")
+    assert result.strip() == link
+
+
+def test_snippet_fenced_code_not_rebased(tmp_path: Path) -> None:
+    text = "![](../assets/a.png)\n\n```\n![](../assets/x.png)\n```\n"
+    result = _paste(tmp_path, "snippets/s.md", text, "pages/week1/x.md")
+    assert "![](../../assets/a.png)" in result
+    assert "```\n![](../assets/x.png)\n```\n" in result
+
+
+def test_inline_snippet_content_not_rebased(tmp_path: Path) -> None:
+    repo = tmp_path / "repo"
+    (repo / "snippets" / "inline").mkdir(parents=True)
+    (repo / "snippets" / "inline" / "P.md").write_text("../assets/a.png\n")
+    source = repo / "pages" / "week1" / "x.md"
+    source.parent.mkdir(parents=True)
+    result = preprocess_snippets(
+        "![]($../../snippets/inline/P.md$)", source, repo / "snippets"
+    )
+    assert result == "![](../assets/a.png)"
+
+
+def test_snippet_link_escaping_repo_is_an_error(tmp_path: Path) -> None:
+    errors: list[str] = []
+    result = _paste(tmp_path, "snippets/policy.md", "![](../../assets/x.png) ![](../assets/y.png)",
+                    "pages/week1/intro.md", errors)
+    assert "![](../../assets/x.png)" in result
+    assert "![](../../assets/y.png)" in result
+    assert len(errors) == 1
+    assert "pages/week1/intro.md" in errors[0]
+    assert "snippets/policy.md" in errors[0]
+    assert "../../assets/x.png" in errors[0]
+
+
+def test_unevaluated_inline_snippet_inside_block_snippet_is_not_a_path(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """Without flags (passive probes) an inline snippet's #if lines stay in its
+    text; pasted into a link inside a block snippet, that multi-line text is
+    not a file path, so it is neither a snippet ref nor rebased."""
+    repo = tmp_path / "repo"
+    (repo / "snippets" / "inline").mkdir(parents=True)
+    (repo / "snippets" / "inline" / "C.md").write_text(
+        "<!-- #if a -->\nhttps://x.edu/1\n<!-- #else -->\nhttps://x.edu/2\n<!-- #endif -->\n"
+    )
+    (repo / "snippets" / "block").mkdir()
+    (repo / "snippets" / "block" / "f.md").write_text("[G]($../inline/C.md$/grades)\n")
+    source = repo / "pages" / "week1" / "x.md"
+    source.parent.mkdir(parents=True)
+    errors: list[str] = []
+    result = preprocess_snippets(
+        "[f](../../snippets/block/f.md)\n", source, repo / "snippets", errors
+    )
+    assert errors == []
+    assert capsys.readouterr().out == ""
+    assert result.startswith("[G](<!-- #if a -->\nhttps://x.edu/1\n")

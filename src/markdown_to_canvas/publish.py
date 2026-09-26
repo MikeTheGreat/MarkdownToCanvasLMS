@@ -7,7 +7,9 @@ the ``mkdocs`` CLI.
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
 import re
 import shutil
 import subprocess
@@ -384,7 +386,8 @@ def collect_reachable(
     """BFS from seed paths to find all locally-referenced content.
 
     Excludes anything under ``quizzes/`` or ``snippets/`` (snippets are
-    inlined during staging, not linked). When ``flags`` is given, course-flag
+    inlined during staging, not linked); links inside an included snippet are
+    followed from the including file. When ``flags`` is given, course-flag
     conditionals are applied before extracting refs, so content referenced
     only from a false branch is not pulled into the public site. Directive
     errors are silent here (quiet probe) — the same file errors loudly when
@@ -418,6 +421,10 @@ def collect_reachable(
                 if item["type"] == "content" and item["local_path"] not in visited:
                     queue.append(item["local_path"])
         else:
+            # Follow links inside included snippets too; expansion rebases them
+            # onto this file. Errors are reported when the file is staged.
+            with contextlib.redirect_stdout(io.StringIO()):
+                body = preprocess_snippets(body, src, repo / "snippets", flags=flags)
             for ref in extract_local_refs(body, src, repo):
                 if ref not in visited:
                     queue.append(ref)

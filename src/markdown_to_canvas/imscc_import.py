@@ -18,6 +18,7 @@ import tomlkit
 from . import toml_write
 from .canvas_api import NUMERIC_TAB_IDS, TOOL_TAB_PREFIX
 from .convert import apply_outside_fences
+from .markdown_cleanup import filter_pandoc_attrs, keep_id_and_style, repair_prose
 from .repo_format import FORMAT_VERSION, tool_version
 
 
@@ -738,87 +739,19 @@ def _restore_iframes(markdown: str, iframes: list[str]) -> str:
     return markdown
 
 
-_ATTR_TOKEN_RE = re.compile(
-    r'''\#[^\s"'{}]+
-      | \.[^\s"'{}]+
-      | [A-Za-z_:][\w:.-]*=(?:"[^"]*"|'[^']*'|[^\s{}]+)
-    ''',
-    re.VERBOSE,
-)
-_ATTR_BLOCK_RE = re.compile(r"([ \t]*)\{([^{}\n]*)\}")
-_FENCE_LINE_RE = re.compile(r"^([ \t]*)(:{3,})[ \t]*(.*?)[ \t]*$")
-_FENCE_BARE_CLASS_RE = re.compile(
-    r"^(?P<indent>[ \t]*)(?P<fence>:{3,})[ \t]+[A-Za-z_][\w-]*[ \t]*$", re.MULTILINE
-)
-
-
 def _simplify_pandoc_attrs(markdown: str) -> str:
     """Strip pandoc's curly-brace attributes down to just id + style.
 
     Pandoc's markdown writer attaches `{#id .class key="val"}`-style attribute
     blocks after headings, links/images, spans, code, and fenced divs (`:::`).
-    Classes and other key=value attributes (Canvas RCE cruft, not meaningful
-    outside Canvas) are dropped; `id` is kept since in-document anchor links
-    may target it, and `style` is kept since it's user-authored formatting.
-    If a fenced div's attributes are stripped down to nothing, the div itself
-    (both fence lines) is removed so its content is no longer wrapped in a
-    meaningless container.
+    Classes and other key=value attributes (Canvas RCE and Word cruft, not
+    meaningful outside Canvas) are dropped; `id` is kept since in-document
+    anchor links may target it, and `style` is kept since it's user-authored
+    formatting. A span or fenced div stripped down to nothing is unwrapped, so
+    no bare `[text]` (which renders its brackets) or empty container is left.
+    See markdown_cleanup.filter_pandoc_attrs().
     """
-    lines = markdown.split("\n")
-
-    # Only fenced-div *opens* ever carry attributes — a div with none is
-    # emitted as raw HTML by pandoc, never as a bare fence — so pairing opens
-    # (non-empty trailing content) with closes (empty) on the original text
-    # is unambiguous.
-    stack: list[int] = []
-    pairs: dict[int, int] = {}
-    for i, line in enumerate(lines):
-        m = _FENCE_LINE_RE.match(line)
-        if not m:
-            continue
-        if m.group(3):
-            stack.append(i)
-        elif stack:
-            pairs[stack.pop()] = i
-
-    def _is_attr_context(text: str, brace_pos: int) -> bool:
-        line_start = text.rfind("\n", 0, brace_pos) + 1
-        line_prefix = text[line_start:brace_pos]
-        if re.match(r"^\s*(#{1,6}\s|:{3,}\s*$)", line_prefix):
-            return True
-        prev = line_prefix.rstrip()
-        return bool(prev) and prev[-1] in ")]`"
-
-    def _replace(m: re.Match) -> str:
-        ws, content = m.group(1), m.group(2)
-        brace_pos = m.start() + len(ws)
-        if not _is_attr_context(markdown, brace_pos):
-            return m.group(0)
-        kept = [
-            t
-            for t in _ATTR_TOKEN_RE.findall(content)
-            if t.startswith("#") or t.lower().startswith("style=")
-        ]
-        if not kept:
-            return ""
-        return ws + "{" + " ".join(kept) + "}"
-
-    markdown = _ATTR_BLOCK_RE.sub(_replace, markdown)
-    markdown = _FENCE_BARE_CLASS_RE.sub(
-        lambda m: m.group("indent") + m.group("fence"), markdown
-    )
-
-    lines = markdown.split("\n")
-    to_remove = {
-        idx
-        for open_idx, close_idx in pairs.items()
-        for idx in (open_idx, close_idx)
-        if not _FENCE_LINE_RE.match(lines[open_idx]).group(3)
-    }
-    if to_remove:
-        lines = [line for i, line in enumerate(lines) if i not in to_remove]
-        markdown = "\n".join(lines)
-
+    markdown = filter_pandoc_attrs(markdown, keep_id_and_style, skip_code_blocks=False)
     return re.sub(r"[ \t]+$", "", markdown, flags=re.MULTILINE)
 
 
@@ -970,6 +903,7 @@ def _html_to_markdown(html: str) -> str:
     )
     md = _simplify_pandoc_attrs(md)
     md = _collapse_redundant_spans(md)
+    md = repair_prose(md)
     if iframes:
         md = _restore_iframes(md, iframes)
     return md
@@ -2775,6 +2709,24 @@ _RELATIVE_DUE_DATES_HELP = """\
 #     offsets = ["+1 CLASS_DAY", "23:59 ABS_TIME"],
 #     unlock_offset = "NONE",                           # optional: an offset, a list, or "NONE"
 #     lock_offset = "+7 CALENDAR_DAY" }                 # optional
+#
+# relative_to says where counting starts:
+#   { type = "START_OF_QUARTER" }        the term's first_day
+#   { type = "FIRST_CLASS_OF_QUARTER" }  the first class day on or after first_day
+#   { type = "NO_DUE_DATE" }             the item gets no due date (due_at = "NONE")
+#   { type = "ASSIGNMENT", assignment_name = "Other item" }
+#       the due date of another item in the same table (that item must have a
+#       due date). Counting starts from its date; the time of day resets to
+#       default_due_time.
+#
+# offsets is a list, applied in order to the date from relative_to (at default_due_time):
+#   "+N CALENDAR_DAY", "-N CALENDAR_DAY"  move N calendar days
+#   "+N CLASS_DAY", "-N CLASS_DAY"        move N class days (days_of_week, minus
+#                                         non-instructional days)
+#   "Fri NEAREST_CALENDAR_DAY"            move to the closest Fri, earlier or later
+#                                         (Mon Tue Wed Thu Fri Sat Sun)
+#   "23:59 ABS_TIME"                      set the time of day, keep the date
+# unlock_offset and lock_offset take the same offsets, or "NONE".
 """
 
 

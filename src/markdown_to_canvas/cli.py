@@ -595,6 +595,91 @@ def find_local_orphans_cmd(course_dir: str | None, verbose: bool) -> None:
     print_local_orphan_report(find_local_orphans(repo), verbose=verbose)
 
 
+@main.command(name="fix-markdown")
+@_course_dir_argument()
+@click.option(
+    "--apply",
+    is_flag=True,
+    default=False,
+    help="Rewrite the files. Without it, only show what would change.",
+)
+@_handle_cli_errors
+def fix_markdown_cmd(course_dir: str | None, apply: bool) -> None:
+    """Remove Word and import debris from the course's Markdown files.
+
+    Reads the repo on disk only — no Canvas call, no API token needed. In every
+    content, module, snippet, quiz and question-bank file and the syllabus
+    (frontmatter and fenced code blocks are never touched), it:
+
+    \b
+    - removes Word Online attribute blocks ({.EOP .SCXW123 ccp-props=...}),
+      keeping any id and style, and unwraps spans left with no attributes;
+    - removes stray brackets in paragraphs showing the "][" seams earlier
+      imports left ("C[heck out our ][Finding Data](url)[ and ]"); brackets
+      in inline code, links, images, footnotes, task boxes, reference links
+      and styled spans are kept;
+    - repairs [Label][https://url]( text ) into [Label](https://url) text;
+    - shortens horizontal rules written as long dash lines to ---;
+    - flattens stacked list markers ("- - - text", "1.  1.  text");
+    - turns Word's empty paragraphs (a line ending in \\ followed by a line
+      holding only \\) into a paragraph break, or just removes them inside a
+      list item;
+    - removes a trailing-backslash line break that ends its paragraph, where
+      it draws nothing;
+    - moves spaces out of bold/italic markers ("**Scenario: **In" becomes
+      "**Scenario:** In");
+    - replaces \\' and \\" with ' and " outside code, attribute blocks, link
+      targets, HTML tags and $math$ (they then render as curly quotes).
+
+    import applies the same repairs to newly imported content.
+
+    Without --apply this lists every changed line; --apply writes the files.
+    Run update afterwards to upload the changes.
+
+    COURSE_DIR is the course content directory: a path or a registered course
+    key. If omitted, the enclosing course is found by walking up from the
+    current directory.
+    """
+    from .markdown_cleanup import (
+        apply_fix_markdown,
+        collect_markdown_files,
+        plan_fix_markdown,
+    )
+
+    repo, _ = _resolve_course(course_dir)
+    click.echo()
+    plan = plan_fix_markdown(collect_markdown_files(repo))
+
+    for fix in plan.fixes:
+        click.secho(str(fix.path.relative_to(repo)), bold=True)
+        for line in fix.diff_lines():
+            if line.startswith("-"):
+                click.secho(f"  {line}", fg="red")
+            elif line.startswith("+"):
+                click.secho(f"  {line}", fg="green")
+            else:
+                click.echo(f"  {line}")
+        click.echo()
+    for path, err in plan.errors:
+        click.secho(f"Could not read {path.relative_to(repo)}: {err}", fg="yellow")
+
+    n = len(plan.fixes)
+    if not n:
+        click.echo(f"Scanned {plan.scanned} Markdown files; nothing to fix.")
+        return
+    if not apply:
+        click.echo(
+            f"Scanned {plan.scanned} Markdown files; {n} would change. "
+            "Nothing changed. Re-run with --apply to rewrite them."
+        )
+        return
+    apply_fix_markdown(plan)
+    click.secho(
+        f"Rewrote {n} of {plan.scanned} Markdown files. Run update to upload them.",
+        fg="green",
+    )
+
+
 @main.command(name="fix-manifest")
 @_course_dir_argument()
 @click.option(

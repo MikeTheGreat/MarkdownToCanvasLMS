@@ -28,7 +28,7 @@ from . import manifest as manifest_lib
 #: The format version this tool reads and writes. Increase it (and add a
 #: migration to MIGRATIONS) whenever a change makes the tool read an existing
 #: repo file differently. See CLAUDE.md.
-FORMAT_VERSION = 3
+FORMAT_VERSION = 4
 
 SETTINGS_RELPATH = Path("course_settings") / "course_settings.toml"
 
@@ -244,6 +244,8 @@ class UpgradeState:
             else None
         )
         self.term_changed = False
+        #: Other repo files to write when the step is written: path -> new text.
+        self.pending_writes: dict[Path, str] = {}
 
 
 #: A migration edits ``state`` for the step ``v -> v + 1`` and returns
@@ -417,11 +419,30 @@ def _migrate_2_to_3(state: UpgradeState) -> list[str]:
     return lines
 
 
+def _migrate_3_to_4(state: UpgradeState) -> list[str]:
+    """Links inside block snippets become relative to the snippet file.
+
+    Rewrites a snippet link when every file that includes the snippet resolved
+    it to the same existing file; reports the links it cannot convert. See
+    snippet_migration. Stamps the manifests.
+    """
+    from .snippet_migration import migrate_snippet_links
+
+    lines: list[str] = []
+    if read_repo_version(state.repo) < 4:
+        writes, lines = migrate_snippet_links(state.repo)
+        state.pending_writes.update(writes)
+    for path in state.manifests:
+        lines.append(f"Record format version 4 in {path.name}")
+    return lines
+
+
 #: Ordered migrations, keyed by the version they migrate *from*.
 MIGRATIONS: dict[int, Migration] = {
     0: _migrate_0_to_1,
     1: _migrate_1_to_2,
     2: _migrate_2_to_3,
+    3: _migrate_3_to_4,
 }
 
 
@@ -492,6 +513,7 @@ def run_upgrade(
             raise RepoFormatError(f"No migration from format version {version}")
         say(f"Migration {version} -> {version + 1}:")
         state.renames = []
+        state.pending_writes = {}
         for line in migration(state):
             say(f"  {line}")
         if not noop:
@@ -502,6 +524,8 @@ def run_upgrade(
             if state.term_changed and state.term_doc is not None:
                 state.term_path.write_text(tomlkit.dumps(state.term_doc), encoding="utf-8")
                 state.term_changed = False
+            for path, text in state.pending_writes.items():
+                path.write_text(text, encoding="utf-8")
             if repo_version <= version:
                 _set_version(state.settings_doc, version + 1)
                 _write_settings(settings, state.settings_doc)

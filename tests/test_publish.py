@@ -669,3 +669,79 @@ def test_extract_local_refs_awkward_link_shapes(tmp_path):
     }
     for text, expected in cases.items():
         assert publish.extract_local_refs(text, page, tmp_path) == {expected}, text
+
+
+# ---------------------------------------------------------------------------
+# Links inside snippets
+# ---------------------------------------------------------------------------
+
+
+def _snippet_repo(tmp_path, snippet_text):
+    repo = tmp_path / "repo"
+    (repo / "course_settings").mkdir(parents=True)
+    (repo / "course_settings" / "course_settings.toml").write_text(
+        "[course_flags]\nhybrid = false\n"
+    )
+    (repo / "assets").mkdir()
+    (repo / "assets" / "diagram.png").write_bytes(b"png")
+    (repo / "snippets").mkdir()
+    (repo / "snippets" / "policy.md").write_text(snippet_text)
+    (repo / "pages" / "week1").mkdir(parents=True)
+    (repo / "pages" / "week1" / "deep.md").write_text(
+        "---\ntitle: Deep\npublished: true\n---\n\n[x](../../snippets/policy.md)\n"
+    )
+    return repo
+
+
+def test_collect_reachable_follows_links_inside_snippets(tmp_path):
+    repo = _snippet_repo(tmp_path, "![d](../assets/diagram.png)\n")
+    reachable = publish.collect_reachable(repo, {"pages/week1/deep.md"})
+    assert "assets/diagram.png" in reachable
+    assert not any(r.startswith("snippets/") for r in reachable)
+
+
+def test_collect_reachable_skips_snippet_link_in_false_branch(tmp_path):
+    repo = _snippet_repo(
+        tmp_path,
+        "<!-- #if hybrid -->\n![d](../assets/diagram.png)\n<!-- #endif -->\n",
+    )
+    reachable = publish.collect_reachable(
+        repo, {"pages/week1/deep.md"}, flags={"hybrid": False}
+    )
+    assert "assets/diagram.png" not in reachable
+
+
+def _snippet_assignment_repo(tmp_path, snippet_text):
+    """Assignments are nav items, so a deep assignment is staged."""
+    repo = _snippet_repo(tmp_path, snippet_text)
+    (repo / "assignments" / "unit1").mkdir(parents=True)
+    (repo / "assignments" / "unit1" / "hw.md").write_text(
+        "---\ntitle: HW\npublished: true\n---\n\n[x](../../snippets/policy.md)\n"
+    )
+    return repo
+
+
+def test_stage_asset_linked_only_from_snippet(tmp_path):
+    repo = _snippet_assignment_repo(tmp_path, "![d](../assets/diagram.png)\n")
+    staging = tmp_path / "staging"
+    info = publish.stage(repo, staging)
+    assert info["errors"] == []
+    assert "assets/diagram.png" in info["staged_files"]
+    staged_hw = staging / "docs" / "assignments" / "unit1" / "hw.md"
+    assert "![d](../../assets/diagram.png)" in staged_hw.read_text()
+    assert (staged_hw.parent / "../../assets/diagram.png").resolve().exists()
+
+
+def test_run_publish_stops_on_snippet_link_outside_repo(tmp_path, monkeypatch):
+    import pytest
+
+    from tests.conftest import make_current
+
+    repo = _snippet_assignment_repo(tmp_path, "![d](../../assets/diagram.png)\n")
+    make_current(repo)
+    monkeypatch.setattr(publish.importlib.util, "find_spec", lambda name: object())
+    ran = []
+    monkeypatch.setattr(publish.subprocess, "run", lambda *a, **k: ran.append(a))
+    with pytest.raises(ValueError, match="error"):
+        publish.run_publish(repo, tmp_path / "site")
+    assert ran == []

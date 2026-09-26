@@ -77,6 +77,7 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
     - [Combining `-t` and `-s`](#combining--t-and--s)
   - [Removing content (`prune`)](#removing-content-prune)
   - [Checking and repairing the manifest (`fix-manifest`)](#checking-and-repairing-the-manifest-fix-manifest)
+  - [Cleaning Word debris out of Markdown (`fix-markdown`)](#cleaning-word-debris-out-of-markdown-fix-markdown)
   - [Moving and renaming files (`mv`)](#moving-and-renaming-files-mv)
   - [Copying content between courses (`cp`)](#copying-content-between-courses-cp)
   - [Finding unreferenced content](#finding-unreferenced-content)
@@ -329,8 +330,9 @@ per repo.
 ### Naming a course: `COURSE_DIR`, the registry and terms
 
 Every command that acts on a course takes an optional `COURSE_DIR` argument:
-`update`, `publish`, `prune`, `fix-manifest`, `upgrade`, `generate-due-dates`,
-`list-titles`, `find-canvas-orphans`, `find-local-orphans` and `emit-workflow`.
+`update`, `publish`, `prune`, `fix-manifest`, `fix-markdown`, `upgrade`,
+`generate-due-dates`, `list-titles`, `find-canvas-orphans`, `find-local-orphans`
+and `emit-workflow`.
 (`mv` takes file paths and works out the course from them; `import` names a
 directory to create.) A course directory does not have to be a git repo.
 
@@ -931,6 +933,90 @@ name the same file or item. Every problem is listed at once.
 `--force-pair` works on its own, without title matching. Like
 `--pair-canvas-with-local`, it is refused when the manifest records a different
 course unless `--clean` is also given.
+
+---
+
+## Cleaning Word debris out of Markdown (`fix-markdown`)
+
+Text pasted into Canvas from Word (especially Word Online) carries markup that
+survives import as clutter in the Markdown, and sometimes as visible brackets
+on the Canvas page:
+
+```text
+**Tip**: C[heck out our ][Finding Data](https://...)[ and ][Job Searching](https://...)[ ]{.EOP .SCXW142461653 .BCX0 ccp-props="{}"}
+```
+
+`fix-markdown` repairs this in the files already in your repo. It reads the
+repo only; it needs no Canvas access.
+
+```text
+Usage: markdown-to-canvas fix-markdown [OPTIONS] [COURSE_DIR]
+
+Options:
+  --apply  Rewrite the files. Without it, only show what would change.
+```
+
+Without `--apply` it prints every line it would change (old line in red, new
+in green) and writes nothing. With `--apply` it rewrites the files; run
+`update` afterwards to upload them. The line above becomes:
+
+```text
+**Tip**: Check out our [Finding Data](https://...) and [Job Searching](https://...)
+```
+
+It looks at every content file, module, snippet, quiz and question-bank file
+(including question files) and `course_settings/syllabus.md`. Frontmatter and
+fenced code blocks are never changed, and neither are brackets or quotes inside
+`inline code`. What it changes:
+
+- **Word attribute blocks.** A `{...}` block containing a marker only Word
+  writes (`.EOP`, `.SCXW…`, `.BCX…`, `.TextRun`, `ccp-props=…`, and similar)
+  is cut down to its `#id` and `style="…"`, or removed if nothing is left. A
+  span left with no attributes is unwrapped (`[text]{.EOP}` → `text`). Blocks
+  without a Word marker, such as `{class="Button"}` or `{.underline}`, are left
+  alone.
+- **Stray brackets.** In a paragraph that shows the `][` seams above, brackets
+  that are not part of a link, image, styled span, footnote, task box
+  (`- [ ]`) or reference link are removed. Paragraphs without such a seam are
+  not touched, so `a[i][j]` or `[sic]` in ordinary prose stays.
+- **Swapped links.** `[Label][https://url]( and )` becomes
+  `[Label](https://url) and `.
+- **Escaped quotes.** `\'` and `\"` become `'` and `"`, except in code,
+  attribute blocks, link targets and titles, HTML tags and `$math$`. This
+  changes how they look in Canvas: the escaped form renders as a straight quote,
+  the plain form as a curly one (’ “ ”).
+- **Line breaks that do nothing.** A backslash at the end of a line is a line
+  break. One at the end of a paragraph or list item draws nothing and is
+  removed. Breaks in the middle of a paragraph are kept, and so is the break
+  after an image alone in its paragraph (without it the image's alt text would
+  show as a caption).
+- **Empty paragraphs.** Word's empty paragraphs arrive as a line ending in `\`
+  followed by a line holding only `\` (two line breaks, which draw an empty
+  line). In an ordinary paragraph the `\` line becomes a blank line, so the
+  text above and below become separate paragraphs. Inside a list item the `\`
+  line is deleted instead, because a blank line there would give every item in
+  the list paragraph spacing. It is also deleted, rather than split, when a
+  styled span or `**` is still open across it.
+- **Spaces inside bold and italic markers.** `**Scenario: **In` becomes
+  `**Scenario:** In` (the first form shows its asterisks on the page). Markers
+  are paired within each paragraph or list item; one where they do not pair
+  up, or that contains `***` or `\*`, is left alone.
+- **Stacked list markers.** `- - - Identify…` and `1.  1.  Think of…` (a list
+  item holding only another list, which shows a stack of bullets) keep only
+  the last marker, and the lines belonging to it lose the same indentation.
+  The list ends up one or two levels less indented than in Canvas.
+
+- **Horizontal rules.** The 72-dash lines pandoc writes for a horizontal rule
+  become `---`. A dash line directly under text (a heading underline) or
+  touching a table is left alone.
+
+A few things are still left for hand editing, for example a bold heading whose
+closing `**` got separated from it by a literal `\*`. The dry-run output is a
+good place to spot them.
+
+`import` applies the same repairs (everything except the stray-bracket and
+swapped-link passes, which it has no need for since it now unwraps the spans it
+strips), so newly imported courses should not contain this debris.
 
 ---
 
@@ -2561,6 +2647,49 @@ Any Markdown link whose target resolves inside `snippets/` is replaced with the 
 Office hours are Tuesdays 2–4 pm in Building 7, Room 201.
 ```
 
+**Links inside a snippet are written relative to the snippet file**, the same
+way as in any other file, so they work when you click them in your editor.
+When the snippet is pasted into a file, each relative link and image path is
+rewritten to point at the same file from the including file's folder. A snippet
+can therefore be included from files at any depth:
+
+```markdown
+<!-- snippets/lab-header.md -->
+![Lab logo](../assets/lab-logo.png) See the [lab rules](../pages/lab-rules.md).
+```
+
+Included from `pages/week3/lab.md`, this is pasted as
+`![Lab logo](../../assets/lab-logo.png) See the [lab rules](../lab-rules.md).`
+
+The rewriting covers Markdown links and images (including the `<path with
+spaces>` form and link titles) and the `src` of `<img>` and `href` of `<a>` tags
+written as raw HTML. These are pasted unchanged: URLs with a scheme (`https:`,
+`mailto:`, `data:`, ...), `#anchor` links, paths starting with `/`, links that
+contain an inline `$...$` snippet reference, anything inside a fenced code
+block, and the content of inline `$...$` snippets. A relative link that points
+outside the course repo when read from the snippet's folder is an error: `update`
+skips the including file (other files still upload), `update --check-all` exits
+non-zero, and `publish` stops before building the site. Repos created before
+format version 4 wrote snippet links relative to the including files; `upgrade`
+converts them (see [Upgrading a repo](#upgrading-a-repo-upgrade)).
+
+**Snippets can include other snippets**, in either form, up to 10 levels deep.
+A reference inside a snippet is relative to that snippet file:
+
+```markdown
+<!-- snippets/block/footer.md -->
+Questions? Ask [INSTRUCTOR NAME](../inline/instructor_name.md).
+[Grades]($../inline/CANVAS_COURSE_REFERENCE.md$/grades)
+```
+
+Course flags are applied inside every snippet. Deeper nesting, which is what
+happens when a snippet includes itself, is an error that names the chain of
+snippets. A block include pastes the file exactly, including its final newline,
+so a one-word snippet included mid-sentence leaves a line break there, which
+the browser shows as a space (`Ask Mike .`). Save such a snippet without a
+final newline, or include it inline as `$...$`, which strips surrounding
+whitespace.
+
 #### Inline snippets and the `CANVAS_COURSE_REFERENCE` snippet
 
 Snippets can also be embedded *inline* using a dollar-sign-fenced path:
@@ -2853,8 +2982,8 @@ anything on Canvas. If a version differs from the tool's, the command stops and
 changes nothing:
 
 ```text
-Error: This course repo is format version 0 but this tool (markdown-to-canvas 0.2.1) uses format version 3. Run `markdown-to-canvas upgrade` first.
-Error: course_settings/course_settings.toml is format version 4 but this tool (markdown-to-canvas 0.2.1) only understands format version 3. Update markdown-to-canvas.
+Error: This course repo is format version 0 but this tool (markdown-to-canvas 0.2.1) uses format version 4. Run `markdown-to-canvas upgrade` first.
+Error: course_settings/course_settings.toml is format version 5 but this tool (markdown-to-canvas 0.2.1) only understands format version 4. Update markdown-to-canvas.
 ```
 
 A manifest that is older than the repo is named in the message. This happens
@@ -2912,6 +3041,35 @@ table is the empty `default` that migration 1 to 2 added. With several real tabl
 it changes nothing and prints a notice that `--table NAME` is needed. Term files
 you keep outside the repo (for example in `~/.config/markdown-to-canvas/terms/`)
 are not touched, so delete a `relative_table` line from those by hand.
+
+Migration 3 to 4 goes with the change to how links inside snippets are read
+(see [Snippets](#snippets)): they are now relative to the snippet file instead
+of to each file that includes it. For each relative link in a snippet, the
+migration looks at every `.md` file that includes the snippet as a block
+(`.canvasignore`d files included, hidden folders and `snippets/` excluded):
+
+* If every including file that resolved the link to an existing file resolved
+  it to the same one, the link is rewritten to name that file from the
+  snippet's folder, and the change is printed. Including files that resolved
+  the link to nothing were already showing a broken link; the rewrite fixes
+  them too. When the link already names that file from the snippet's folder,
+  nothing changes.
+* If no including file resolved the link to an existing file but it names one
+  from the snippet's folder, it is left as it is.
+* Otherwise (including files resolved it to different existing files, or
+  nothing exists at any of the paths) the link is left as it is and a
+  `NOTICE:` line lists the snippet, the link, and what each including file
+  resolved it to. Fix these by hand.
+
+References to other snippets inside a snippet (`[text](other-snippet.md)` and
+`$other-snippet.md$`) are converted by the same rules. Before format 4 they were
+never expanded; from format 4 they are, relative to the snippet.
+
+A snippet that no file includes is left as it is, with a notice for each link
+that does not name an existing file. Only the rewritten paths change; the rest
+of each snippet file is kept byte for byte. Links inside fenced code blocks and
+the other forms that are never rebased are not touched. Review the result with
+`git diff snippets/`.
 
 `upgrade` also checks that `tab_configuration` is a top-level key. The tool
 only reads it there, so when it is nested under a section

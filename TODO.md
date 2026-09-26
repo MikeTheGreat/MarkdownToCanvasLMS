@@ -194,6 +194,21 @@ distinctions (`pattern_match_question` uses substring matching; Canvas also has
 `fill_in_multiple_blanks_question`) are lost on upload. This is documented in the
 README. Confirm this is the intended mapping or add separate handling.
 
+## `fix-markdown`: Word debris it does not handle yet
+
+- A bare span with no seam next to it still shows its brackets, e.g.
+  `- [ Identify the Cascadia Area of Interest…]` in the College 101 advising
+  assignment. Leading or trailing whitespace inside the brackets is a strong
+  sign of debris (`[sic]` has none), but it is not handled yet.
+- Units with `***` or `\*` are skipped by the emphasis repair, e.g.
+  `**Reflect on Your Career/Industry\**` … `Reflection Questions: **`.
+- A trailing `\` followed on the next line by a new list item is kept, though
+  it probably ends the item; proving that needs block-level parsing (the
+  empty-paragraph pass already handles it when a `\`-only line sits between).
+
+Import also drops `[text]{.underline}`'s class (the id + style policy), so
+`<u>` in Canvas content loses its underline on import.
+
 ## Question banks cannot be uploaded to Canvas
 
 `update` currently validates `question_banks/` and then warns and skips the upload
@@ -401,8 +416,9 @@ When implemented, the suggested approach:
 ## Angle-bracket URL syntax not handled in some Markdown parsers
 
 Markdown allows `[text](<url>)` to wrap a URL in angle brackets (typically used
-for filenames that contain spaces). This is handled in `mv.py` (link rewriting)
-and `publish.py:extract_local_refs` (reachability traversal), but three other
+for filenames that contain spaces). This is handled in `links.py` (link rewriting for `mv` and
+snippet-link rebasing) and `publish.py:extract_local_refs` (reachability
+traversal), but three other
 places that parse raw Markdown link syntax do not strip the brackets and would
 silently fail if a link used this syntax:
 

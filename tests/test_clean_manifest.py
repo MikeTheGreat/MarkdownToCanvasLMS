@@ -98,7 +98,7 @@ def _repo(tmp_path: Path) -> Path:
     (root / "pages" / "other.md").write_text("---\ntitle: Other\n---\n\nNo links.\n")
     (root / "modules" / "week-1.md").write_text("---\ntitle: Week 1\n---\n\n- [Sheet](../assets/sheet.pdf)\n")
     (root / "course_settings" / "course_settings.toml").write_text(
-        'format_version = 3\ndashboard_image = "assets/sheet.pdf"\n'
+        'format_version = 4\ndashboard_image = "assets/sheet.pdf"\n'
     )
     return root
 

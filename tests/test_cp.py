@@ -739,3 +739,15 @@ class TestEndToEnd:
         assoc = course.create_rubric_association.call_args[1]["rubric_association"]
         assert assoc["rubric_id"] == 42
         assert assoc["association_id"] == 98765
+
+
+def test_cp_copies_asset_linked_from_snippet_of_deep_page(tmp_path, dest):
+    src = tmp_path / "deep-src"
+    _write(src, "course_settings/course_settings.toml", 'name = "Src"\n')
+    _write(src, "snippets/policy.md", "![logo](../assets/logo.png)\n")
+    _write(src, "pages/week1/intro.md", "[x](../../snippets/policy.md)\n")
+    _write(src, "assets/logo.png", "x")
+    make_current(src)
+    _cp([src / "pages/week1/intro.md"], dest)
+    assert (dest / "assets/logo.png").exists()
+    assert (dest / "snippets/policy.md").exists()

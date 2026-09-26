@@ -27,11 +27,6 @@ a mention at the end of finished work is too late.
 
 When the user reports an error, first check whether the problem is in the user's input files (e.g., wrong relative paths in their course repo) rather than a bug in this tool's code. If the root cause is in the input files, stop and tell the user before making any code changes.
 
-## Credit yourself as the author
-When the user asks you to create a git commit message please list your 
-contribution as "Authored-By" instead of "Co-Authored-By". Please list
-the user as "Prompted-By", but do not include the user's email (just their name)
-
 ## Never commit to git
 Even if the user asks you to create a git commit message do NOT commit to git.
 Only if the user specifically asks you to commit should you do so; even then you should resume NOT committing to git for all future prompts.
@@ -42,7 +37,7 @@ TODO.md is only for possible future work items. Once a feature is implemented, d
 
 ## Keep the core subcommands in sync
 
-The three most important subcommands are **update**, **import**, **mv** and **publish**. When making changes to any one of them, ensure the same change is reflected in the other two where applicable.
+The four most important subcommands are **update**, **import**, **mv** and **publish**. When making changes to any one of them, ensure the same change is reflected in the other three where applicable.
 
 ## Changing how existing repo files are read: bump the format version
 
@@ -57,10 +52,11 @@ the old version to `repo_format.MIGRATIONS`, with tests. Additive changes that
 older files already satisfy (for example a new optional key) do not need a
 bump. Nothing enforces this mechanically.
 
-## When asked to update documentation, you should normally consider three main files
+## When asked to update documentation, you should normally consider four main files
 - README.md is for notes that humans using the tool will read
 - ARCHTECTURE.md is for notes, mostly for yourself, about the internals of the tool work
 - TODO.md is a list of possible future features.  After changing the code "updating the docs" should include checking to see if anything in TODO.md should be removed or updated.
+- BUGS.md is a list of known bugs that have not been fixed yet. When a bug is fixed, remove its entry. Before working on code, check it for bugs in the area you are changing.
 
 ## User often uses a shell alias of 'gg' which expands to markdown-to-canvas
 
@@ -72,6 +68,7 @@ A tool for managing Canvas LMS course content through Markdown files stored in a
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — full system behaviour, file formats, CLI options, sync algorithm, import subcommand, configuration reference
 - **[TESTING.md](TESTING.md)** — testing strategy, layers, fixtures, and what to assert on
 - **[TODO.md](TODO.md)** — planned and possible future features
+- **[BUGS.md](BUGS.md)** — known bugs not yet fixed
 - **[todo/RUBRIC_ISSUES.md](todo/RUBRIC_ISSUES.md)** — measured Canvas rubric behaviour (soft-deletion, copy-on-edit forking, association rules) and the open rubric issues. Read this before changing anything rubric-related; it exists so the live-Canvas experiments don't have to be repeated
 
 ## Key Design Decisions

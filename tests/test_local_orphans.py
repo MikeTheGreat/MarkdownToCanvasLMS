@@ -527,3 +527,19 @@ class TestPrintReport:
 
         assert "Note:" in out
         assert "No unreferenced local files found." in out
+
+
+def test_asset_linked_from_snippet_included_at_other_depth(repo):
+    """A snippet link is read relative to the snippet, both when the snippet
+    file is scanned and when it is pasted into a deeper includer."""
+    _write(repo, "snippets/policy.md", "![logo](../assets/logo.png)\n")
+    _write(repo, "pages/week1/intro.md", "[x](../../snippets/policy.md)\n")
+    _write(repo, "modules/m.md", "- [Intro](../pages/week1/intro.md)\n")
+    _write(repo, "assets/logo.png", "x")
+    make_current(repo)
+    report = find_local_orphans(repo)
+    assert report.orphans == []
+    assert report.errors == []
+    assert sorted(report.referenced["assets/logo.png"]) == [
+        "pages/week1/intro.md", "snippets/policy.md",
+    ]

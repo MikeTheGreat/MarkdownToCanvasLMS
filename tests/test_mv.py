@@ -385,6 +385,53 @@ class TestTransformLinks:
         assert "(new.md " in result
         assert "old.md" not in result
 
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "data:image/png;base64,iVBORw0KGgo=",
+            "tel:+15555550100",
+            "HTTPS://example.edu/x",
+            "ftp://example.edu/x",
+            "/absolute/path.png",
+            "#section",
+        ],
+    )
+    def test_urls_with_scheme_or_root_are_unchanged_when_file_moves(self, url: str) -> None:
+        content = f"![x]({url}) and <img src=\"{url}\">"
+        assert transform_links(content, "pages", "pages/sub", {}) == content
+
+    def test_fragment_kept_when_target_moves(self) -> None:
+        content = "[FAQ](faq.md#late-work)"
+        path_map = {"pages/faq.md": "pages/help/faq.md"}
+        result = transform_links(content, "pages", "pages", path_map)
+        assert result == "[FAQ](help/faq.md#late-work)"
+
+    def test_fragment_kept_with_percent_encoding(self) -> None:
+        content = "[FAQ](My%20FAQ.md#late-work)"
+        result = transform_links(content, "pages", "pages/sub", {})
+        assert result == "[FAQ](../My%20FAQ.md#late-work)"
+
+    def test_on_escape_called_for_link_outside_repo(self) -> None:
+        escaped: list[str] = []
+        content = "![x](../../x.png) ![y](../assets/y.png)"
+        result = transform_links(
+            content, "snippets", "pages/week1", {}, on_escape=escaped.append
+        )
+        assert escaped == ["../../x.png"]
+        assert "![x](../../x.png)" in result
+        assert "![y](../../assets/y.png)" in result
+
+    def test_escaping_link_unchanged_without_callback(self) -> None:
+        content = "![x](../../x.png)"
+        assert transform_links(content, "snippets", "pages/week1", {}) == content
+
+    def test_inline_snippet_refs_can_be_left_alone(self) -> None:
+        content = "$inline/C.md$"
+        assert transform_links(
+            content, "snippets", "pages", {}, rewrite_inline_snippets=False
+        ) == content
+        assert transform_links(content, "snippets", "pages", {}) == "$../snippets/inline/C.md$"
+
 
 # ---------------------------------------------------------------------------
 # compute_manifest_updates
@@ -1178,3 +1225,37 @@ class TestMvMultipleManifests:
 
         out = capsys.readouterr().out
         assert ".manifest-canvas-sec-a.toml, .manifest-canvas-sec-b.toml" in out
+
+
+# ---------------------------------------------------------------------------
+# Links inside snippets are relative to the snippet file
+# ---------------------------------------------------------------------------
+
+
+class TestSnippetLinks:
+    def test_moving_includer_leaves_snippet_alone(self, tmp_path: Path) -> None:
+        from markdown_to_canvas.convert import preprocess_snippets
+
+        snippet_text = "![logo](../assets/logo.png)\n"
+        repo = _make_repo(tmp_path, {
+            "snippets/policy.md": snippet_text,
+            "pages/a.md": "[x](../snippets/policy.md)\n",
+            "pages/unit1/.keep": "",
+            "assets/logo.png": "x",
+        })
+        run_mv(repo / "pages/a.md", repo / "pages/unit1/a.md")
+
+        assert (repo / "snippets/policy.md").read_text() == snippet_text
+        moved = repo / "pages/unit1/a.md"
+        assert moved.read_text() == "[x](../../snippets/policy.md)\n"
+        pasted = preprocess_snippets(moved.read_text(), moved, repo / "snippets")
+        assert pasted.strip() == "![logo](../../assets/logo.png)"
+
+    def test_moving_snippet_target_rewrites_snippet_link(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {
+            "snippets/policy.md": "![logo](../assets/logo.png)\n",
+            "assets/logo.png": "x",
+            "assets/img/.keep": "",
+        })
+        run_mv(repo / "assets/logo.png", repo / "assets/img/logo.png")
+        assert (repo / "snippets/policy.md").read_text() == "![logo](../assets/img/logo.png)\n"

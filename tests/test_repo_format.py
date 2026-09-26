@@ -519,7 +519,7 @@ def test_migration_2_to_3_drops_an_empty_default_that_comes_last(tmp_path):
 
 def test_migration_2_to_3_keeps_everything_else_byte_for_byte(tmp_path):
     path = _v2_repo(tmp_path, EMPTY_DEFAULT + QUARTER)
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=3)
     text = path.read_text()
     head = "format_version = 3\n"
     # upgraded_by is added after format_version by every upgrade; strip that line.
@@ -613,12 +613,11 @@ def test_migration_2_to_3_noop_writes_neither_file(tmp_path, capsys):
 def test_migration_2_to_3_stamps_manifests_and_the_version(tmp_path):
     path = _v2_repo(tmp_path, QUARTER)
     manifest = _manifest(tmp_path, version=2, extra={"a.md": {"canvas_id": 1}})
-    rf.run_upgrade(tmp_path, today=date(2026, 9, 20))
+    rf.run_upgrade(tmp_path, target_version=3, today=date(2026, 9, 20))
     data = tomllib.loads(path.read_text())
     assert data["format_version"] == 3
     assert data["upgraded_by"] == [f"{rf.tool_version()} on 2026-09-20: 2 -> 3"]
     assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 3}
-    assert rf.check_repo_format(tmp_path) is None
 
 
 def test_migration_2_to_3_skips_a_settings_file_already_at_3(tmp_path):
@@ -626,7 +625,7 @@ def test_migration_2_to_3_skips_a_settings_file_already_at_3(tmp_path):
     path = _settings(tmp_path, "format_version = 3\n" + QUARTER)
     manifest = _manifest(tmp_path, version=2, extra={"a.md": {"canvas_id": 1}})
     before = path.read_bytes()
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=3)
     assert path.read_bytes() == before
     assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 3}
 
@@ -635,7 +634,7 @@ def test_migration_1_through_3_in_one_run_collapses_the_two_tables(tmp_path):
     # A v1 repo gets an empty `default` from 1 -> 2 only when it has no section;
     # one that already has a lone named table just has it renamed.
     path = _settings(tmp_path, "format_version = 1\n" + QUARTER)
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=3)
     assert list(_tables(path)) == ["default"]
     assert tomllib.loads(path.read_text())["format_version"] == 3
 
@@ -652,7 +651,270 @@ def test_migration_1_through_3_in_one_run_collapses_the_two_tables(tmp_path):
 )
 def test_migration_2_to_3_lone_table_rename_changes_only_the_names(tmp_path, table):
     path = _v2_repo(tmp_path, table)
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=3)
     lines = [ln for ln in path.read_text().splitlines(keepends=True) if not ln.startswith("upgraded_by")]
     expected = (TOP + LATE + table).replace("format_version = 2\n", "format_version = 3\n")
     assert "".join(lines) == expected.replace("quarter11", "default")
+
+
+# --- pending_writes --------------------------------------------------------
+
+
+def _write_file_step(state):
+    state.pending_writes[state.repo / "notes.md"] = "new\n"
+    return ["write notes.md"]
+
+
+def test_pending_writes_are_written(tmp_path):
+    _settings(tmp_path, "x = 1\n")
+    (tmp_path / "notes.md").write_text("old\n")
+    rf.run_upgrade(tmp_path, migrations={0: _write_file_step}, target_version=1)
+    assert (tmp_path / "notes.md").read_text() == "new\n"
+
+
+def test_pending_writes_skipped_with_noop(tmp_path, capsys):
+    _settings(tmp_path, "x = 1\n")
+    (tmp_path / "notes.md").write_text("old\n")
+    rf.run_upgrade(tmp_path, migrations={0: _write_file_step}, target_version=1, noop=True)
+    assert (tmp_path / "notes.md").read_text() == "old\n"
+    assert "write notes.md" in capsys.readouterr().out
+
+
+# --- migration 3 -> 4: snippet links become snippet-relative ---------------
+
+
+def _v3_repo(tmp_path, files):
+    _settings(tmp_path, "format_version = 3\n")
+    for rel, text in files.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return tmp_path
+
+
+def _snippet(tmp_path, rel="snippets/policy.md"):
+    return (tmp_path / rel).read_text()
+
+
+def test_migration_3_to_4_rewrites_link_written_for_deeper_includers(tmp_path, capsys):
+    _v3_repo(tmp_path, {
+        "snippets/policy.md": "Intro.\n\n![](../../assets/logo.png)\n\nEnd.\n",
+        "pages/week1/a.md": "[x](../../snippets/policy.md)\n",
+        "pages/week2/b.md": "---\ntitle: B\n---\n\n[x](../../snippets/policy.md)\n",
+        "assets/logo.png": "x",
+    })
+    manifest = _manifest(tmp_path, version=3, extra={"a.md": {"canvas_id": 1}})
+    rf.run_upgrade(tmp_path)
+    assert _snippet(tmp_path) == "Intro.\n\n![](../assets/logo.png)\n\nEnd.\n"
+    assert tomllib.loads(
+        (tmp_path / "course_settings/course_settings.toml").read_text()
+    )["format_version"] == 4
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 4}
+    out = capsys.readouterr().out
+    assert "Migration 3 -> 4" in out
+    assert "Rewrite link in snippets/policy.md: ../../assets/logo.png -> ../assets/logo.png" in out
+
+
+def test_migration_3_to_4_leaves_same_depth_snippet_alone(tmp_path, capsys):
+    text = "[s](../pages/syllabus.md) ![](../assets/a.png)\n"
+    _v3_repo(tmp_path, {
+        "snippets/policy.md": text,
+        "pages/a.md": "[x](../snippets/policy.md)\n",
+        "assignments/hw.md": "[x](../snippets/policy.md)\n",
+        "pages/syllabus.md": "s",
+        "assets/a.png": "x",
+    })
+    rf.run_upgrade(tmp_path)
+    assert _snippet(tmp_path) == text
+    assert "snippets/policy.md" not in capsys.readouterr().out
+
+
+def test_migration_3_to_4_snippet_reading_already_works(tmp_path, capsys):
+    """Rule 3: the snippet target exists and no includer names another file."""
+    text = "![](../assets/x.png)\n"
+    _v3_repo(tmp_path, {
+        "snippets/policy.md": text,
+        "pages/a.md": "[x](../snippets/policy.md)\n",
+        "pages/unit1/b.md": "[x](../../snippets/policy.md)\n",
+        "assets/x.png": "x",
+    })
+    rf.run_upgrade(tmp_path)
+    assert _snippet(tmp_path) == text
+    assert "NOTICE" not in capsys.readouterr().out
+
+
+def test_migration_3_to_4_includers_resolve_to_different_files(tmp_path, capsys):
+    text = "![](img/x.png)\n"
+    _v3_repo(tmp_path, {
+        "snippets/policy.md": text,
+        "pages/a.md": "[x](../snippets/policy.md)\n",
+        "pages/unit1/b.md": "[x](../../snippets/policy.md)\n",
+        "pages/img/x.png": "x",
+        "pages/unit1/img/x.png": "x",
+    })
+    rf.run_upgrade(tmp_path)
+    assert _snippet(tmp_path) == text
+    out = capsys.readouterr().out
+    assert "NOTICE: snippets/policy.md: link img/x.png left unchanged" in out
+    assert "pages/a.md -> pages/img/x.png" in out
+    assert "pages/unit1/b.md -> pages/unit1/img/x.png" in out
+
+
+def test_migration_3_to_4_includer_reading_wins(tmp_path):
+    _v3_repo(tmp_path, {
+        "snippets/policy.md": "![](../assets/x.png)\n",
+        "pages/unit1/a.md": "[x](../../snippets/policy.md)\n",
+        "assets/x.png": "x",
+        "pages/assets/x.png": "x",
+    })
+    rf.run_upgrade(tmp_path)
+    assert _snippet(tmp_path) == "![](../pages/assets/x.png)\n"
+
+
+def test_migration_3_to_4_nothing_resolves(tmp_path, capsys):
+    text = "![](../../gone.png)\n"
+    _v3_repo(tmp_path, {
+        "snippets/policy.md": text,
+        "pages/a.md": "[x](../snippets/policy.md)\n",
+    })
+    rf.run_upgrade(tmp_path)
+    assert _snippet(tmp_path) == text
+    out = capsys.readouterr().out
+    assert "NOTICE: snippets/policy.md: link ../../gone.png left unchanged" in out
+    assert "pages/a.md -> (nothing)" in out
+
+
+def test_migration_3_to_4_unused_snippet_with_broken_link(tmp_path, capsys):
+    text = "![](../assets/gone.png) ![](../assets/here.png)\n"
+    _v3_repo(tmp_path, {"snippets/old.md": text, "assets/here.png": "x"})
+    rf.run_upgrade(tmp_path)
+    assert _snippet(tmp_path, "snippets/old.md") == text
+    out = capsys.readouterr().out
+    assert "NOTICE: snippets/old.md (included by no file): link ../assets/gone.png" in out
+    assert "here.png" not in out
+
+
+def test_migration_3_to_4_ignored_includer_counts(tmp_path, capsys):
+    text = "![](img/x.png)\n"
+    _v3_repo(tmp_path, {
+        ".canvasignore": "pages/drafts/\n",
+        "snippets/policy.md": text,
+        "pages/a.md": "[x](../snippets/policy.md)\n",
+        "pages/drafts/d.md": "[x](../../snippets/policy.md)\n",
+        "pages/img/x.png": "x",
+        "pages/drafts/img/x.png": "x",
+    })
+    rf.run_upgrade(tmp_path)
+    assert _snippet(tmp_path) == text
+    assert "pages/drafts/d.md -> pages/drafts/img/x.png" in capsys.readouterr().out
+
+
+def test_migration_3_to_4_hidden_folders_frontmatter_and_inline_refs_do_not_count(tmp_path):
+    """Only block includes outside hidden folders count; a snippet referenced in
+    any other way is treated as included by no file."""
+    text = "![](../../assets/x.png)\n"
+    _v3_repo(tmp_path, {
+        "snippets/policy.md": text,
+        ".hidden/deep/a.md": "[x](../../snippets/policy.md)\n",
+        "pages/week1/b.md": "[PASTE_SNIPPET_INTO_FRONTMATTER](../../snippets/policy.md)\n"
+                            "$../../snippets/policy.md$\n"
+                            "```\n[x](../../snippets/policy.md)\n```\n",
+        "assets/x.png": "x",
+    })
+    rf.run_upgrade(tmp_path)
+    assert _snippet(tmp_path) == text
+
+
+def test_migration_3_to_4_keeps_other_bytes_and_skips_fences_and_absolute_urls(tmp_path):
+    text = (
+        "# Heading\n\n"
+        '<img src="../../assets/x.png" alt="A">  [site](https://example.edu/x)\n'
+        "[faq](<../../pages/My FAQ.md#late> \"FAQ\") [t](#top)\n\n"
+        "```\n![](../../assets/x.png)\n```\n"
+        "[enc](../../assets/My%20File.pdf)\n"
+    )
+    _v3_repo(tmp_path, {
+        "snippets/policy.md": text,
+        "pages/week1/a.md": "[x](../../snippets/policy.md)\n",
+        "assets/x.png": "x",
+        "assets/My File.pdf": "x",
+        "pages/My FAQ.md": "faq",
+    })
+    rf.run_upgrade(tmp_path)
+    assert _snippet(tmp_path) == (
+        "# Heading\n\n"
+        '<img src="../assets/x.png" alt="A">  [site](https://example.edu/x)\n'
+        "[faq](<../pages/My FAQ.md#late> \"FAQ\") [t](#top)\n\n"
+        "```\n![](../../assets/x.png)\n```\n"
+        "[enc](../assets/My%20File.pdf)\n"
+    )
+
+
+def test_migration_3_to_4_noop_writes_nothing(tmp_path, capsys):
+    _v3_repo(tmp_path, {
+        "snippets/policy.md": "![](../../assets/logo.png)\n",
+        "pages/week1/a.md": "[x](../../snippets/policy.md)\n",
+        "assets/logo.png": "x",
+    })
+    before = _snippet(tmp_path)
+    rf.run_upgrade(tmp_path, noop=True)
+    assert _snippet(tmp_path) == before
+    assert "Rewrite link in snippets/policy.md" in capsys.readouterr().out
+
+
+def test_migration_3_to_4_skips_settings_already_at_4(tmp_path):
+    """A manifest lagging a current settings file: only the manifest is stamped."""
+    _settings(tmp_path, "format_version = 4\n")
+    (tmp_path / "snippets").mkdir()
+    (tmp_path / "snippets/policy.md").write_text("![](../../assets/logo.png)\n")
+    (tmp_path / "pages/week1").mkdir(parents=True)
+    (tmp_path / "pages/week1/a.md").write_text("[x](../../snippets/policy.md)\n")
+    (tmp_path / "assets").mkdir()
+    (tmp_path / "assets/logo.png").write_text("x")
+    manifest = _manifest(tmp_path, version=3)
+    rf.run_upgrade(tmp_path)
+    assert _snippet(tmp_path) == "![](../../assets/logo.png)\n"
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 4}
+
+
+def test_migration_3_to_4_working_includers_win_over_broken_ones(tmp_path, capsys):
+    """One includer found the file, another found nothing (already broken):
+    rewrite to the working reading, which fixes the broken includer too."""
+    _v3_repo(tmp_path, {
+        "snippets/block/front.md": "[oh](../instructor_info/office-hours.md)\n",
+        "pages/landing.md": "[x](../snippets/block/front.md)\n",
+        "pages/week-1/home.md": "[x](../../snippets/block/front.md)\n",
+        "pages/instructor_info/office-hours.md": "oh",
+    })
+    rf.run_upgrade(tmp_path)
+    assert _snippet(tmp_path, "snippets/block/front.md") == (
+        "[oh](../../pages/instructor_info/office-hours.md)\n"
+    )
+    assert "NOTICE" not in capsys.readouterr().out
+
+
+def test_migration_3_to_4_converts_refs_to_other_snippets(tmp_path):
+    """Nested block and inline refs were never expanded before format 4; they
+    were written for the includers and now resolve from the snippet."""
+    _v3_repo(tmp_path, {
+        "snippets/block/weekly/front.md": (
+            "Hi [NAME](../../snippets/inline/name.md)! "
+            "[Syllabus]($../../snippets/inline/C.md$/syllabus)\n"
+        ),
+        "snippets/inline/name.md": "Mike",  # block include pastes it verbatim
+        "snippets/inline/C.md": "https://x.edu/courses/1\n",
+        "pages/week-1/home.md": "[x](../../snippets/block/weekly/front.md)\n",
+        "pages/landing.md": "[x](../snippets/block/weekly/front.md)\n",
+    })
+    rf.run_upgrade(tmp_path)
+    migrated = _snippet(tmp_path, "snippets/block/weekly/front.md")
+    assert migrated == (
+        "Hi [NAME](../../inline/name.md)! "
+        "[Syllabus]($../../inline/C.md$/syllabus)\n"
+    )
+    from markdown_to_canvas.convert import preprocess_snippets
+    for includer in ("pages/week-1/home.md", "pages/landing.md"):
+        path = tmp_path / includer
+        assert preprocess_snippets(
+            path.read_text(), path, tmp_path / "snippets"
+        ).strip() == "Hi Mike! [Syllabus](https://x.edu/courses/1/syllabus)"

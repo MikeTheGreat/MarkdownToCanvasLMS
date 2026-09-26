@@ -142,7 +142,7 @@ def test_old_repo_is_refused(tmp_path):
     root = _repo(tmp_path)
     _write(
         root / "course_settings" / "course_settings.toml",
-        _settings_text(root).replace("format_version = 3", "format_version = 1"),
+        _settings_text(root).replace("format_version = 4", "format_version = 1"),
     )
     with pytest.raises(RepoFormatError):
         gd.plan_generation(root, _term(tmp_path))

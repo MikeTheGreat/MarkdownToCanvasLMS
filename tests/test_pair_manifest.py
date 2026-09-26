@@ -316,7 +316,7 @@ def test_apply_writes_entries_in_the_existing_format() -> None:
 
 def _repo(tmp_path: Path) -> Path:
     root = tmp_path / "course"
-    _write(root, "course_settings/course_settings.toml", "format_version = 3\n")
+    _write(root, "course_settings/course_settings.toml", "format_version = 4\n")
     _write(root, "course_settings/canvas.toml", f'base_url = "{BASE}"\ncourse_id = 200\n')
     _write(root, "pages/intro.md", "---\ntitle: Intro\n---\n")
     _write(root, "pages/lab3.md", "---\ntitle: 'Lab 3: Loops'\n---\n")

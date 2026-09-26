@@ -120,7 +120,9 @@ def test_omitted_argument_outside_a_course_asks_for_it(home, unrelated):
 
 
 # The commands that used to default to "." now walk up like the others.
-@pytest.mark.parametrize("command", ["find-local-orphans", "list-titles", "upgrade"])
+@pytest.mark.parametrize(
+    "command", ["find-local-orphans", "list-titles", "upgrade", "fix-markdown"]
+)
 def test_walk_up_commands_work_from_a_subdirectory(command, home, tmp_path, monkeypatch):
     course = make_course(tmp_path)
     monkeypatch.chdir(course / "pages")
@@ -140,7 +142,8 @@ def test_emit_workflow_walks_up_and_by_key(home, tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "command", ["find-local-orphans", "list-titles", "upgrade", "fix-manifest"]
+    "command",
+    ["find-local-orphans", "list-titles", "upgrade", "fix-manifest", "fix-markdown"],
 )
 def test_key_works_for_more_commands(command, home, tmp_path, unrelated):
     course = make_course(tmp_path)
@@ -265,7 +268,7 @@ def test_the_manifest_follows_the_entry_config(home, tmp_path, unrelated):
 # ---------------------------------------------------------------------------
 
 COURSE_COMMANDS = [
-    "update", "publish", "prune", "fix-manifest", "upgrade", "generate-due-dates",
+    "update", "publish", "prune", "fix-manifest", "fix-markdown", "upgrade", "generate-due-dates",
     "list-titles", "find-canvas-orphans", "find-local-orphans", "emit-workflow", "cp",
 ]
 

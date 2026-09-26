@@ -6,9 +6,18 @@ import re
 import subprocess
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 import pypandoc
 import yaml
+
+from .links import (
+    is_relative_path_url,
+    resolve_repo_relative,
+    split_suffix,
+    split_url_title,
+    transform_links,
+)
 
 _SNIPPET_LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
 
@@ -112,6 +121,11 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
     return yaml.safe_load(text[4:end]) or {}, text[end + 5 :]
 
 
+#: How deep snippets may include snippets before expansion stops with an error.
+#: A snippet that (directly or indirectly) includes itself hits this limit.
+MAX_SNIPPET_DEPTH = 10
+
+
 def preprocess_snippets(
     text: str,
     source_file: Path,
@@ -133,19 +147,23 @@ def preprocess_snippets(
        the snippets directory.  The full file content replaces the link.
        Useful for reusable policy paragraphs, office-hour blocks, etc.
 
+    Snippets may include snippets, in either form. A reference inside a
+    snippet is relative to that snippet file, and so are its links: a block
+    snippet's links are rebased onto the file it is pasted into. Nesting
+    deeper than ``MAX_SNIPPET_DEPTH`` is an error and that reference is left
+    unexpanded (this is what stops a snippet that includes itself).
+
     When ``flags`` is given, each snippet's content has its course-flag
     conditionals (#if/#elif/#else/#endif) evaluated before insertion; a
     snippet whose directives error contributes an error and the reference is
     left unexpanded, matching the other snippet-error behaviors.
-
-    Nested snippet includes (a snippet that links to another snippet) are not
-    expanded; an error is printed and the inner link is left as-is.
     """
     # Local import: conditionals.py imports split_fenced_segments/warn from
     # this module, so a top-level import here would be circular.
     from .conditionals import apply_conditionals
 
     resolved_snippets_dir = snippets_dir.resolve()
+    repo_root = resolved_snippets_dir.parent
 
     try:
         rel_source = source_file.relative_to(snippets_dir.parent)
@@ -155,73 +173,135 @@ def preprocess_snippets(
     def _report_error(msg: str) -> None:
         warn(msg, errors)
 
-    def _load_snippet(link_target: str, snippet_ref: str, is_inline: bool) -> tuple[str, Path] | None:
-        """Resolve link_target to a snippet file. Returns (content, path) or None."""
-        target_path = (source_file.parent / link_target).resolve()
-        if not target_path.is_relative_to(resolved_snippets_dir):
-            if is_inline or "snippets" in Path(link_target).parts:
+    def _desc(path: Path) -> str:
+        try:
+            return path.relative_to(repo_root).as_posix()
+        except ValueError:
+            return path.name
+
+    def _dir_of(path: Path) -> str | None:
+        """Repo-relative folder of path; None when it is not inside the repo."""
+        try:
+            return path.resolve().parent.relative_to(repo_root).as_posix()
+        except ValueError:
+            return None
+
+    def _expand_text(text: str, file: Path, chain: tuple[Path, ...]) -> str:
+        """Expand the snippet refs in text, which is the content of ``file``
+        (the including file, or a snippet at depth ``len(chain)``)."""
+        where = rel_source if not chain else _desc(file)
+
+        def _load_snippet(
+            link_target: str, snippet_ref: str, is_inline: bool
+        ) -> tuple[str, Path] | None:
+            """Resolve link_target to a snippet file and expand it. Returns
+            (content, path) or None to leave the reference as written."""
+            if not is_relative_path_url(link_target):
+                return None
+            target_path = (file.parent / link_target).resolve()
+            if not target_path.is_relative_to(resolved_snippets_dir):
+                if is_inline or "snippets" in Path(link_target).parts:
+                    _report_error(
+                        f"ERROR: {where}: snippet path {snippet_ref} "
+                        f"resolves outside the snippets directory — check that the "
+                        f"relative path is correct for the file's current location"
+                    )
+                return None
+            if not target_path.exists():
+                _report_error(f"ERROR: snippet not found: {target_path}")
+                return None
+            if len(chain) >= MAX_SNIPPET_DEPTH:
+                path = " -> ".join(_desc(p) for p in (*chain, target_path))
                 _report_error(
-                    f"ERROR: {rel_source}: snippet path {snippet_ref} "
-                    f"resolves outside the snippets directory — check that the "
-                    f"relative path is correct for the file's current location"
+                    f"ERROR: {rel_source}: snippets nested more than "
+                    f"{MAX_SNIPPET_DEPTH} levels deep ({path}) — check for a "
+                    f"snippet that includes itself"
                 )
+                return None
+            content = target_path.read_text()
+            if flags is not None:
+                content = apply_conditionals(content, flags, _desc(target_path), errors)
+                if content is None:
+                    return None  # directive error reported; leave the ref unexpanded
+            content = _expand_text(content, target_path, (*chain, target_path))
+            return content, target_path
+
+        def _replace_inline(m: re.Match) -> str:
+            """Expand a $path.md$ inline snippet ref (content is stripped)."""
+            result = _load_snippet(m.group(1), m.group(0), is_inline=True)
+            if result is None:
+                return m.group(0)
+            content, _ = result
+            return content.strip()
+
+        def _replace(m: re.Match) -> str:
+            link_target, _title = split_url_title(m.group(2))
+            link_target = link_target.strip()
+            if link_target.startswith("<") and link_target.endswith(">"):
+                link_target = link_target[1:-1]
+            result = _load_snippet(link_target, m.group(0), is_inline=False)
+            if result is None:
+                return m.group(0)
+            content, target_path = result
+            return _rebase_snippet_links(content, target_path, file)
+
+        def _expand(segment: str) -> str:
+            # Pass 1: expand $path.md$ inline snippet refs (stripped, safe for URLs)
+            segment = _INLINE_SNIPPET_RE.sub(_replace_inline, segment)
+            # Pass 2: expand [text](snippet_path) block snippet links
+            return _SNIPPET_LINK_RE.sub(_replace, segment)
+
+        # Snippet refs inside fenced code blocks are literal example text.
+        return apply_outside_fences(text, _expand)
+
+    def _rebase_snippet_links(content: str, snippet_path: Path, into: Path) -> str:
+        """Re-express the snippet's links (written relative to the snippet
+        file) relative to ``into``, the file it is pasted into."""
+        includer_dir = _dir_of(into)
+        if includer_dir is None:
+            return content
+        snippet_dir = snippet_path.parent.relative_to(repo_root).as_posix()
+        snippet_desc = _desc(snippet_path)
+
+        def _on_escape(url: str) -> None:
+            _report_error(
+                f"ERROR: {rel_source}: snippet {snippet_desc} links {url}, which "
+                f"points outside the course repo from the snippet's folder — "
+                f"links in a snippet are relative to the snippet file"
+            )
+
+        def _keep_if_same_target(url: str) -> str | None:
+            # A link that already names the same file from the includer (an
+            # includer at the snippet's depth) is pasted exactly as written.
+            path = unquote(split_suffix(url)[0])
+            from_snippet = resolve_repo_relative(snippet_dir, path)
+            if from_snippet is not None and from_snippet == resolve_repo_relative(
+                includer_dir, path
+            ):
+                return url
             return None
-        if not target_path.exists():
-            _report_error(f"ERROR: snippet not found: {target_path}")
-            return None
-        content = target_path.read_text()
-        if flags is not None:
-            try:
-                snippet_desc = target_path.relative_to(
-                    resolved_snippets_dir.parent
-                ).as_posix()
-            except ValueError:
-                snippet_desc = target_path.name
-            content = apply_conditionals(content, flags, snippet_desc, errors)
-            if content is None:
-                return None  # directive error reported; leave the ref unexpanded
-        return content, target_path
 
-    def _replace_inline(m: re.Match) -> str:
-        """Expand a $path.md$ inline snippet ref (content is stripped)."""
-        result = _load_snippet(m.group(1), m.group(0), is_inline=True)
-        if result is None:
-            return m.group(0)
-        content, _ = result
-        return content.strip()
+        return apply_outside_fences(
+            content,
+            lambda seg: transform_links(
+                seg, snippet_dir, includer_dir, {},
+                rewrite_inline_snippets=False, on_escape=_on_escape,
+                url_map=_keep_if_same_target,
+            ),
+        )
 
-    def _replace(m: re.Match) -> str:
-        link_target = m.group(2)
-        result = _load_snippet(link_target, m.group(0), is_inline=False)
-        if result is None:
-            return m.group(0)
-        content, target_path = result
-        for inner_m in _SNIPPET_LINK_RE.finditer(content):
-            inner_path = (target_path.parent / inner_m.group(2)).resolve()
-            if inner_path.is_relative_to(resolved_snippets_dir):
-                print(
-                    f"  ERROR: nested snippet include not supported: "
-                    f"{inner_m.group(2)} inside {target_path.name}"
-                )
-        return content
-
-    def _expand(segment: str) -> str:
-        # Pass 1: expand $path.md$ inline snippet refs (stripped, safe for URLs)
-        segment = _INLINE_SNIPPET_RE.sub(_replace_inline, segment)
-        # Pass 2: expand [text](snippet_path) block snippet links
-        return _SNIPPET_LINK_RE.sub(_replace, segment)
-
-    # Snippet refs inside fenced code blocks are literal example text.
-    return apply_outside_fences(text, _expand)
+    return _expand_text(text, source_file, ())
 
 
 def find_referenced_snippets(text: str, source_file: Path, snippets_dir: Path) -> set[Path]:
-    """Return the set of existing snippet files referenced anywhere in text.
+    """Return the set of existing snippet files referenced anywhere in text,
+    including the snippets those snippets reference (at any depth).
 
     For staleness checks only: resolves every ``$path.md$`` / ``[text](path)``
     candidate (this also catches ``PASTE_SNIPPET_INTO_FRONTMATTER`` references,
     which use the same ``[text](path)`` syntax) and keeps the ones that land
-    inside ``snippets_dir`` and exist. Unlike ``preprocess_snippets`` /
+    inside ``snippets_dir`` and exist; a reference inside a snippet is resolved
+    from that snippet's folder. Unlike ``preprocess_snippets`` /
     ``expand_frontmatter_snippets``, this never reports errors — it's a
     passive probe, not part of the expansion pipeline. Refs inside fenced
     code blocks are ignored, matching what expansion does.
@@ -229,18 +309,35 @@ def find_referenced_snippets(text: str, source_file: Path, snippets_dir: Path) -
     resolved_snippets_dir = snippets_dir.resolve()
     found: set[Path] = set()
 
-    def _maybe_add(link_target: str) -> None:
-        target_path = (source_file.parent / link_target).resolve()
-        if target_path.is_relative_to(resolved_snippets_dir) and target_path.exists():
-            found.add(target_path)
+    def _scan(text: str, file: Path) -> None:
+        def _maybe_add(link_target: str) -> None:
+            if not is_relative_path_url(link_target):
+                return
+            target_path = (file.parent / link_target).resolve()
+            if (
+                target_path.is_relative_to(resolved_snippets_dir)
+                and target_path.is_file()
+                and target_path not in found
+            ):
+                found.add(target_path)
+                try:
+                    _scan(target_path.read_text(), target_path)
+                except (OSError, UnicodeDecodeError):
+                    pass
 
-    for is_fenced, seg in split_fenced_segments(text):
-        if is_fenced:
-            continue
-        for m in _INLINE_SNIPPET_RE.finditer(seg):
-            _maybe_add(m.group(1))
-        for m in _SNIPPET_LINK_RE.finditer(seg):
-            _maybe_add(m.group(2))
+        for is_fenced, seg in split_fenced_segments(text):
+            if is_fenced:
+                continue
+            for m in _INLINE_SNIPPET_RE.finditer(seg):
+                _maybe_add(m.group(1))
+            for m in _SNIPPET_LINK_RE.finditer(seg):
+                target, _title = split_url_title(m.group(2))
+                target = target.strip()
+                if target.startswith("<") and target.endswith(">"):
+                    target = target[1:-1]
+                _maybe_add(target)
+
+    _scan(text, source_file)
     return found
 
 

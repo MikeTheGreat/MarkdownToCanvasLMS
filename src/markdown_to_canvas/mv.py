@@ -8,12 +8,12 @@ import subprocess
 import tomllib
 import uuid
 from pathlib import Path, PurePosixPath
-from urllib.parse import quote, unquote
 
 import tomlkit
 
 from . import manifest as manifest_lib
 from . import repo_format, toml_write
+from .links import transform_links  # re-exported: mv's public API before links.py
 from .config import find_repo_root  # re-exported: mv's public API since before the move
 
 _CONTENT_TYPE_DIRS = {
@@ -21,19 +21,6 @@ _CONTENT_TYPE_DIRS = {
     "assets", "snippets", "modules", "question_banks",
     "course_settings",
 }
-
-# Anchored on "](" rather than the full [text], because link text may contain
-# nested brackets (e.g. [[**[x]**]{style=...}](url)). The URL/title group skips
-# quoted titles as a unit (so "File(s)" doesn't close the link) and accepts one
-# level of balanced parens, which Pandoc allows in paths like "Folder (Old)/x".
-_MD_LINK_RE = re.compile(
-    r'(\])\(((?:[^()"\']|"[^"]*"|\'[^\']*\'|\([^()]*\))*)\)'
-)
-_INLINE_SNIPPET_RE = re.compile(r"\$([^$\n]+\.md)\$")
-_HTML_IMG_RE = re.compile(r"<img\b[^>]*/?>", re.IGNORECASE)
-_HTML_A_RE = re.compile(r"<a\b[^>]*>", re.IGNORECASE)
-_HTML_SRC_ATTR_RE = re.compile(r'\bsrc="([^"]*)"')
-_HTML_HREF_ATTR_RE = re.compile(r'\bhref="([^"]*)"')
 
 
 def _content_type_dir(rel_path: str) -> str | None:
@@ -246,124 +233,6 @@ def _add_quiz_qbank_inner_renames(
     new_inner = f"{dest_rel}/{dest_name}{suffix}"
     if old_inner in path_map:
         path_map[old_inner] = new_inner
-
-
-def _split_url_title(raw: str) -> tuple[str, str]:
-    """Split 'url "title"' into (url, rest_including_space_and_title)."""
-    stripped = raw.rstrip()
-    for qchar in ('"', "'"):
-        if stripped.endswith(qchar):
-            start = stripped.rfind(qchar, 0, len(stripped) - 1)
-            if start > 0 and stripped[start - 1] == " ":
-                return stripped[: start - 1], stripped[start - 1 :]
-    return raw, ""
-
-
-def _resolve_repo_relative(base_dir: str, relative_path: str) -> str | None:
-    """Resolve a relative path against a repo-relative base directory.
-
-    Returns a normalized repo-relative POSIX path, or None if it escapes the repo.
-    """
-    if base_dir == ".":
-        joined = relative_path
-    else:
-        joined = base_dir + "/" + relative_path
-    normed = os.path.normpath(joined).replace(os.sep, "/")
-    if normed.startswith("..") or normed.startswith("/"):
-        return None
-    return normed
-
-
-def _compute_relative(from_dir: str, to_path: str) -> str:
-    """Compute relative path from from_dir to to_path (both repo-relative)."""
-    result = os.path.relpath(to_path, from_dir).replace(os.sep, "/")
-    return result
-
-
-def transform_links(
-    content: str,
-    old_dir: str,
-    new_dir: str,
-    path_map: dict[str, str],
-) -> str:
-    """Transform relative links in Markdown content.
-
-    old_dir: repo-relative dir of the file before any move
-    new_dir: repo-relative dir of the file after move (same as old_dir if not moved)
-    path_map: old_repo_relative → new_repo_relative for moved files
-    """
-    file_moved = old_dir != new_dir
-    reverse_map = {v: k for k, v in path_map.items()}
-
-    def _transform_url(url: str) -> str | None:
-        if url.startswith(("http://", "https://", "#", "mailto:")):
-            return None
-        if "$" in url:
-            return None
-
-        decoded = unquote(url)
-        has_encoding = "%" in url
-
-        target = _resolve_repo_relative(old_dir, decoded)
-        if target is None:
-            if not file_moved:
-                return None
-            target_from_new = _resolve_repo_relative(new_dir, decoded)
-            if target_from_new is not None and target_from_new in reverse_map:
-                target = reverse_map[target_from_new]
-            else:
-                return None
-
-        new_target = path_map.get(target, target)
-        target_moved = new_target != target
-
-        if not target_moved and not file_moved:
-            return None
-
-        new_rel = _compute_relative(new_dir, new_target)
-        if has_encoding:
-            new_rel = quote(new_rel, safe="/-_.~")
-
-        return new_rel
-
-    def _replace_md_link(m: re.Match) -> str:
-        prefix = m.group(1)
-        raw_url = m.group(2)
-
-        url, title_suffix = _split_url_title(raw_url)
-        # Markdown allows <url> syntax (e.g. for filenames with spaces); strip brackets
-        stripped = url.strip()
-        bracketed = stripped.startswith("<") and stripped.endswith(">")
-        inner = stripped[1:-1] if bracketed else url
-        new_url = _transform_url(inner)
-        if new_url is None:
-            return m.group(0)
-        if bracketed:
-            new_url = f"<{new_url}>"
-        return f"{prefix}({new_url}{title_suffix})"
-
-    def _replace_snippet(m: re.Match) -> str:
-        path = m.group(1)
-        new_path = _transform_url(path)
-        if new_path is None:
-            return m.group(0)
-        return f"${new_path}$"
-
-    def _replace_html_attr(m: re.Match, attr_re: re.Pattern) -> str:
-        tag = m.group(0)
-        attr_m = attr_re.search(tag)
-        if attr_m is None:
-            return tag
-        new_url = _transform_url(attr_m.group(1))
-        if new_url is None:
-            return tag
-        return tag[: attr_m.start(1)] + new_url + tag[attr_m.end(1) :]
-
-    content = _INLINE_SNIPPET_RE.sub(_replace_snippet, content)
-    content = _MD_LINK_RE.sub(_replace_md_link, content)
-    content = _HTML_IMG_RE.sub(lambda m: _replace_html_attr(m, _HTML_SRC_ATTR_RE), content)
-    content = _HTML_A_RE.sub(lambda m: _replace_html_attr(m, _HTML_HREF_ATTR_RE), content)
-    return content
 
 
 def compute_manifest_updates(
