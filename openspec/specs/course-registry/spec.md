@@ -120,6 +120,31 @@ when the directory is also registered.
 - **WHEN** the user runs `update /home/me/courses/it143` and that directory is registered as `142a` with a config
 - **THEN** the default `course_settings/canvas.toml` is used
 
+### Requirement: --config accepts a registry key
+
+The `--config` value of every subcommand that has the option SHALL be a file
+path or a registry key. A file that exists at the path as typed SHALL win over a
+key of the same name. Otherwise a registered key SHALL stand for that entry's
+canvas.toml: its `config` joined to its own course directory, or
+`course_settings/canvas.toml` there when the entry has no `config`. Only the
+config is taken from the key; the course directory still comes from the course
+argument. If the file a key names does not exist, the command SHALL exit with
+an error that gives the path and the key. A value that is neither an existing
+file nor a key SHALL be treated as a path, so the command's usual "Config file
+not found" error applies.
+
+#### Scenario: Key names a config
+- **WHEN** `142b` is registered with `config = "course_settings/canvas-sec-b.toml"` and the user runs `update 142 --config 142b`
+- **THEN** `canvas-sec-b.toml` from the `142b` entry's directory is used
+
+#### Scenario: Existing file beats a key
+- **WHEN** a file named `142b` exists in the current directory and `142b` is also a registry key
+- **THEN** the file is used
+
+#### Scenario: Key's file is missing
+- **WHEN** the file named by the key does not exist
+- **THEN** the command exits with `Config file not found: <path> (from registry key '142b')`
+
 ### Requirement: The resolved course directory is printed
 
 Every subcommand that takes `COURSE_DIR` SHALL print the resolved absolute

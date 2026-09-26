@@ -234,6 +234,32 @@ def test_command_line_config_beats_the_entry_config(home, tmp_path, unrelated):
     assert "Course ID: 888" in result.output
 
 
+def test_config_option_accepts_a_registry_key(home, tmp_path, unrelated):
+    course = section_course(tmp_path)
+    register(
+        home,
+        f'[courses]\n142 = "{course}"\n'
+        f'142b = {{ path = "{course}", config = "course_settings/canvas-sec-b.toml" }}\n',
+    )
+    result = run("update", "142", "--check-all", "--config", "142b")
+    assert result.exit_code == 0, result.output
+    assert "Course ID: 888" in result.output
+
+
+def test_config_key_whose_file_is_missing_names_the_key(home, tmp_path, unrelated):
+    course = section_course(tmp_path)
+    register(
+        home,
+        f'[courses]\n142 = "{course}"\n'
+        f'142c = {{ path = "{course}", config = "course_settings/nope.toml" }}\n',
+    )
+    result = run("update", "142", "--check-all", "--config", "142c")
+    assert result.exit_code == 1
+    assert "Config file not found" in result.output
+    assert "nope.toml" in result.output
+    assert "registry key '142c'" in result.output
+
+
 def test_a_path_argument_ignores_the_registry_config(home, tmp_path, unrelated):
     course = section_course(tmp_path)
     register(

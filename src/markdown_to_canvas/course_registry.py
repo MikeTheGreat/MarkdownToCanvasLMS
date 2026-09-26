@@ -166,6 +166,25 @@ def resolve_course(arg: str) -> ResolvedCourse:
     return ResolvedCourse(course_dir, arg, course_dir / config if config else None)
 
 
+def resolve_config(arg: str) -> Path:
+    """Turn a --config value into a canvas.toml path.
+
+    A file that exists at the path as typed wins. Otherwise a registered key
+    names the entry's canvas.toml: its ``config`` joined to its course directory,
+    or ``course_settings/canvas.toml`` there when the entry has none. A value
+    that is neither is returned as a path, so the caller's own "not found"
+    error applies.
+    """
+    as_path = Path(arg)
+    if as_path.is_file():
+        return as_path
+    courses = _read_courses()
+    if courses is None or arg not in courses:
+        return as_path
+    course_dir, config = _parse_entry(arg, courses[arg])
+    return course_dir.resolve() / (config or Path("course_settings") / "canvas.toml")
+
+
 # ---------------------------------------------------------------------------
 # Terms
 # ---------------------------------------------------------------------------

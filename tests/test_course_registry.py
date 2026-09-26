@@ -413,3 +413,38 @@ def test_completion_with_a_broken_registry_prints_no_error(home):
     assert result.returncode == 0
     assert result.stderr == ""
     assert "plain," not in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# --config values
+# ---------------------------------------------------------------------------
+
+
+def test_config_key_uses_the_entrys_config(home, tmp_path):
+    course = make_course(tmp_path)
+    write_registry(
+        home,
+        f'[courses]\n142a = {{ path = "{course}", config = "course_settings/canvas-sec-a.toml" }}\n',
+    )
+    assert reg.resolve_config("142a") == course.resolve() / "course_settings" / "canvas-sec-a.toml"
+
+
+def test_config_key_without_config_uses_default_canvas_toml(home, tmp_path):
+    course = make_course(tmp_path)
+    write_registry(home, f'[courses]\n142 = "{course}"\n')
+    assert reg.resolve_config("142") == course.resolve() / "course_settings" / "canvas.toml"
+
+
+def test_a_file_named_like_a_key_wins_for_config(home, tmp_path, monkeypatch):
+    course = make_course(tmp_path)
+    write_registry(home, f'[courses]\n142 = "{course}"\n')
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "142").write_text("")
+    monkeypatch.chdir(work)
+    assert reg.resolve_config("142") == Path("142")
+
+
+def test_config_that_is_neither_file_nor_key_stays_a_path(home, tmp_path):
+    write_registry(home, "[courses]\n")
+    assert reg.resolve_config("nope.toml") == Path("nope.toml")

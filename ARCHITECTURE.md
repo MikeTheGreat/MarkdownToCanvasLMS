@@ -229,6 +229,15 @@ line of output, and returns `(directory, config)`:
   `--config` (`upgrade`, `generate-due-dates`, `find-local-orphans`, `emit-workflow`)
   discard it. The manifest name derives from the config path (`manifest_path_for`), so a
   registry config selects the section's manifest exactly as `--config` does.
+- **`--config` values** — every `--config` option uses `_CONFIG_PARAM` (`_ConfigParam` in
+  `cli.py`), which calls `course_registry.resolve_config`. A file that exists at the path as
+  typed wins; otherwise a registered key gives that entry's `config` joined to the entry's
+  own directory (or `course_settings/canvas.toml` there when it has none); otherwise the
+  value stays a path and the command's own "Config file not found" error applies. Only the
+  config comes from the key, never the course directory. A key whose file is missing dies in
+  the converter with the path and the key. The entry config that `_resolve_course` supplies
+  for a key course argument is not checked there (commands that ignore config must not
+  fail), so a missing file gives the plain "Config file not found" error.
 
 **Click gotcha.** `_course_dir_argument(required=True)` must not pass `default=None`: with
 Click 8.4 an explicit `default=None` made a required argument optional, so `prune` fell

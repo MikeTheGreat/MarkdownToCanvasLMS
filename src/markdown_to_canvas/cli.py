@@ -24,6 +24,7 @@ from .course_registry import (  # noqa: E402  (safe: imports nothing that reads 
     complete_course,
     complete_term,
     load_env_files,
+    resolve_config,
     resolve_course,
     resolve_term,
 )
@@ -62,6 +63,31 @@ from .sync import collect_title_items, run_prune, run_sync, run_targeted_sync
 def die(msg: str) -> None:
     click.secho(f"Error: {msg}", fg="red", err=True)
     sys.exit(1)
+
+
+class _ConfigParam(click.ParamType):
+    """A --config value: a file path, or a registry key naming a canvas.toml.
+
+    A file that exists at the path as typed wins; otherwise the value is looked
+    up as a registry key. A value that is neither is kept as a path, so the
+    command's usual "Config file not found" error still applies.
+    """
+
+    name = "path_or_key"
+
+    def convert(self, value, param, ctx):
+        if isinstance(value, Path):
+            return value
+        try:
+            path = resolve_config(value)
+        except RegistryError as e:
+            self.fail(str(e), param, ctx)
+        if path != Path(value) and not path.is_file():
+            die(f"Config file not found: {path} (from registry key {value!r})")
+        return path
+
+
+_CONFIG_PARAM = _ConfigParam()
 
 
 def _course_dir_argument(required: bool = False):
@@ -413,7 +439,7 @@ def _flags_config(repo: Path, config: Path | None) -> Config | None:
 @click.option(
     "--config",
     default=None,
-    type=click.Path(path_type=Path),
+    type=_CONFIG_PARAM,
     help=(
         "Path to canvas.toml, read only for its [course_flags] table "
         "(default: <COURSE_DIR>/course_settings/canvas.toml, if present)."
@@ -462,8 +488,8 @@ def emit_workflow_cmd(course_dir: str | None) -> None:
 @click.option(
     "--config",
     default=None,
-    type=click.Path(path_type=Path),
-    help="Path to canvas.toml (default: <COURSE_DIR>/course_settings/canvas.toml)",
+    type=_CONFIG_PARAM,
+    help="Path to canvas.toml, or a registered course key whose canvas.toml to use (default: <COURSE_DIR>/course_settings/canvas.toml)",
 )
 @click.option(
     "--delete",
@@ -524,8 +550,8 @@ def prune(course_dir: str, config: Path | None, mode: str | None, assume_yes: bo
 @click.option(
     "--config",
     default=None,
-    type=click.Path(path_type=Path),
-    help="Path to canvas.toml (default: <COURSE_DIR>/course_settings/canvas.toml)",
+    type=_CONFIG_PARAM,
+    help="Path to canvas.toml, or a registered course key whose canvas.toml to use (default: <COURSE_DIR>/course_settings/canvas.toml)",
 )
 @_handle_cli_errors
 def find_canvas_orphans_cmd(course_dir: str | None, config: Path | None) -> None:
@@ -685,8 +711,8 @@ def fix_markdown_cmd(course_dir: str | None, apply: bool) -> None:
 @click.option(
     "--config",
     default=None,
-    type=click.Path(path_type=Path),
-    help="Path to canvas.toml (default: <COURSE_DIR>/course_settings/canvas.toml)",
+    type=_CONFIG_PARAM,
+    help="Path to canvas.toml, or a registered course key whose canvas.toml to use (default: <COURSE_DIR>/course_settings/canvas.toml)",
 )
 @click.option(
     "--clean",
@@ -1079,7 +1105,7 @@ def generate_due_dates_cmd(
 @click.option(
     "--config",
     default=None,
-    type=click.Path(path_type=Path),
+    type=_CONFIG_PARAM,
     help=(
         "Path to canvas.toml, read only for its [course_flags] table "
         "(default: <COURSE_DIR>/course_settings/canvas.toml, if present)."
@@ -1141,8 +1167,8 @@ def _format_concise_date(iso_date: str) -> str:
 @click.option(
     "--config",
     default=None,
-    type=click.Path(path_type=Path),
-    help="Path to canvas.toml (default: <COURSE_DIR>/course_settings/canvas.toml)",
+    type=_CONFIG_PARAM,
+    help="Path to canvas.toml, or a registered course key whose canvas.toml to use (default: <COURSE_DIR>/course_settings/canvas.toml)",
 )
 @click.option(
     "--force-uploads",

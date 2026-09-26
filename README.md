@@ -386,7 +386,12 @@ markdown-to-canvas list-titles 142
   registered directory that no longer exists, is an error that names the key;
   the "not registered" message lists the keys you do have.
 - An entry's `config` is used only when the course was named by its key.
-  `--config` on the command line overrides it. A course named by a path, or left
+  `--config` on the command line overrides it. `--config` also accepts a
+  registry key: `--config 142a` uses that entry's canvas.toml (its `config`, or
+  `course_settings/canvas.toml` in its directory if it has none). A file that
+  exists at the path you typed wins over a key, as with COURSE_DIR. Only the canvas.toml comes from the key; the course directory still comes
+  from COURSE_DIR. If that file is missing you get `Config file not found: <path>
+  (from registry key '142a')`. A course named by a path, or left
   out, uses the default `course_settings/canvas.toml`. The manifest follows the
   config, exactly as it does with `--config` (`.manifest-canvas-sec-a.toml` for
   `canvas-sec-a.toml`).
