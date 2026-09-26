@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import unquote
 
+from .links import has_url_scheme, is_relative_path_url, split_suffix
+
 ManifestDict = dict[str, dict[str, Any]]
 
 _IMG_RE = re.compile(r"<img\b[^>]*/?>", re.IGNORECASE)
@@ -49,10 +51,15 @@ def canvas_content_url(entry: dict[str, Any], course_id: int) -> str:
 
 
 def _to_local_key(href: str, source_file: Path, course_root: Path) -> str | None:
-    """Convert a relative href to a course-root-relative key, or None if external/anchor."""
-    if href.startswith(("http://", "https://", "#", "mailto:")):
+    """Convert a relative href to a course-root-relative key, or None if external/anchor.
+
+    A ``?query``/``#fragment`` suffix is dropped. None also covers any scheme
+    URL (``https:``, ``tel:``, ``data:``, ...) and paths outside the repo.
+    """
+    if href.startswith("#") or has_url_scheme(href):
         return None
-    resolved = (source_file.parent / unquote(href)).resolve()
+    path_part, _suffix = split_suffix(href)
+    resolved = (source_file.parent / unquote(path_part)).resolve()
     try:
         return resolved.relative_to(course_root.resolve()).as_posix()
     except ValueError:
@@ -62,19 +69,98 @@ def _to_local_key(href: str, source_file: Path, course_root: Path) -> str | None
 def extract_local_refs(html: str, source_file: Path, course_root: Path) -> set[str]:
     """Return local course-root-relative keys for all local <img src>/<a href> refs in html."""
     keys: set[str] = set()
-    for m in _IMG_RE.finditer(html):
-        src_m = _SRC_ATTR_RE.search(m.group(0))
-        if src_m:
-            key = _to_local_key(src_m.group(1), source_file, course_root)
-            if key:
-                keys.add(key)
-    for m in _A_RE.finditer(html):
-        href_m = _HREF_ATTR_RE.search(m.group(0))
-        if href_m:
-            key = _to_local_key(href_m.group(1), source_file, course_root)
-            if key:
-                keys.add(key)
+    for value in _iter_ref_attrs(html):
+        key = _to_local_key(value, source_file, course_root)
+        if key:
+            keys.add(key)
     return keys
+
+
+_ESCAPES_REPO = (
+    "relative path resolves outside the course repo (check the number of ../ segments)"
+)
+_IS_DIRECTORY = (
+    "local path is a directory, not a file (check for a link with a missing URL)"
+)
+_NOT_FOUND = "local file not found"
+
+
+def _classify_ref(
+    href: str, source_file: Path, course_root: Path
+) -> tuple[str | None, str | None]:
+    """Return (target, problem) for one <img src>/<a href> value.
+
+    target is None when href is not a local path (external URL, anchor,
+    root-relative); otherwise it is the course-root-relative key, or href
+    itself when the path escapes the repo. problem is None when target is an
+    existing file, else the error reason.
+    """
+    local_key = _to_local_key(href, source_file, course_root)
+    if local_key is None:
+        if is_relative_path_url(href):
+            # Too many `../` segments. Passing it through would publish a
+            # link that cannot resolve.
+            return href, _ESCAPES_REPO
+        return None, None
+    local_file = course_root / local_key
+    # A directory match almost always means a markdown link with a
+    # blank/missing URL (e.g. `[text]( "title")`), which resolves to the
+    # source file's own folder rather than a real target — treat it as an
+    # error rather than stub-creating a Canvas item named after the folder.
+    if local_file.is_dir():
+        return local_key, _IS_DIRECTORY
+    if not local_file.exists():
+        return local_key, _NOT_FOUND
+    return local_key, None
+
+
+def _source_desc(source_file: Path, course_root: Path) -> Path:
+    try:
+        return source_file.relative_to(course_root)
+    except ValueError:
+        return source_file
+
+
+def _iter_ref_attrs(html: str):
+    """Yield the src/href value of every <img>/<a> tag in html."""
+    for tag_re, attr_re in ((_IMG_RE, _SRC_ATTR_RE), (_A_RE, _HREF_ATTR_RE)):
+        for m in tag_re.finditer(html):
+            attr_m = attr_re.search(m.group(0))
+            if attr_m:
+                yield attr_m.group(1)
+
+
+def check_local_links(
+    html: str, source_file: Path, course_root: Path, errors: list[str]
+) -> None:
+    """Record an error for each local <img>/<a> ref that is missing or escapes the repo.
+
+    The read-only counterpart of rewrite_links(), for callers that publish the
+    source files themselves (``publish``). A message already in ``errors`` is
+    not added again, since a file can be staged twice (front page and nav).
+    """
+    src = _source_desc(source_file, course_root)
+    for value in _iter_ref_attrs(html):
+        target, problem = _classify_ref(value, source_file, course_root)
+        if problem is None:
+            continue
+        msg = f"  {src}: {problem}: {target}"
+        if msg not in errors:
+            print(f"  ERROR: {problem}: {target}")
+            errors.append(msg)
+
+
+def _with_fragment(url: str, entry: dict[str, Any], href: str) -> str:
+    """Carry a ``#fragment`` from the local href over to the Canvas URL.
+
+    Only for content pages; a file URL may carry its own query, and a module
+    URL already ends in ``#module_<id>``.
+    """
+    _path, suffix = split_suffix(href)
+    hash_at = suffix.find("#")
+    if hash_at < 0 or entry["canvas_type"] in ("file", "module"):
+        return url
+    return url + suffix[hash_at:]
 
 
 def rewrite_links(
@@ -94,29 +180,16 @@ def rewrite_links(
     """
 
     def _resolve_entry(attr_value: str) -> tuple[str | None, dict[str, Any] | None]:
-        """Return (local_key, entry) or (None, None) for external/missing."""
-        local_key = _to_local_key(attr_value, source_file, course_root)
+        """Return (local_key, entry), (target, None) for a broken ref, or
+        (None, None) for a non-local URL."""
+        local_key, problem = _classify_ref(attr_value, source_file, course_root)
         if local_key is None:
             return None, None
-        local_file = course_root / local_key
-        if not local_file.exists() or local_file.is_dir():
-            # A directory match almost always means a markdown link with a
-            # blank/missing URL (e.g. `[text]( "title")`), which resolves to
-            # the source file's own folder rather than a real target — treat
-            # it the same as a missing file rather than stub-creating a
-            # nonsense Canvas item named after the folder.
-            reason = (
-                "local path is a directory, not a file (check for a link with a missing URL)"
-                if local_file.is_dir()
-                else "local file not found"
-            )
-            print(f"  ERROR: {reason}, removing tag: {local_key}")
+        if problem is not None:
+            print(f"  ERROR: {problem}, removing tag: {local_key}")
             if errors is not None:
-                try:
-                    src = source_file.relative_to(course_root)
-                except ValueError:
-                    src = source_file
-                errors.append(f"  {src}: {reason}, removing tag: {local_key}")
+                src = _source_desc(source_file, course_root)
+                errors.append(f"  {src}: {problem}, removing tag: {local_key}")
             return local_key, None  # signals removal
         if local_key not in manifest:
             entry = stub_creator(local_key, infer_canvas_type(local_key))
@@ -133,7 +206,7 @@ def rewrite_links(
             return tag  # external — unchanged
         if entry is None:
             return ""  # local file missing — remove tag
-        new_url = canvas_content_url(entry, course_id)
+        new_url = _with_fragment(canvas_content_url(entry, course_id), entry, src_m.group(1))
         return tag[: src_m.start(1)] + new_url + tag[src_m.end(1) :]
 
     def _replace_a(m: re.Match) -> str:
@@ -146,7 +219,7 @@ def rewrite_links(
             return tag  # external/anchor — unchanged
         if entry is None:
             return ""  # local file missing — remove tag
-        new_url = canvas_content_url(entry, course_id)
+        new_url = _with_fragment(canvas_content_url(entry, course_id), entry, href_m.group(1))
         return tag[: href_m.start(1)] + new_url + tag[href_m.end(1) :]
 
     html = _IMG_RE.sub(_replace_img, html)

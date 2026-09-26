@@ -12,6 +12,7 @@ import pypandoc
 import yaml
 
 from .links import (
+    LINK_TEXT,
     is_relative_path_url,
     resolve_repo_relative,
     split_suffix,
@@ -19,7 +20,7 @@ from .links import (
     transform_links,
 )
 
-_SNIPPET_LINK_RE = re.compile(r"\[([^\]]*)\]\(([^)]+)\)")
+_SNIPPET_LINK_RE = re.compile(rf"\[({LINK_TEXT}*)\]\(([^)]+)\)")
 
 # Matches $path.md$ — an inline snippet ref embedded anywhere in text, including
 # inside Markdown link URLs.  Requiring the .md suffix avoids false positives on

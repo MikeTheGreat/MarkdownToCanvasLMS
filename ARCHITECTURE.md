@@ -148,8 +148,13 @@ The `assets/` folder hierarchy is mirrored into Canvas Files. `assets/images/fig
 - `<a href="../announcements/qux.md">` → look up or stub-create → rewrite to `/courses/:id/discussion_topics/:id` (announcements are discussion topics)
 - `<a href="../quizzes/foo/foo.md">` → look up → rewrite to `/courses/:id/quizzes/:id`
 - `<a href="../modules/week-1.md">` → look up or stub-create (an empty module) → rewrite to `/courses/:id/modules#module_:id`
-- `<a href="https://...">` → leave unchanged
-- `<a href="#anchor">` → leave unchanged
+- any URL with a scheme (`https:`, `mailto:`, `tel:`, `data:`, ...), `#anchor`, or root-relative (`/courses/...`) → leave unchanged
+- `<a href="../pages/foo.md#part-2">` → `?query`/`#fragment` ignored when resolving; the `#fragment` is appended to the Canvas URL for content types, dropped for files (their `canvas_url` can carry its own query) and modules (already `#module_:id`)
+- a relative path to a missing file, or one that resolves outside the course repo (e.g. `../../assets/x.png` from `pages/`) → error, tag removed
+
+`_classify_ref()` decides each `src`/`href`: not local, a good local key, or a problem (outside the repo, a directory, not found). A relative path that climbs out of the repo makes `_to_local_key()` return None, the same value it returns for an external URL; `_classify_ref()` tells the two apart with `links.is_relative_path_url()` (no scheme, not `#`/`/`, no `$`). Before 2026-09 an escaping path was passed through as if external and reached Canvas as a broken link, `_to_local_key()` recognised only `http(s):`/`mailto:` so a `tel:` or `data:` URL was reported as a missing file and removed, and a `#fragment` or `?query` was kept in the path so `other.md#sec` was reported as a missing file too. Every error from `rewrite_links()` goes into `errors`, and each caller (syllabus, content, quiz) compares the error count before and after and skips the upload without calling `manifest_lib.record()`, so `last_synced` is not stamped and the next `update` reports the error again.
+
+`check_local_links()` is the read-only form of the same classification, used by `publish` (see the publish section). A removed `<a>` start tag leaves its `</a>` behind; browsers ignore the stray end tag.
 
 **Stub creation:**
 
@@ -1084,7 +1089,7 @@ linked only from inside an included snippet is staged. Per-content handling:
 
 | Content | Published as |
 | --- | --- |
-| Pages / assignments / discussions | Markdown body, frontmatter stripped, snippet includes expanded inline (their links rebased onto the file, like `update`), an H1 prepended if the body has none. Cross-links and asset links are left as-is (the staged `docs/` mirrors the repo layout, so relative links resolve). A snippet error (for example a snippet link that escapes the repo) lands in the staging `errors`, which stops `run_publish` before `mkdocs` runs. |
+| Pages / assignments / discussions | Markdown body, frontmatter stripped, snippet includes expanded inline (their links rebased onto the file, like `update`), an H1 prepended if the body has none. Cross-links and asset links are left as-is (the staged `docs/` mirrors the repo layout, so relative links resolve). A snippet error (for example a snippet link that escapes the repo) lands in the staging `errors`, which stops `run_publish` before `mkdocs` runs. After snippet expansion (and before the quiz-link rewrite, whose placeholder is not a repo file) `stage_content_markdown()` converts the body with Pandoc and runs `link_rewrite.check_local_links()` on it, so a link or image pointing at a missing file or outside the repo is a staging error under exactly the rules `update` applies. Pandoc rather than a Markdown regex is used so code spans and fences are not mistaken for links. Duplicate messages are dropped, because the front page is staged twice (as `index.md` and as reachable content). |
 | Quizzes | A single readable study-guide page (`docs/quizzes/<slug>.md`) with the description and each question's prompt and answer choices; correct choices are marked `**(correct)**`. The `quizzes/<slug>/<slug>.md` folder structure is flattened, and links pointing at it are rewritten. |
 | Assets | `assets/` is copied wholesale into `docs/assets/` so every referenced image/file resolves. |
 
@@ -1849,6 +1854,10 @@ published: true
 ```
 
 **Item indentation:** Leading spaces on list items control the Canvas module item `indent` parameter (0-5). Every 2 spaces = 1 indent level. `parse_module_body()` captures this from the Markdown and stores it as an `"indent"` key on each item dict. `add_module_item()` passes it through to `module.create_module_item()`. Values exceeding Canvas's maximum of 5 are clamped with a warning. `## headings` always get indent 0; plain-text list items start at indent 1. For the publish website, `render_module_overview()` renders indent-0 SubHeaders as `## headings` and indented SubHeaders as bold `<li>` elements.
+
+**Link text with brackets:** `_MODULE_LINK_RE`, `quiz._QUIZ_LINK_RE` and `convert._SNIPPET_LINK_RE` build their link-text group from `links.LINK_TEXT`, which accepts one level of balanced brackets and backslash escapes. Before this they used `[^\]]+`, so a title like `Part 1 [beginning of the quarter]` failed the link match and fell through to `_MODULE_PLAIN_LIST_RE`, silently becoming a SubHeader that displayed the raw Markdown. `parse_module_body()` now prints a warning when a plain list item still looks like a link (`_MODULE_LINKLIKE_RE`). No format-version bump: the only files read differently are ones the old parser mangled.
+
+**Same-name guard on creation:** When `_sync_module()` has no manifest entry for the file, it calls `api.find_module_ids_named(course, title)` (casefolded, stripped — the same index `get_module_ids_by_name()` builds for `module_order.toml`) before creating anything. Any match means Canvas already has a module the manifest doesn't link to this file (left over from a course copy, or an entry lost from a gitignored manifest). The module is then not synced: an `ERROR` line is printed and the message goes into `ctx.errors` for the end-of-run summary, suggesting a rename or `fix-manifest --force-pair <key>=<first id> --apply`. The dry-run API returns `[]` (the simulated course is empty). The check does not cover `create_or_update_module()` re-creating a module that was deleted on Canvas, nor module stubs created by `create_stub()` when content links to a not-yet-synced module file (see BUGS.md).
 
 **Synchronisation notes:**
 

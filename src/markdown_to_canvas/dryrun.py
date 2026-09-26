@@ -242,6 +242,9 @@ class DryRunCanvas:
         empty, but the real one is where those modules actually live."""
         return _AnyModuleName(self._new_id)
 
+    def find_module_ids_named(self, course, name: str) -> list[int]:
+        return []  # the simulated course starts empty, so no name is taken
+
     def reposition_module(self, course, canvas_id: int, position: int) -> None:
         pass
 

@@ -179,6 +179,46 @@ def test_parse_module_body_items_and_subheaders(tmp_path: Path) -> None:
     assert items[3]["indent"] == 0
 
 
+def test_parse_module_body_link_text_may_contain_brackets(tmp_path: Path) -> None:
+    """Titles like "Part 1 [beginning of the quarter]" once fell through to a
+    text SubHeader showing the raw Markdown."""
+    course_root = tmp_path / "course"
+    (course_root / "modules").mkdir(parents=True)
+    module_file = course_root / "modules" / "m.md"
+    body = (
+        "- [Reflection: Part 1 [beginning of the quarter]](../assignments/p1.md)\n"
+        "- [Drafting your Plan [Online]](../quizzes/plan/plan.md)\n"
+        "- [Feedback [Evaluation] Option](../assignments/fb.md)\n"
+        "- [Escaped \\] bracket](../pages/e.md)\n"
+    )
+    items = parse_module_body(body, module_file, course_root)
+    assert [i["type"] for i in items] == ["content"] * 4
+    assert [i["title"] for i in items] == [
+        "Reflection: Part 1 [beginning of the quarter]",
+        "Drafting your Plan [Online]",
+        "Feedback [Evaluation] Option",
+        "Escaped \\] bracket",
+    ]
+    assert [i["local_path"] for i in items] == [
+        "assignments/p1.md", "quizzes/plan/plan.md", "assignments/fb.md", "pages/e.md",
+    ]
+
+
+def test_parse_module_body_warns_on_unreadable_link(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    course_root = tmp_path / "course"
+    (course_root / "modules").mkdir(parents=True)
+    module_file = course_root / "modules" / "m.md"
+    body = "- [Too [deeply [nested]]](../pages/x.md)\n- Plain text header\n"
+    items = parse_module_body(body, module_file, course_root)
+    assert [i["type"] for i in items] == ["SubHeader", "SubHeader"]
+    out = capsys.readouterr().out
+    assert "WARNING" in out
+    assert "Too [deeply [nested]]" in out
+    assert "Plain text header" not in out
+
+
 def test_parse_module_body_empty() -> None:
     items = parse_module_body("", Path("/course/modules/m.md"), Path("/course"))
     assert items == []
@@ -205,6 +245,53 @@ def test_first_sync_creates_all_content(mock_course, course_root, mocker) -> Non
     # Assets must overwrite in-place so existing links keep the same file ID/URL.
     assert mock_course.upload.call_args.kwargs["on_duplicate"] == "overwrite"
     mock_course.create_module.assert_called_once()
+
+
+def test_unlinked_module_with_same_name_on_canvas_is_not_synced(
+    mock_course, course_root, mocker, capsys: pytest.CaptureFixture
+) -> None:
+    """A module file with no manifest entry must not create a second module
+    when Canvas already has one by that name; the user decides which to keep."""
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    mock_course.get_modules.return_value = [
+        SimpleNamespace(id=500, name="  week 1: INTRODUCTION"),
+    ]
+
+    make_current(course_root)
+    had_errors = run_sync(_config(), course_root)
+
+    assert had_errors is True
+    mock_course.create_module.assert_not_called()
+    out = capsys.readouterr().out
+    hint = "fix-manifest --force-pair modules/week-1.md=500 --apply"
+    # Printed where it happens and again in the end-of-run error summary.
+    assert out.count(hint) == 2
+
+
+def test_linked_module_with_same_name_on_canvas_still_syncs(
+    mock_course, course_root, mocker
+) -> None:
+    """The name check only guards creation; a module the manifest already links
+    is updated even though Canvas (naturally) has a module with its name."""
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    (course_root / ".manifest-canvas.toml").write_text(
+        '["modules/week-1.md"]\ncanvas_id = 66666\ncanvas_type = "module"\n'
+        f"\n[_repo_format]\nformat_version = {FORMAT_VERSION}\n"
+    )
+    module = _mock_module(66666)
+    mock_course.get_module.return_value = module
+    module.create_module_item.side_effect = [_mock_item(i) for i in range(301, 310)]
+    mock_course.get_modules.return_value = [
+        SimpleNamespace(id=66666, name="Week 1: Introduction"),
+    ]
+
+    make_current(course_root)
+    run_sync(_config(), course_root)
+
+    mock_course.create_module.assert_not_called()
+    module.edit.assert_called()
 
 
 def test_first_sync_stub_created_before_real_page(mock_course, course_root, mocker) -> None:
@@ -602,6 +689,39 @@ def test_missing_local_file_tag_removed_sync_continues(
     assert "ghost.md" in out
     # Page is NOT uploaded when it has broken links — retry on the next run
     mock_course.create_page.assert_not_called()
+
+
+def test_link_escaping_repo_blocks_upload_and_is_retried(
+    mock_course, tmp_path: Path, mocker, capsys: pytest.CaptureFixture
+) -> None:
+    """An image path with one `../` too many resolves outside the repo. The
+    page is not uploaded and gets no manifest entry (no last_synced), so the
+    next update reports the error again until the path is fixed."""
+    manifest: dict = {}
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    course_root = tmp_path / "course"
+    (course_root / "pages").mkdir(parents=True)
+    (course_root / "assets").mkdir()
+    (course_root / "assets" / "logo.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (course_root / "pages" / "landing.md").write_text(
+        "---\ntitle: Landing\npublished: true\n---\n\n"
+        "![](../../assets/logo.png)\n"
+    )
+    mock_course.upload.return_value = (
+        True, {"id": 77777, "url": "https://school.instructure.com/files/77777/download"},
+    )
+
+    make_current(course_root)
+    had_errors = run_sync(_config(), course_root)
+
+    assert had_errors is True
+    out = capsys.readouterr().out
+    assert "outside the course repo" in out
+    assert "../../assets/logo.png" in out
+    assert "Skipping upload due to errors: pages/landing.md" in out
+    mock_course.create_page.assert_not_called()
+    assert "pages/landing.md" not in manifest
 
 
 # ---------------------------------------------------------------------------

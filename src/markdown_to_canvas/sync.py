@@ -37,6 +37,7 @@ from .convert import (
 )
 from .ignore import IgnoreMatcher, load_ignore_matcher
 from .link_rewrite import extract_local_refs, infer_canvas_type, rewrite_links
+from .links import LINK_TEXT
 from .orphans import ResourceKey, extract_canvas_refs
 from .quiz import parse_question_file, parse_quiz_file
 
@@ -804,7 +805,11 @@ def _parse_frontmatter_or_warn(
         return None
 
 
-_MODULE_LINK_RE = re.compile(r"^(\s*)-\s+\[([^\]]+)\]\(([^)]+)\)")
+_MODULE_LINK_RE = re.compile(rf"^(\s*)-\s+\[({LINK_TEXT}+)\]\(([^)]+)\)")
+# A list line that looks like a link but that _MODULE_LINK_RE rejected (deeper
+# bracket nesting, a ")" in the path) would otherwise become a text SubHeader
+# showing the raw Markdown.
+_MODULE_LINKLIKE_RE = re.compile(r"^\[.*\]\(.*\)")
 _MODULE_LINK_TITLE_RE = re.compile(r'''^(.*?)\s+["'].*["']\s*$''')
 _MODULE_HEADER_RE = re.compile(r"^#{1,6}\s+(.+)")
 _MODULE_PLAIN_LIST_RE = re.compile(r"^(\s*)(?:[-*+]|\d+[.])\s+(.+)")
@@ -891,8 +896,13 @@ def parse_module_body(
                     f" ({MAX_CANVAS_INDENT}); clamping: {plain_m.group(2).strip()}"
                 )
                 indent = MAX_CANVAS_INDENT
-            items.append({"type": "SubHeader",
-                         "title": plain_m.group(2).strip(), "indent": indent})
+            text = plain_m.group(2).strip()
+            if _MODULE_LINKLIKE_RE.match(text):
+                print(
+                    f"  WARNING: {module_file.name}: could not read this line as a "
+                    f"link, so it becomes a text header: {text}"
+                )
+            items.append({"type": "SubHeader", "title": text, "indent": indent})
     return items
 
 
@@ -2786,6 +2796,26 @@ def _sync_module(
         )
         existing = None
     title = frontmatter.get("title", md_file.stem)
+
+    if existing is None:
+        # Creating a second module with the same name leaves the course with two
+        # copies; which one this file should own is the user's decision.
+        same_name = ctx.api.find_module_ids_named(course, title)
+        if same_name:
+            ids = ", ".join(str(i) for i in same_name)
+            which = "that module" if len(same_name) == 1 else "one of those modules"
+            msg = (
+                f"module {local_key} not synced: Canvas already has a module named "
+                f"'{title}' (id {ids}) that the manifest does not link to this file. "
+                "Rename the local or the Canvas module, or pair the file with "
+                f"{which}: markdown-to-canvas fix-manifest --force-pair "
+                f"{local_key}={same_name[0]} --apply (add the --config you used "
+                "for this run; --pair-canvas-with-local instead pairs every "
+                "unlinked file whose title matches exactly one Canvas item)"
+            )
+            print(f"  ERROR: {msg}")
+            errors.append(msg)
+            return False
 
     if frontmatter.get("published") is False:
         _warn_module_publish_conflicts(ctx, title, items)

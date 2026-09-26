@@ -1268,6 +1268,11 @@ def get_module_ids_by_name(course) -> dict[str, list[int]]:
     return by_name
 
 
+def find_module_ids_named(course, name: str) -> list[int]:
+    """Canvas ids of every module whose name matches ``name`` (stripped, casefolded)."""
+    return get_module_ids_by_name(course).get(name.strip().casefold(), [])
+
+
 def reposition_module(course, canvas_id: int, position: int):
     """Set only the position of an existing module without re-syncing its content."""
     module = course.get_module(canvas_id)

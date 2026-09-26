@@ -28,8 +28,10 @@ from .config import Config
 from .convert import (
     apply_outside_fences,
     expand_frontmatter_snippets,
+    markdown_to_html,
     preprocess_snippets,
 )
+from .link_rewrite import check_local_links
 from .quiz import parse_question_file, split_quiz_body
 from .sync import (
     _content_default_published,
@@ -499,6 +501,10 @@ def stage_content_markdown(
     to the flattened study-guide path, and ensures the document has an H1
     heading (used as the page title). Returns None on a conditional-directive
     error (reported via ``errors``); the caller must skip the file.
+
+    When ``errors`` is given, local links and images that point at a missing
+    file or outside the repo are reported there, using the same Pandoc HTML
+    and rules as ``update`` (any error stops ``run_publish``).
     """
     frontmatter, body = parse_frontmatter(md_path.read_text())
     frontmatter, body = expand_frontmatter_snippets(frontmatter, body, md_path, repo / "snippets")
@@ -508,6 +514,9 @@ def stage_content_markdown(
         if body is None:
             return None
     body = preprocess_snippets(body, md_path, repo / "snippets", errors, flags=flags)
+    if errors is not None:
+        # Before the quiz-link rewrite, whose placeholder target is not a repo file.
+        check_local_links(markdown_to_html(body), md_path, repo, errors)
     body = apply_outside_fences(body, _rewrite_quiz_links)
     body = _strip_pandoc_syntax(body)
     title = frontmatter.get("title", md_path.stem)

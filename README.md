@@ -157,6 +157,8 @@ On each run the tool:
 
 Files are skipped if their local modification time is older than the `last_synced` timestamp in the manifest — so unchanged files cost nothing on repeat runs.
 
+A relative link or image path that points to a file that doesn't exist, or that resolves outside the course repo (for example `../../assets/pic.png` written in a file directly inside `pages/`, one `../` too many), is an error. The file containing it is not uploaded and its `last_synced` is not updated, so every `update` reports the error again until you fix the path. Other files still upload. `publish` applies the same check to the files it stages and stops before building the site if any link is broken. A `#section` at the end of a link to another page (`[late work](syllabus.md#late-work)`) is kept on the Canvas link.
+
 Files matched by an optional `.canvasignore` (git's `gitignore` syntax) at the repo root are never uploaded — handy for excluding editor backups and temp files such as Word's `~$*.docx`. `.gitignore` is **not** consulted, so you can keep per-term materials out of git while still uploading them to Canvas. To exclude content from both git and Canvas, list it in both files.
 
 A manifest file named after the `canvas.toml` in use (`course_settings/canvas.toml` → `.manifest-canvas.toml`) is written to your course repo to track Canvas IDs and sync times. It is local to your machine and must never be committed (`import`'s default `.gitignore` excludes it). Each machine that holds a manifest also runs `upgrade` when the repo's file format changes (see [Upgrading a repo](#upgrading-a-repo-upgrade)).
@@ -639,7 +641,8 @@ periodically to catch problems, then deploy the whole course with a plain
 `update` when the quarter starts. It exits nonzero when problems are found,
 so it also works in scripts and pre-deploy hooks.
 
-Problems it catches include: broken local links/images, rubric names not
+Problems it catches include: broken local links/images (including relative
+paths that resolve outside the course repo), rubric names not
 defined in `rubrics.toml`, unknown assignment groups, malformed YAML
 frontmatter, missing snippets, course-flag/`published_if` errors, `<h1>`
 headings, title collisions, quiz/question parse errors, module items pointing
@@ -2227,6 +2230,21 @@ The module body uses four kinds of lines:
 * A bullet linking to a local `.md` file becomes a **content item** (Page,
   Assignment, Discussion, or Quiz — inferred from the target's folder).
 * A bullet linking to an absolute `http(s)://` URL becomes an **ExternalUrl** item.
+
+Link text may contain one level of square brackets, as in
+`- [Reflection: Part 1 [beginning of the quarter]](../assignments/p1.md)`.
+A bullet that looks like a link but can't be read as one (deeper bracket
+nesting, for example) becomes a text SubHeader, and `update` prints a warning
+naming the line.
+
+The first time `update` syncs a module file, it checks whether Canvas already
+has a module with the same title (ignoring case and surrounding spaces). If
+one exists, the module file is not synced and the run reports an error, so
+the course doesn't end up with two copies. Resolve it by renaming either
+module, or by linking the file to the existing Canvas module with
+`markdown-to-canvas fix-manifest --force-pair modules/<file>.md=<module id> --apply`
+(the error message prints this command with the id filled in), or with
+`fix-manifest --pair-canvas-with-local`.
 
 ExternalUrl items default to `new_tab: true` (Canvas opens the link in a new window). Add `<!-- target="_self" -->` after the link to embed in an iframe instead.
 

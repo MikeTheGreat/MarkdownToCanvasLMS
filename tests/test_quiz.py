@@ -65,6 +65,18 @@ def test_parse_quiz_file_skips_question_lookalikes_in_code_blocks(tmp_path):
     assert "example.md" in desc_html  # stays in the description as code
 
 
+def test_parse_quiz_file_question_link_text_may_contain_brackets(tmp_path):
+    quiz_md = tmp_path / "quiz.md"
+    quiz_md.write_text(
+        "---\ntitle: Q\n---\n\n"
+        "1. [Step 3 [video reflection]](questions/step-3.md)\n"
+        "2. [Step \\[4\\]](questions/step-4.md)\n"
+    )
+    _, desc_html, q_paths = parse_quiz_file(quiz_md)
+    assert [p.name for p in q_paths] == ["step-3.md", "step-4.md"]
+    assert "step-3.md" not in desc_html
+
+
 # ---------------------------------------------------------------------------
 # parse_question_file — MCQ
 # ---------------------------------------------------------------------------

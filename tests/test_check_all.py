@@ -118,6 +118,21 @@ def test_check_all_detects_broken_link(course_root, no_canvas, capsys) -> None:
     assert "no-such-page.md" in out
 
 
+def test_check_all_detects_link_escaping_repo(course_root, no_canvas, capsys) -> None:
+    (course_root / "pages" / "escapes.md").write_text(
+        "---\ntitle: Escapes\npublished: true\n---\n\n"
+        "![](../../assets/pic.png)\n"
+    )
+
+    make_current(course_root)
+    had_errors = run_sync(_config(), course_root, check_all=True)
+
+    assert had_errors is True
+    out = capsys.readouterr().out
+    assert "outside the course repo" in out
+    assert "../../assets/pic.png" in out
+
+
 def test_check_all_detects_unknown_rubric(course_root, no_canvas, capsys) -> None:
     """A rubric name with no match in rubrics.toml warns exactly as a real
     fresh sync would (rubric ids come from the simulated rubrics sync)."""

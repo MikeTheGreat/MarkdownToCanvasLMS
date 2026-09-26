@@ -13,8 +13,9 @@ from .convert import (
     parse_frontmatter as _parse_frontmatter,
     preprocess_snippets,
 )
+from .links import LINK_TEXT
 
-_QUIZ_LINK_RE = re.compile(r"^\s*\d+\.\s+\[([^\]]+)\]\(([^)]+\.md)\)")
+_QUIZ_LINK_RE = re.compile(rf"^\s*\d+\.\s+\[({LINK_TEXT}+)\]\(([^)]+\.md)\)")
 _ANSWERS_HEADING_RE = re.compile(r"^##\s+Answers\s*$", re.MULTILINE)
 _ANSWER_ITEM_RE = re.compile(r"^\s*\d+\.\s+(.+)")
 _SECTION_HEADING_RE = re.compile(r"^##\s+(.+)$", re.MULTILINE)

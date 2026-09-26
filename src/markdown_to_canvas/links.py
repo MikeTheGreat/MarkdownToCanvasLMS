@@ -20,6 +20,10 @@ from urllib.parse import quote, unquote
 MD_LINK_RE = re.compile(
     r'(\])\(((?:[^()"\']|"[^"]*"|\'[^\']*\'|\([^()]*\))*)\)'
 )
+# The text between a link's [ and ], for patterns that must capture it. Allows
+# one level of balanced brackets ("Part 1 [beginning of the quarter]") and
+# backslash escapes; a title with brackets must not stop the line being a link.
+LINK_TEXT = r"(?:\\.|[^\[\]\\\n]|\[(?:\\.|[^\[\]\\\n])*\])"
 INLINE_SNIPPET_RE = re.compile(r"\$([^$\n]+\.md)\$")
 _HTML_IMG_RE = re.compile(r"<img\b[^>]*/?>", re.IGNORECASE)
 _HTML_A_RE = re.compile(r"<a\b[^>]*>", re.IGNORECASE)
@@ -28,6 +32,11 @@ _HTML_HREF_ATTR_RE = re.compile(r'\bhref="([^"]*)"')
 
 # Any URL with a scheme (https:, mailto:, data:, tel:, ...) is absolute.
 _SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+
+
+def has_url_scheme(url: str) -> bool:
+    """True if url starts with a scheme (``https:``, ``tel:``, ``data:``, ...)."""
+    return _SCHEME_RE.match(url.strip()) is not None
 
 
 def is_relative_path_url(url: str) -> bool:
@@ -41,7 +50,7 @@ def is_relative_path_url(url: str) -> bool:
     stripped = url.strip()
     if not stripped or stripped.startswith(("#", "/")) or "\n" in stripped:
         return False
-    if _SCHEME_RE.match(stripped):
+    if has_url_scheme(stripped):
         return False
     return "$" not in stripped
 

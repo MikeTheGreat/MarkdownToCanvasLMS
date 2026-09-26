@@ -141,6 +141,78 @@ def test_img_missing_local_file_removed(tmp_path: Path, capsys: pytest.CaptureFi
     assert "ERROR" in capsys.readouterr().out
 
 
+def test_img_src_escaping_repo_removed_and_reported(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """One `../` too many resolves outside the course repo. The tag is removed
+    and an error recorded (which makes the caller skip the upload), rather than
+    passing the local path through to Canvas."""
+    course_root, source_file = _setup(tmp_path)
+    html = '<p><img src="../../assets/images/fig.png" alt="" /></p>'
+    errors: list[str] = []
+    result = rewrite_links(html, source_file, course_root, {}, COURSE_ID, _no_stub, errors)
+    assert "<img" not in result
+    assert errors == [
+        "  pages/notes.md: relative path resolves outside the course repo "
+        "(check the number of ../ segments), removing tag: ../../assets/images/fig.png"
+    ]
+    assert "ERROR" in capsys.readouterr().out
+
+
+def test_a_href_escaping_repo_removed_and_reported(tmp_path: Path) -> None:
+    course_root, source_file = _setup(tmp_path)
+    html = '<a href="../../../elsewhere/doc.pdf">Doc</a>'
+    errors: list[str] = []
+    result = rewrite_links(html, source_file, course_root, {}, COURSE_ID, _no_stub, errors)
+    assert "<a " not in result
+    assert len(errors) == 1 and "outside the course repo" in errors[0]
+
+
+@pytest.mark.parametrize(
+    "href",
+    [
+        "/courses/123/files/456/download",  # root-relative Canvas URL
+        "//cdn.example.com/x.png",  # protocol-relative
+        "data:image/png;base64,AAAA",
+        "tel:+15555550100",
+    ],
+)
+def test_non_relative_urls_unchanged_and_not_errors(tmp_path: Path, href: str) -> None:
+    """Scheme URLs other than http(s)/mailto used to be resolved as local
+    files and removed with "local file not found"."""
+    course_root, source_file = _setup(tmp_path)
+    html = f'<img src="{href}" alt="" /><a href="{href}">x</a>'
+    errors: list[str] = []
+    result = rewrite_links(html, source_file, course_root, {}, COURSE_ID, _no_stub, errors)
+    assert result == html
+    assert errors == []
+
+
+def test_fragment_kept_on_page_link(tmp_path: Path) -> None:
+    """A `#fragment` used to make the path look like a missing file."""
+    course_root, source_file = _setup(tmp_path)
+    manifest = {
+        "pages/syllabus.md": {"canvas_type": "page", "canvas_id": 11111, "canvas_url": "syllabus"}
+    }
+    html = '<a href="syllabus.md#late-work">Late work</a>'
+    errors: list[str] = []
+    result = rewrite_links(html, source_file, course_root, manifest, COURSE_ID, _no_stub, errors)
+    assert errors == []
+    assert f'href="/courses/{COURSE_ID}/pages/syllabus#late-work"' in result
+
+
+def test_query_and_fragment_dropped_on_file_link(tmp_path: Path) -> None:
+    """A file's canvas_url is used verbatim; appending to it could break its own query."""
+    course_root, source_file = _setup(tmp_path)
+    url = "https://school.instructure.com/files/77777/download?verifier=abc"
+    manifest = {
+        "assets/images/fig.png": {"canvas_type": "file", "canvas_id": 77777, "canvas_url": url}
+    }
+    html = '<a href="../assets/images/fig.png?x=1#p2">fig</a>'
+    result = rewrite_links(html, source_file, course_root, manifest, COURSE_ID, _no_stub)
+    assert f'href="{url}"' in result
+
+
 def test_img_external_src_unchanged(tmp_path: Path) -> None:
     course_root, source_file = _setup(tmp_path)
     html = '<img src="https://example.com/img.png" alt="ext" />'

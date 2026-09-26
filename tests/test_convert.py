@@ -44,6 +44,16 @@ def test_snippet_link_replaced(tmp_path: Path) -> None:
     assert "[Tip](" not in result
 
 
+def test_snippet_link_with_brackets_in_text_replaced(tmp_path: Path) -> None:
+    snippets_dir, _ = _make_snippet(tmp_path, "tip.md", "Check the docs first.")
+    source = tmp_path / "pages" / "notes.md"
+    source.parent.mkdir()
+    text = "Hint: [Tip [optional]](../snippets/tip.md)\n"
+    result = preprocess_snippets(text, source, snippets_dir)
+    assert "Check the docs first." in result
+    assert "snippets/tip.md" not in result
+
+
 def test_non_snippet_link_unchanged(tmp_path: Path) -> None:
     snippets_dir = tmp_path / "snippets"
     snippets_dir.mkdir()

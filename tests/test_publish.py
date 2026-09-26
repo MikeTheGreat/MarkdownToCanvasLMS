@@ -745,3 +745,64 @@ def test_run_publish_stops_on_snippet_link_outside_repo(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="error"):
         publish.run_publish(repo, tmp_path / "site")
     assert ran == []
+
+
+# ---------------------------------------------------------------------------
+# Broken local links (same rules as update's link rewriting)
+# ---------------------------------------------------------------------------
+
+
+def _assignment_repo(tmp_path, body):
+    repo = tmp_path / "repo"
+    (repo / "assets").mkdir(parents=True)
+    (repo / "assets" / "pic.png").write_bytes(b"png")
+    (repo / "pages").mkdir()
+    (repo / "pages" / "other.md").write_text("---\ntitle: Other\npublished: true\n---\n\nx\n")
+    (repo / "assignments").mkdir()
+    (repo / "assignments" / "hw.md").write_text(
+        f"---\ntitle: HW\npublished: true\n---\n\n{body}\n"
+    )
+    return repo
+
+
+def test_stage_reports_link_escaping_repo(tmp_path):
+    repo = _assignment_repo(tmp_path, "![](../../assets/pic.png)")
+    info = publish.stage(repo, tmp_path / "staging")
+    assert info["errors"] == [
+        "  assignments/hw.md: relative path resolves outside the course repo "
+        "(check the number of ../ segments): ../../assets/pic.png"
+    ]
+
+
+def test_stage_reports_missing_local_file(tmp_path):
+    repo = _assignment_repo(tmp_path, "[gone](../pages/gone.md)")
+    info = publish.stage(repo, tmp_path / "staging")
+    assert info["errors"] == [
+        "  assignments/hw.md: local file not found: pages/gone.md"
+    ]
+
+
+def test_stage_accepts_valid_and_non_local_links(tmp_path):
+    repo = _assignment_repo(
+        tmp_path,
+        "![](../assets/pic.png) [o](../pages/other.md#part-2) "
+        "[w](https://example.com) [t](tel:+15555550100) [a](#top) "
+        "[c](/courses/1/files/2) `a[i](j)`\n\n```\n[x](../../nowhere.md)\n```",
+    )
+    info = publish.stage(repo, tmp_path / "staging")
+    assert info["errors"] == []
+
+
+def test_run_publish_stops_on_link_escaping_repo(tmp_path, monkeypatch):
+    import pytest
+
+    from tests.conftest import make_current
+
+    repo = _assignment_repo(tmp_path, "![](../../assets/pic.png)")
+    make_current(repo)
+    monkeypatch.setattr(publish.importlib.util, "find_spec", lambda name: object())
+    ran = []
+    monkeypatch.setattr(publish.subprocess, "run", lambda *a, **k: ran.append(a))
+    with pytest.raises(ValueError, match="error"):
+        publish.run_publish(repo, tmp_path / "site")
+    assert ran == []
