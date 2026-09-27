@@ -3210,8 +3210,9 @@ def _build_frontmatter(
     """Render a YAML frontmatter block, omitting None values.
 
     If *commented_fields* is provided, those key/value pairs are written as
-    ``# key: value`` lines at the end (before the closing ``---``), preceded
-    by *comment_note* if given.
+    ``    # key: value`` lines at the end (before the closing ``---``),
+    preceded by *comment_note* if given. The leading four spaces keep editors
+    such as VSCode from parsing a frontmatter ``#`` line as a Markdown H1.
     """
     lines = ["---"]
     for key, value in fields.items():
@@ -3220,11 +3221,11 @@ def _build_frontmatter(
         lines.append(f"{key}: {_format_scalar(value)}")
     if commented_fields:
         if comment_note:
-            lines.append(f"# {comment_note}")
+            lines.append(f"    # {comment_note}")
         for key, value in commented_fields.items():
             if value is None:
                 continue
-            lines.append(f"# {key}: {_format_scalar(value)}")
+            lines.append(f"    # {key}: {_format_scalar(value)}")
     lines.append("---")
     return "\n".join(lines)
 
