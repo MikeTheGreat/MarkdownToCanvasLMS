@@ -88,6 +88,72 @@ def test_word_fenced_div_is_unwrapped() -> None:
     assert clean_markdown_body(md) == "text\n"
 
 
+def test_nested_font_size_only_spans_are_unwrapped() -> None:
+    md = (
+        '1. [[Choose your topics: Select **two departments** (some may go '
+        'unassigned.]{style="font-size: 12pt;"}]{style="font-size: 12pt;"}\n'
+    )
+    assert clean_markdown_body(md) == (
+        "1. Choose your topics: Select **two departments** (some may go unassigned.\n"
+    )
+
+
+def test_font_size_style_is_dropped_but_other_attributes_kept() -> None:
+    md = "[x]{#a style=\"font-size:14px\"} and [y]{.underline style='font-size: 1em'}\n"
+    assert clean_markdown_body(md) == "[x]{#a} and [y]{.underline}\n"
+
+
+def test_noise_declarations_are_removed_and_the_rest_kept() -> None:
+    md = (
+        '[keep]{style="font-size: 12pt; color: red"}\n'
+        "[f]{style=\"font-family: \\\"Arial\\\"; background-color: #fbeeb8;\"}\n"
+    )
+    assert clean_markdown_body(md) == (
+        '[keep]{style="color: red"}\n[f]{style="background-color: #fbeeb8;"}\n'
+    )
+
+
+def test_heading_style_loses_font_size_and_margin_bottom() -> None:
+    md = (
+        '## **What is Academic Advising?** {#what-is-academic-advising '
+        'style="font-size: 14px; margin-bottom: 6px;"}\n'
+    )
+    assert clean_markdown_body(md) == (
+        "## **What is Academic Advising?** {#what-is-academic-advising}\n"
+    )
+
+
+def test_black_text_spans_are_unwrapped_and_banners_kept() -> None:
+    md = (
+        '## [**Overview**]{style="color: #000000;"} {#overview style="color: '
+        '#ffffff; background-color: #66b5c9; text-align: left; padding: 5px;"}\n'
+        '[a]{style="color: black"} [b]{style="color:rgb(0, 0, 0)"} '
+        '[c]{style="color: #000"} [d]{style="color: #333333"}\n'
+    )
+    assert clean_markdown_body(md) == (
+        '## **Overview** {#overview style="color: #ffffff; background-color: '
+        '#66b5c9; text-align: left; padding: 5px;"}\n'
+        'a b c [d]{style="color: #333333"}\n'
+    )
+
+
+def test_centering_style_on_image_is_kept() -> None:
+    md = '![](a.png){style="display: block; margin-left: auto; margin-right: auto;"}\n'
+    assert clean_markdown_body(md) == md
+
+
+def test_import_removes_noise_styles() -> None:
+    html = (
+        '<ol><li><span style="font-size: 12pt;"><span style="font-size: 12pt;">'
+        "Choose <strong>two</strong> (x.</span></span></li></ol>"
+        '<p><span style="font-size: 12pt; color: red">red</span> '
+        '<span style="color: #000000;">black</span></p>'
+    )
+    md = _html_to_markdown(html)
+    assert "1.  Choose **two** (x.\n" in md
+    assert '[red]{style="color: red"} black' in md
+
+
 # ---------------------------------------------------------------------------
 # fix-markdown: stray brackets
 # ---------------------------------------------------------------------------
@@ -439,3 +505,10 @@ def test_cli_apply_rewrites_files(tmp_path: Path) -> None:
     assert (root / "pages" / "a.md").read_text() == "---\ntitle: A\n---\nyou're x y\n"
     assert (root / "quizzes" / "q" / "questions" / "q1.md").read_text() == "it's\n"
     assert (root / "README.md").read_text() == "not \\'content\\'\n"
+
+
+def test_diff_lines_show_a_removed_rule_line() -> None:
+    from markdown_to_canvas.markdown_cleanup import FileFix
+
+    fix = FileFix(Path("x.md"), "a\n---\nb", "a\nb")
+    assert fix.diff_lines() == ["@@ -2 +1,0 @@", "----"]

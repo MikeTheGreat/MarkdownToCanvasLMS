@@ -983,6 +983,21 @@ fenced code blocks are never changed, and neither are brackets or quotes inside
   span left with no attributes is unwrapped (`[text]{.EOP}` → `text`). Blocks
   without a Word marker, such as `{class="Button"}` or `{.underline}`, are left
   alone.
+- **Styles that only restate the defaults.** In any `{...}` block's
+  `style="…"`, the `font-size`, `font-family` and `margin-bottom` settings
+  are removed, and so is a black text colour (`color: #000000`, `#000`,
+  `black`, `rgb(0, 0, 0)`). Everything else in the style is kept, so centered
+  images, coloured heading banners, highlights and callout boxes look the same.
+  A style left empty is removed, and a span left with no attributes is
+  unwrapped:
+  - `[[text]{style="font-size: 12pt;"}]{style="font-size: 12pt;"}` → `text`
+  - `## Why? {#why style="font-size: 14px; margin-bottom: 4px;"}` →
+    `## Why? {#why}` (a fixed font-size on a heading makes it smaller than a
+    normal heading)
+  - `[text]{style="font-size: 24pt; background-color: #ecff00;"}` →
+    `[text]{style="background-color: #ecff00;"}`
+
+  Import removes the same settings.
 - **Stray brackets.** In a paragraph that shows the `][` seams above, brackets
   that are not part of a link, image, styled span, footnote, task box
   (`- [ ]`) or reference link are removed. Paragraphs without such a seam are

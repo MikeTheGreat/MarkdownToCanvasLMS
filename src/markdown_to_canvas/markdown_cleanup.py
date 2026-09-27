@@ -64,10 +64,67 @@ def attr_tokens(content: str) -> list[str] | None:
     return tokens
 
 
+# Style declarations that only restate what Canvas's stylesheet already does.
+# Canvas's editor and Word wrap text in spans carrying them
+# (``[[text]{style="font-size: 12pt;"}]{style="font-size: 12pt;"}``), and put
+# them on headings, where a fixed font-size shrinks the heading. Declarations
+# that change how the page looks (centering, background colours, banner
+# colours, padding) are kept.
+_NOISE_STYLE_PROPS = {"font-size", "font-family", "margin-bottom"}
+# color: black inside a styled heading banner overrides the banner's white
+# text; elsewhere it restates the default.
+_BLACK_RE = re.compile(
+    r"^(?:#000(?:000)?|black|rgb\(\s*0\s*,\s*0\s*,\s*0\s*\))$", re.IGNORECASE
+)
+
+
+def _is_noise_declaration(decl: str) -> bool:
+    prop, _, value = decl.partition(":")
+    prop = prop.strip().lower()
+    value = value.strip()
+    if prop in _NOISE_STYLE_PROPS:
+        return True
+    return prop == "color" and bool(_BLACK_RE.match(value))
+
+
+def _clean_style_token(token: str) -> str | None:
+    """Remove noise declarations from a ``style=`` token; None if none are
+    left. Other tokens are returned unchanged."""
+    key, _, value = token.partition("=")
+    if key.lower() != "style":
+        return token
+    quote = ""
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        quote, value = value[0], value[1:-1]
+    decls = [d.strip() for d in value.split(";") if d.strip()]
+    kept = [d for d in decls if not _is_noise_declaration(d)]
+    if len(kept) == len(decls):
+        return token
+    if not kept:
+        return None
+    body = "; ".join(kept) + (";" if value.rstrip().endswith(";") else "")
+    quote = quote or '"'
+    return f"{key}={quote}{body}{quote}"
+
+
+def drop_noise_styles(tokens: list[str]) -> list[str]:
+    """Strip font-size, font-family, margin-bottom and black text colour
+    from any style; a style left empty is dropped."""
+    out = []
+    for t in tokens:
+        cleaned = _clean_style_token(t)
+        if cleaned is not None:
+            out.append(cleaned)
+    return out
+
+
 def keep_id_and_style(tokens: list[str]) -> list[str]:
     """Import's policy: keep `id` (anchors may target it) and `style`
-    (user-authored formatting); drop classes and other key=value cruft."""
-    return [t for t in tokens if t.startswith("#") or t.lower().startswith("style=")]
+    (user-authored formatting); drop classes and other key=value cruft, and
+    the style declarations that are only noise (drop_noise_styles)."""
+    return drop_noise_styles(
+        [t for t in tokens if t.startswith("#") or t.lower().startswith("style=")]
+    )
 
 
 # Markers that only Word / Word Online writes. A block carrying one of them was
@@ -87,9 +144,10 @@ def is_word_marker(token: str) -> bool:
 
 
 def strip_word_attrs(tokens: list[str]) -> list[str]:
-    """fix-markdown's policy: only blocks Word wrote are reduced to id + style."""
+    """fix-markdown's policy: only blocks Word wrote are reduced to id + style.
+    Noise style declarations are removed from any block (drop_noise_styles)."""
     if not any(is_word_marker(t) for t in tokens):
-        return tokens
+        return drop_noise_styles(tokens)
     return keep_id_and_style(tokens)
 
 
@@ -858,13 +916,13 @@ class FileFix:
     after: str
 
     def diff_lines(self) -> list[str]:
-        return [
-            line
-            for line in difflib.unified_diff(
+        # Skip the two file-header lines only: a removed "---" rule is
+        # "----" in the diff and must still be shown.
+        return list(
+            difflib.unified_diff(
                 self.before.split("\n"), self.after.split("\n"), lineterm="", n=0
             )
-            if not line.startswith(("---", "+++"))
-        ]
+        )[2:]
 
 
 @dataclass
