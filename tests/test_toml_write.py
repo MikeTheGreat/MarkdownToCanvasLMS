@@ -121,3 +121,61 @@ def test_relative_due_dates_items_are_inline_rows_inside_nested_tables(size: str
     assert "[[" not in text
     assert text.startswith("format_version = 2")
     assert tomllib.loads(text) == data
+
+
+_WITH_TABLES = """\
+# Course settings
+format_version = 7
+title = "Course"
+
+[[assignment_groups]]
+title = "Labs"
+"""
+
+
+def test_insert_top_level_key_goes_above_the_first_table() -> None:
+    doc = tomlkit.parse(_WITH_TABLES)
+    w.insert_top_level_key(doc, "group_categories", w.scalar_array([]))
+    text = tomlkit.dumps(doc)
+    assert text == (
+        "# Course settings\nformat_version = 7\ntitle = \"Course\"\n"
+        "group_categories = []\n\n[[assignment_groups]]\ntitle = \"Labs\"\n"
+    )
+    assert tomllib.loads(text)["group_categories"] == []
+
+
+def test_insert_top_level_key_appends_without_tables() -> None:
+    doc = tomlkit.parse('title = "Course"\n')
+    w.insert_top_level_key(doc, "group_categories", w.scalar_array([]))
+    assert tomlkit.dumps(doc) == 'title = "Course"\ngroup_categories = []\n'
+
+
+def test_add_to_top_level_array_creates_the_key() -> None:
+    doc = tomlkit.parse(_WITH_TABLES)
+    added = w.add_to_top_level_array(doc, "group_categories", ["Project Groups", "Project Groups"])
+    assert added == ["Project Groups"]
+    text = tomlkit.dumps(doc)
+    assert 'group_categories = ["Project Groups"]\n\n[[assignment_groups]]' in text
+    assert tomllib.loads(text)["assignment_groups"] == [{"title": "Labs"}]
+
+
+def test_add_to_top_level_array_appends_missing_names_only() -> None:
+    doc = tomlkit.parse('group_categories = ["Study Buddies"]  # sets\n\n[x]\na = 1\n')
+    added = w.add_to_top_level_array(doc, "group_categories", [" Study Buddies ", "Project Groups"])
+    assert added == ["Project Groups"]
+    assert tomlkit.dumps(doc) == (
+        'group_categories = ["Study Buddies", "Project Groups"]  # sets\n\n[x]\na = 1\n'
+    )
+
+
+def test_add_to_top_level_array_nothing_to_add_leaves_doc_unchanged() -> None:
+    src = 'group_categories = ["Project Groups"]\n'
+    doc = tomlkit.parse(src)
+    assert w.add_to_top_level_array(doc, "group_categories", ["Project Groups"]) == []
+    assert tomlkit.dumps(doc) == src
+
+
+def test_add_to_top_level_array_rejects_a_non_array() -> None:
+    doc = tomlkit.parse('group_categories = "Project Groups"\n')
+    with pytest.raises(ValueError):
+        w.add_to_top_level_array(doc, "group_categories", ["X"])

@@ -438,6 +438,7 @@ def _flags_config(repo: Path, config: Path | None) -> Config | None:
 )
 @click.option(
     "--config",
+    "-c",
     default=None,
     type=_CONFIG_PARAM,
     help=(
@@ -487,6 +488,7 @@ def emit_workflow_cmd(course_dir: str | None) -> None:
 @_course_dir_argument(required=True)
 @click.option(
     "--config",
+    "-c",
     default=None,
     type=_CONFIG_PARAM,
     help="Path to canvas.toml, or a registered course key whose canvas.toml to use (default: <COURSE_DIR>/course_settings/canvas.toml)",
@@ -549,6 +551,7 @@ def prune(course_dir: str, config: Path | None, mode: str | None, assume_yes: bo
 @_course_dir_argument()
 @click.option(
     "--config",
+    "-c",
     default=None,
     type=_CONFIG_PARAM,
     help="Path to canvas.toml, or a registered course key whose canvas.toml to use (default: <COURSE_DIR>/course_settings/canvas.toml)",
@@ -710,6 +713,7 @@ def fix_markdown_cmd(course_dir: str | None, apply: bool) -> None:
 @_course_dir_argument()
 @click.option(
     "--config",
+    "-c",
     default=None,
     type=_CONFIG_PARAM,
     help="Path to canvas.toml, or a registered course key whose canvas.toml to use (default: <COURSE_DIR>/course_settings/canvas.toml)",
@@ -1104,6 +1108,7 @@ def generate_due_dates_cmd(
 @_course_dir_argument()
 @click.option(
     "--config",
+    "-c",
     default=None,
     type=_CONFIG_PARAM,
     help=(
@@ -1166,6 +1171,7 @@ def _format_concise_date(iso_date: str) -> str:
 @_course_dir_argument()
 @click.option(
     "--config",
+    "-c",
     default=None,
     type=_CONFIG_PARAM,
     help="Path to canvas.toml, or a registered course key whose canvas.toml to use (default: <COURSE_DIR>/course_settings/canvas.toml)",
@@ -1215,7 +1221,7 @@ def _format_concise_date(iso_date: str) -> str:
 )
 @click.option(
     "--check-all",
-    "check_all",
+    "-ca",
     is_flag=True,
     default=False,
     help=(

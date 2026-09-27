@@ -101,6 +101,14 @@ class SyncContext:
     # (local_key, field_name) for announcement frontmatter fields that were
     # dropped because Canvas has no matching announcement setting.
     ignored_fields: list[tuple[str, str]] = field(default_factory=list)
+    # Names from course_settings.toml's group_categories list; a
+    # group_category_id name must be one of these.
+    group_categories: list[str] = field(default_factory=list)
+    # {name: [canvas id, ...]} of the course's group sets/group categories,
+    # fetched once per run (None = not fetched yet); see _resolve_group_category_id.
+    group_category_ids: dict[str, list[int]] | None = None
+    # Listed names whose creation on Canvas failed this run (not retried).
+    group_category_failures: set[str] = field(default_factory=set)
 
 
 def load_due_dates(repo_path: Path, settings: dict | None = None) -> list[dict[str, Any]]:
@@ -165,6 +173,40 @@ def load_course_flags(
                 )
         flags.update(overrides)
     return flags
+
+
+def load_group_categories(repo_path: Path, settings: dict | None = None) -> list[str]:
+    """Load the top-level ``group_categories`` array from course_settings.toml.
+
+    Each entry names a group set/group category (Canvas's UI says group set, its
+    API group category). Returns the trimmed names in file order. If settings
+    dict is provided (pre-loaded), use it; otherwise read from disk. A non-array
+    value, a non-string or empty entry, or a duplicate name is a whole-run
+    config error: raises ValueError, which the CLI reports via die().
+    """
+    if settings is None:
+        settings_path = repo_path / "course_settings" / "course_settings.toml"
+        if not settings_path.exists():
+            return []
+        with settings_path.open("rb") as fh:
+            settings = tomllib.load(fh)
+    raw = settings.get("group_categories", [])
+    if not isinstance(raw, list) or not all(isinstance(e, str) for e in raw):
+        raise ValueError(
+            "group_categories in course_settings.toml must be an array of group "
+            'set/group category names, e.g. group_categories = ["Project Groups"]'
+        )
+    names: list[str] = []
+    for entry in raw:
+        name = entry.strip()
+        if not name:
+            raise ValueError("group_categories in course_settings.toml contains an empty name")
+        if name in names:
+            raise ValueError(
+                f"group_categories in course_settings.toml lists {name!r} more than once"
+            )
+        names.append(name)
+    return names
 
 
 def load_pinned_resources(repo_path: Path, settings: dict | None = None) -> list[str]:
@@ -614,6 +656,111 @@ def _resolve_assignment_group_id(
         warn(msg, errors)
         return None
     return resolved
+
+
+def _create_group_category(ctx: SyncContext, name: str) -> int | None:
+    """Create the listed group set/group category ``name`` on Canvas.
+
+    Records the new ID in ``ctx.group_category_ids``. On failure, warns into
+    ``ctx.errors``, remembers the name so it is not retried, and returns None.
+    """
+    assert ctx.group_category_ids is not None
+    try:
+        new_id = ctx.api.create_group_category(ctx.course, name)
+    except Exception as exc:
+        warn(f"ERROR: could not create group set/group category {name!r}: {exc}", ctx.errors)
+        ctx.group_category_failures.add(name)
+        return None
+    ctx.group_category_ids[name] = [new_id]
+    verb = "Would create" if ctx.check_only else "Created"
+    print(f"  {verb} group set/group category: {name}")
+    return new_id
+
+
+def _load_group_category_ids(ctx: SyncContext) -> dict[str, list[int]]:
+    """The course's group sets/group categories, fetched once per run."""
+    if ctx.group_category_ids is None:
+        ctx.group_category_ids = ctx.api.get_group_category_ids(ctx.course)
+    return ctx.group_category_ids
+
+
+def _ensure_group_categories(ctx: SyncContext) -> None:
+    """Create every listed group set/group category that the course lacks.
+
+    Only ever creates (empty ones); never renames, changes or deletes. Makes no
+    request at all when the list is empty.
+    """
+    if not ctx.group_categories:
+        return
+    try:
+        ids = _load_group_category_ids(ctx)
+    except Exception as exc:
+        warn(f"ERROR: could not list group sets/group categories: {exc}", ctx.errors)
+        ctx.group_category_failures.update(ctx.group_categories)
+        return
+    for name in ctx.group_categories:
+        if name not in ids:
+            _create_group_category(ctx, name)
+
+
+def _resolve_group_category_id(ctx: SyncContext, value: Any, local_key: str) -> int | None:
+    """Resolve a group_category_id frontmatter value to a Canvas ID.
+
+    An integer passes through unchanged. A string must be listed in
+    course_settings.toml's group_categories (even when Canvas already has a
+    group set/group category of that name); a listed name missing on Canvas is
+    created. Anything unresolvable records an error and returns None: the
+    caller must then not upload the file, so Canvas never gets a whole-class
+    version of a group activity.
+    """
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if not isinstance(value, str) or not value.strip():
+        warn(
+            f"ERROR: {local_key}: group_category_id must be a group set/group category "
+            f"name or a numeric Canvas ID, got {value!r}; not uploaded",
+            ctx.errors,
+        )
+        return None
+    name = value.strip()
+    if name not in ctx.group_categories:
+        warn(
+            f"ERROR: {local_key}: group set/group category {name!r} is not listed in "
+            f"course_settings.toml; add it to group_categories "
+            f"(group_categories = [..., {name!r}]). Not uploaded",
+            ctx.errors,
+        )
+        return None
+    if name in ctx.group_category_failures:
+        warn(
+            f"ERROR: {local_key}: group set/group category {name!r} could not be "
+            f"created on Canvas; not uploaded",
+            ctx.errors,
+        )
+        return None
+    try:
+        ids = _load_group_category_ids(ctx).get(name)
+    except Exception as exc:
+        warn(
+            f"ERROR: {local_key}: could not list group sets/group categories: {exc}; "
+            f"not uploaded",
+            ctx.errors,
+        )
+        return None
+    if not ids:
+        new_id = _create_group_category(ctx, name)
+        if new_id is None:
+            print(f"  Not uploaded: {local_key}")
+        return new_id
+    if len(ids) > 1:
+        warn(
+            f"ERROR: {local_key}: Canvas has {len(ids)} group sets/group categories "
+            f"named {name!r} (IDs {', '.join(map(str, ids))}); rename or delete the "
+            f"extras in Canvas. Not uploaded",
+            ctx.errors,
+        )
+        return None
+    return ids[0]
 
 
 def _resolve_date_overrides(
@@ -1122,6 +1269,9 @@ _NON_METADATA_SETTINGS_KEYS = _SETTINGS_SECTION_KEYS + (
     "relative_due_dates",
     "course_flags",
     "pinned_resources",
+    # Group sets/group categories are created by _ensure_group_categories every
+    # full run, not by the course-settings phase.
+    "group_categories",
     # Repo-format bookkeeping written by import/upgrade; never Canvas metadata.
     "format_version",
     "created_by",
@@ -1773,9 +1923,10 @@ def run_sync(
             _settings_dict = tomllib.load(_fh)
             _front_page_path = _settings_dict.get("front_page")
 
-    # An invalid pinned_resources entry is a hard config error; validate it
-    # before phase 0 so nothing is applied to Canvas first.
+    # An invalid pinned_resources or group_categories entry is a hard config
+    # error; validate them before phase 0 so nothing is applied to Canvas first.
     pinned = load_pinned_resources(repo_path, _settings_dict)
+    group_categories = load_group_categories(repo_path, _settings_dict)
 
     # 0. Course settings (metadata, grading standards, assignment groups, policies, rubrics)
     rubric_ids, changed_sections, deferred_ag_rules, recreated_rubrics = (
@@ -1814,7 +1965,11 @@ def run_sync(
         ignored_fields=ignored_fields,
         api=api,
         check_only=check_all,
+        group_categories=group_categories,
     )
+
+    # 0.2. Group sets/group categories listed in course_settings.toml
+    _ensure_group_categories(ctx)
 
     # 0.5. Syllabus
     sync_syllabus(ctx)
@@ -2205,6 +2360,74 @@ def _upload_page(
         synced_keys.add(local_key)
 
 
+def _group_category_label(ctx: SyncContext, canvas_id: Any) -> str:
+    """'"Project Groups" (ID 286609)' when the name is known, else 'ID 286609'."""
+    for name, ids in (ctx.group_category_ids or {}).items():
+        if canvas_id in ids:
+            return f'"{name}" (ID {canvas_id})'
+    return f"ID {canvas_id}"
+
+
+def _group_category_refusal_message(
+    ctx: SyncContext, exc: capi.GroupCategoryChangeRefused, local_key: str
+) -> str:
+    """The error for an update the change safeguard refused, with what to do."""
+    what = exc.what
+    wanted = _group_category_label(ctx, exc.wanted)
+    if what == "discussion":
+        where = (
+            'edit the discussion in Canvas, and under Options tick "This is a Group '
+            'Discussion" and choose the group set there'
+        )
+    else:
+        where = (
+            'edit the assignment in Canvas, and under Group Assignment tick "This is '
+            'a Group Assignment" and choose the Group Set there'
+        )
+    if exc.reason == "switch":
+        current = _group_category_label(ctx, exc.current)
+        return (
+            f"ERROR: {local_key}: not uploaded. On Canvas this {what} uses group "
+            f"set/group category {current}, but group_category_id in the file asks "
+            f"for {wanted}. The tool never moves a {what} from one group set/group "
+            f"category to another, because students' existing work belongs to the "
+            f"old groups. Either change group_category_id in the file back to the "
+            f"current one, or make the switch yourself: {where}, then run update "
+            f"again. (Canvas itself may not allow the switch once students have "
+            f"work there; in that case make a new {what} instead.)"
+        )
+    work = "replies" if what == "discussion" else "submissions"
+    return (
+        f"ERROR: {local_key}: not uploaded. On Canvas this {what} is not a group "
+        f"{what} and already has student {work}, but group_category_id in the file "
+        f"asks for {wanted}. The tool does not turn a {what} that has student "
+        f"{work} into a group {what}, because that work was made outside any group. "
+        f"Either remove group_category_id from the file to keep it as it is, or "
+        f"make the change yourself: {where}, then run update again."
+    )
+
+
+def _warn_unpublish_refused(
+    entry: dict[str, Any], local_key: str, what: str, errors: list[str] | None
+) -> bool:
+    """Report an item Canvas would not unpublish (``published: false`` while
+    students have submitted or posted). The other changes were uploaded and it
+    stays published. Returns True when it happened, so the caller leaves the
+    manifest entry stale and the error repeats every run until it is resolved.
+    """
+    if not entry.get("unpublish_refused"):
+        return False
+    work = "submissions" if what == "assignment" else "replies"
+    warn(
+        f"ERROR: {local_key}: published is false, but Canvas will not unpublish "
+        f"this {what} because it has student {work}. Uploaded the other changes "
+        f"and left it published. Set 'published: true', or remove the {work} in "
+        f"Canvas and run update again",
+        errors,
+    )
+    return True
+
+
 def _upload_assignment(
     ctx: SyncContext, existing: dict | None, frontmatter: dict, html: str, title: str,
     published: bool, local_key: str, flags_used: dict[str, bool] | None = None
@@ -2266,9 +2489,18 @@ def _upload_assignment(
         else:
             extra["assignment_group_id"] = resolved
     _validate_annotatable_attachment(ctx, frontmatter, local_key, extra)
-    entry = ctx.api.create_or_update_assignment(
-        course, canvas_id, title, html, published=published, **extra
-    )
+    if "group_category_id" in extra:
+        resolved_gc = _resolve_group_category_id(ctx, extra["group_category_id"], local_key)
+        if resolved_gc is None:
+            return
+        extra["group_category_id"] = resolved_gc
+    try:
+        entry = ctx.api.create_or_update_assignment(
+            course, canvas_id, title, html, published=published, **extra
+        )
+    except capi.GroupCategoryChangeRefused as exc:
+        warn(_group_category_refusal_message(ctx, exc, local_key), errors)
+        return
     if entry.get("date_warning"):
         msg = _date_rejection_message(
             local_key, title, extra.get("due_at"), entry.get("html_url")
@@ -2276,6 +2508,7 @@ def _upload_assignment(
         warn(msg, errors)
     if not ctx.check_only:
         print(f"  Link: {entry['html_url']}")
+    unpublish_refused = _warn_unpublish_refused(entry, local_key, "assignment", errors)
     extra_record: dict[str, Any] = {}
     if flags_used:
         extra_record["flags_used"] = flags_used
@@ -2286,7 +2519,7 @@ def _upload_assignment(
         extra_record["resolved_dates"] = resolve_dates_symbolic(override)
     manifest_lib.record(
         manifest, manifest_path, local_key, entry["canvas_id"], "assignment",
-        extra=extra_record or None,
+        extra=extra_record or None, mark_synced=not unpublish_refused,
     )
     _apply_rubric(ctx, entry, frontmatter, local_key)
     if synced_keys is not None:
@@ -2336,9 +2569,18 @@ def _upload_discussion(
             grading_params["assignment_group_id"] = resolved
     if grading_params:
         extra["assignment"] = grading_params
-    entry = ctx.api.create_or_update_discussion(
-        course, canvas_id, title, html, published=published, **extra
-    )
+    if "group_category_id" in frontmatter:
+        resolved_gc = _resolve_group_category_id(ctx, frontmatter["group_category_id"], local_key)
+        if resolved_gc is None:
+            return
+        extra["group_category_id"] = resolved_gc
+    try:
+        entry = ctx.api.create_or_update_discussion(
+            course, canvas_id, title, html, published=published, **extra
+        )
+    except capi.GroupCategoryChangeRefused as exc:
+        warn(_group_category_refusal_message(ctx, exc, local_key), errors)
+        return
     if entry.get("date_warning"):
         msg = _date_rejection_message(
             local_key, title, grading_params.get("due_at"), entry.get("html_url")
@@ -2346,6 +2588,7 @@ def _upload_discussion(
         warn(msg, errors)
     if not ctx.check_only:
         print(f"  Link: {entry['html_url']}")
+    unpublish_refused = _warn_unpublish_refused(entry, local_key, "discussion", errors)
     extra_record: dict[str, Any] = {}
     if flags_used:
         extra_record["flags_used"] = flags_used
@@ -2353,7 +2596,7 @@ def _upload_discussion(
         extra_record["resolved_dates"] = resolve_dates_symbolic(override)
     manifest_lib.record(
         manifest, manifest_path, local_key, entry["canvas_id"], "discussion",
-        extra=extra_record or None,
+        extra=extra_record or None, mark_synced=not unpublish_refused,
     )
     if synced_keys is not None:
         synced_keys.add(local_key)
@@ -3296,6 +3539,7 @@ def run_targeted_sync(
     course_flags = load_course_flags(repo_path, config=config)
     due_dates = filter_due_dates_by_flags(load_due_dates(repo_path), course_flags)
     pinned = load_pinned_resources(repo_path)
+    group_categories = load_group_categories(repo_path)
 
     ctx = SyncContext(
         course=course,
@@ -3316,6 +3560,7 @@ def run_targeted_sync(
         rubric_ids=rubric_ids,
         unpublishable_items=unpublishable_items,
         ignored_fields=ignored_fields,
+        group_categories=group_categories,
     )
 
     visited: set[str] = set()

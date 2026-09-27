@@ -806,3 +806,12 @@ def test_run_publish_stops_on_link_escaping_repo(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="error"):
         publish.run_publish(repo, tmp_path / "site")
     assert ran == []
+
+
+def test_stage_content_renders_a_group_discussion_like_any_other(tmp_path):
+    (tmp_path / "discussions").mkdir()
+    discussion = tmp_path / "discussions" / "team.md"
+    discussion.write_text(
+        '---\ntitle: Team\npublished: true\ngroup_category_id: "Project Groups"\n---\n\nPlan.\n'
+    )
+    assert publish.stage_content_markdown(discussion, tmp_path) == "# Team\n\nPlan.\n"

@@ -71,6 +71,7 @@ class DryRunCanvas:
         self._next_id = 100000
         self._assignment_groups: dict[str, int] = {}
         self._rubrics: dict[str, int] = {}
+        self._group_categories: dict[str, list[int]] = {}
 
     def _new_id(self) -> int:
         self._next_id += 1
@@ -86,6 +87,9 @@ class DryRunCanvas:
 
     def get_rubric_ids(self, course) -> dict[str, int]:
         return dict(self._rubrics)
+
+    def get_group_category_ids(self, course) -> dict[str, list[int]]:
+        return {name: list(ids) for name, ids in self._group_categories.items()}
 
     # -- course settings -----------------------------------------------------
 
@@ -108,6 +112,11 @@ class DryRunCanvas:
 
     def apply_assignment_group_rules(self, course, groups, names=None) -> None:
         pass
+
+    def create_group_category(self, course, name: str) -> int:
+        new_id = self._new_id()
+        self._group_categories[name] = [new_id]
+        return new_id
 
     def update_late_policy(self, course, late_policy) -> None:
         pass

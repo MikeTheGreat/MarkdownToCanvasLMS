@@ -14,12 +14,13 @@
   <rubric_identifierref>gtest_rubric_1</rubric_identifierref>
   <rubric_use_for_grading>true</rubric_use_for_grading>
   <omit_from_final_grade>false</omit_from_final_grade>
-  <group_category_id>12345</group_category_id>
+  <has_group_category>true</has_group_category>
+  <group_category>Project Groups</group_category>
   <grade_group_students_individually>true</grade_group_students_individually>
   <anonymous_grading>true</anonymous_grading>
   <moderated_grading>true</moderated_grading>
   <grader_count>2</grader_count>
-  <final_grader_id>567</final_grader_id>
+  <final_grader_id>12345</final_grader_id>
   <grader_comments_visible_to_graders>true</grader_comments_visible_to_graders>
   <graders_anonymous_to_graders>false</graders_anonymous_to_graders>
   <grader_names_visible_to_final_grader>true</grader_names_visible_to_final_grader>

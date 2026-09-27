@@ -1259,3 +1259,11 @@ class TestSnippetLinks:
         })
         run_mv(repo / "assets/logo.png", repo / "assets/img/logo.png")
         assert (repo / "snippets/policy.md").read_text() == "![logo](../assets/img/logo.png)\n"
+
+
+def test_mv_keeps_a_group_discussions_group_category(tmp_path: Path) -> None:
+    """mv does not interpret group_category_id; the moved file keeps it verbatim."""
+    text = '---\ntitle: Team\ngroup_category_id: "Project Groups"\n---\n\nPlan.\n'
+    repo = _make_repo(tmp_path, {"discussions/team.md": text})
+    run_mv(repo / "discussions/team.md", repo / "discussions/team-plan.md")
+    assert (repo / "discussions/team-plan.md").read_text() == text

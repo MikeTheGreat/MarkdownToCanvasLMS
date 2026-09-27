@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import Any
 
 import tomlkit
-from tomlkit.items import AoT, Array
+from tomlkit.items import AoT, Array, Table, Whitespace
 
 #: Keys whose list of dicts is always written as an inline array of inline tables.
 INLINE_TABLE_ARRAY_KEYS = frozenset(
@@ -181,3 +181,65 @@ def add_comment_text(container: Any, text: str) -> None:
             container.add(tomlkit.comment(""))
         else:
             raise ValueError(f"not a comment or blank line: {line!r}")
+
+
+# ---------------------------------------------------------------------------
+# Editing an existing document in place
+# ---------------------------------------------------------------------------
+
+def insert_key(doc: tomlkit.TOMLDocument, position: int, key: str, value: Any) -> None:
+    """Insert ``key = value`` at body index ``position`` (``doc.add`` only appends,
+    which would land after any table header and nest the key)."""
+    if position >= len(doc.body):
+        doc.add(key, value)  # nothing follows, so appending is the same thing
+        return
+    # Container._insert_at is private but the only way to insert at a position.
+    doc._insert_at(position, key, value)
+
+
+def insert_top_level_key(doc: tomlkit.TOMLDocument, key: str, value: Any) -> None:
+    """Add ``key = value`` as a top-level key of ``doc``.
+
+    It goes before the first table or array-of-tables header (a key written
+    after a header belongs to that table), above the blank lines that separate
+    the top-level keys from that header; at the end when there is no header.
+    The rest of the document is untouched.
+    """
+    position = len(doc.body)
+    for i, (_key, item) in enumerate(doc.body):
+        if isinstance(item, (Table, AoT)):
+            position = i
+            break
+    while position > 0 and isinstance(doc.body[position - 1][1], Whitespace):
+        position -= 1
+    insert_key(doc, position, key, value)
+
+
+def add_to_top_level_array(
+    doc: tomlkit.TOMLDocument, key: str, values: list[str]
+) -> list[str]:
+    """Append each of ``values`` missing from the top-level string array ``key``.
+
+    Creates ``key = [...]`` with ``insert_top_level_key`` when it is absent.
+    Values are compared after trimming surrounding whitespace, and each is added
+    once. Returns the values added, in order. Raises ValueError when ``key``
+    exists but is not an array.
+    """
+    if key in doc and not isinstance(doc[key], list):
+        raise ValueError(f"{key} is not an array")
+    existing = {str(v).strip() for v in doc[key]} if key in doc else set()
+    added: list[str] = []
+    for value in values:
+        name = value.strip()
+        if name and name not in existing:
+            existing.add(name)
+            added.append(name)
+    if not added:
+        return added
+    if key in doc:
+        arr = doc[key]
+        for name in added:
+            arr.append(name)
+    else:
+        insert_top_level_key(doc, key, scalar_array(added))
+    return added

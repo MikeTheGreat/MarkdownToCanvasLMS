@@ -149,12 +149,12 @@ def test_assignment_canvas_ref_rewritten(imported_dir: Path) -> None:
 
 def test_assignment_group_and_grading_fields_imported(imported_dir: Path) -> None:
     text = (imported_dir / "assignments" / "my-assignment.md").read_text()
-    assert "group_category_id: 12345" in text
+    assert 'group_category_id: "Project Groups"' in text
     assert "grade_group_students_individually: true" in text
     assert "anonymous_grading: true" in text
     assert "moderated_grading: true" in text
     assert "grader_count: 2" in text
-    assert "final_grader_id: 567" in text
+    assert "final_grader_id: 12345" in text
     assert "grader_comments_visible_to_graders: true" in text
     assert "grader_names_visible_to_final_grader: true" in text
 
@@ -1144,9 +1144,9 @@ def test_run_import_replaces_course_url_in_page(imported_dir: Path) -> None:
 
 
 def test_run_import_does_not_replace_course_id_outside_url(imported_dir: Path) -> None:
-    """group_category_id in assignment frontmatter must not be replaced."""
+    """A frontmatter number equal to the course id (final_grader_id) must not be replaced."""
     text = (imported_dir / "assignments" / "my-assignment.md").read_text()
-    assert "group_category_id: 12345" in text
+    assert "final_grader_id: 12345" in text
 
 
 def test_run_import_snippet_roundtrip(imported_dir: Path) -> None:

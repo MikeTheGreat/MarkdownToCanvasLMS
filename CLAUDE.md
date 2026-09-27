@@ -60,6 +60,14 @@ bump. Nothing enforces this mechanically.
 
 ## User often uses a shell alias of 'gg' which expands to markdown-to-canvas
 
+## Terminology: "group set/group category"
+
+Canvas's UI calls it a "group set"; the API and export XML call it a "group category".
+Use the phrase "group set/group category" everywhere — in conversation with the user,
+README.md, ARCHITECTURE.md, other docs, and code comments. The frontmatter key is
+`group_category_id` (it accepts a group set/group category name or a numeric ID).
+Do not confuse this with an "assignment group", which is a grading category.
+
 
 # MarkdownToCanvasLMS
 

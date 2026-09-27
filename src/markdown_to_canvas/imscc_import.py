@@ -57,6 +57,9 @@ class ImportContext:
     # Set by convert_page when a wiki page carries <meta name="front_page"
     # content="true"/>; create_course_settings writes it out as front_page.
     front_page: str | None = None
+    # Group set/group category names used by imported discussions and
+    # assignments, in first-seen order; written to course_settings.toml.
+    group_categories: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -1053,10 +1056,12 @@ def parse_assignment_settings(xml_path: Path) -> dict[str, Any]:
         if use_for_grading is not None:
             result["use_for_grading"] = use_for_grading
 
-    # Group assignment
-    group_cat = _int("group_category_id")
-    if group_cat:
-        result["group_category_id"] = group_cat
+    # Group assignment. Canvas exports the group set/group category by name
+    # (<group_category>), never by ID; sync resolves the name per course.
+    if _bool("has_group_category"):
+        group_cat = _text("group_category")
+        if group_cat:
+            result["group_category_id"] = group_cat
     for bool_tag in ("grade_group_students_individually",):
         val = _bool(bool_tag)
         if val:
@@ -1150,11 +1155,19 @@ def _resolve_assignment_group_and_rubric(
             )
 
 
+def _note_group_category(ctx: ImportContext, fm_fields: dict[str, Any]) -> None:
+    """Remember the group set/group category an imported item uses."""
+    name = fm_fields.get("group_category_id")
+    if isinstance(name, str) and name not in ctx.group_categories:
+        ctx.group_categories.append(name)
+
+
 def convert_assignment(ctx: ImportContext, entry: TempEntry) -> None:
     """Convert an assignment HTML + settings XML to assignments/{stem}.md."""
     settings_path = ctx.imscc_dir / entry.metadata["settings_path"]
     fm_fields = parse_assignment_settings(settings_path)
     _resolve_assignment_group_and_rubric(ctx, fm_fields, entry.local_path)
+    _note_group_category(ctx, fm_fields)
 
     date_fields = _extract_date_fields(fm_fields)
     _collect_due_date(ctx.due_dates_collector, fm_fields.get("title", ""), "assignment", date_fields)
@@ -1198,6 +1211,14 @@ def parse_topic_meta(xml_path: Path) -> dict[str, Any]:
         "is_announcement": topic_type == "announcement",
         "require_initial_post": require_initial.lower() == "true" if require_initial else False,
     }
+
+    # Group discussion: the topic-level elements (a graded discussion's nested
+    # <assignment> carries its own has_group_category, which is not the one
+    # Canvas uses for the topic). Exported by name, never by ID.
+    if _el_text(root, "has_group_category", ns).lower() == "true":
+        group_cat = _el_text(root, "group_category", ns)
+        if group_cat:
+            result["group_category_id"] = group_cat
 
     # graded discussion — pick up points/due_at from embedded <assignment>
     assignment_el = (
@@ -1282,6 +1303,7 @@ def convert_discussion(ctx: ImportContext, entry: TempEntry) -> None:
         return
 
     _resolve_assignment_group_and_rubric(ctx, fm_fields, entry.local_path)
+    _note_group_category(ctx, fm_fields)
 
     date_fields = _extract_date_fields(fm_fields)
     _collect_due_date(ctx.due_dates_collector, fm_fields.get("title", ""), "discussion", date_fields)
@@ -2793,6 +2815,7 @@ def _write_course_settings_toml(
     late_policy: dict[str, Any],
     output_dir: Path,
     due_dates: list[dict[str, Any]] | None = None,
+    group_categories: list[str] | None = None,
 ) -> None:
     """Write course_settings/course_settings.toml with all course-level settings."""
     data: dict[str, Any] = {}
@@ -2887,9 +2910,10 @@ def _write_course_settings_toml(
     tab_configuration = course_settings.get("tab_configuration")
     if tab_configuration:
         live_arrays["tab_configuration"] = tab_configuration
-    if live_arrays:
-        doc.add(tomlkit.nl())
-        toml_write.fill_table(doc, live_arrays)
+    # Always written (empty when unused), like an upgraded repo's.
+    live_arrays["group_categories"] = list(group_categories or [])
+    doc.add(tomlkit.nl())
+    toml_write.fill_table(doc, live_arrays)
 
     # Sections last: inline-nested tables, then the block arrays.
     sections: dict[str, Any] = {}
@@ -3001,6 +3025,7 @@ def create_course_settings(
     base_url: str | None = None,
     due_dates: list[dict[str, Any]] | None = None,
     front_page: str | None = None,
+    group_categories: list[str] | None = None,
 ) -> None:
     """Write course_settings/{course_settings.toml, syllabus.md, events.md, canvas.toml}."""
     cs_dir = output_dir / "course_settings"
@@ -3069,6 +3094,7 @@ def create_course_settings(
         course_settings, manifest_meta, grading_standards, assignment_groups, late_policy,
         output_dir,
         due_dates=due_dates,
+        group_categories=group_categories,
     )
 
     if events:
@@ -3427,6 +3453,7 @@ def run_import(imscc_path: Path, output_dir: Path) -> None:
         create_course_settings(
             imscc_dir, temp_manifest, output_dir, course_id, base_url,
             due_dates=due_dates, front_page=ctx.front_page,
+            group_categories=ctx.group_categories,
         )
 
         # Phase 8: parameterize Canvas course URL via snippet

@@ -346,7 +346,8 @@ def test_upgrade_keeps_created_by_and_order(tmp_path):
     data = tomllib.loads(text)
     assert data["created_by"] == "0.1"
     assert list(data)[:3] == ["format_version", "created_by", "upgraded_by"]
-    assert "# c\nfoo = 1\n\n[s]\nbar = 2  # trailing\n" in text
+    # Migration 6 -> 7 adds its top-level key above the first table.
+    assert "# c\nfoo = 1\ngroup_categories = []\n\n[s]\nbar = 2  # trailing\n" in text
 
 
 def test_upgrade_fixes_nested_tab_configuration(tmp_path, capsys):
@@ -1079,7 +1080,7 @@ def test_migration_5_to_6_promotes_sections_and_keeps_content_headings(tmp_path,
         q: _OLD_IMPORTED,
     })
     manifest = _manifest(tmp_path, version=5)
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=6)  # this step only
     assert (tmp_path / q).read_text() == _NEW_IMPORTED
     assert rf.read_repo_version(tmp_path) == 6
     assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 6}
@@ -1208,6 +1209,69 @@ def test_migration_5_to_6_skips_settings_already_at_6(tmp_path):
     (tmp_path / q).parent.mkdir(parents=True)
     (tmp_path / q).write_text("## Question\n\n## Heading\n")
     manifest = _manifest(tmp_path, version=5)
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=6)  # this step only
     assert (tmp_path / q).read_text() == "## Question\n\n## Heading\n"
     assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 6}
+
+
+# --- migration 6 -> 7 ------------------------------------------------------
+
+_V6_BODY = (
+    '# Course settings\ntitle = "x"  # name\n\n'
+    '[[assignment_groups]]\ntitle = "Labs"\n\n'
+    '[relative_due_dates.tables.default]\nitems = []\n'
+)
+
+
+def test_migration_6_to_7_adds_empty_group_categories_above_the_first_table(tmp_path, capsys):
+    path = _settings(tmp_path, "format_version = 6\n" + _V6_BODY)
+    manifest = _manifest(tmp_path, version=6, extra={"a.md": {"canvas_id": 1}})
+    page = tmp_path / "assignments" / "a.md"
+    page.parent.mkdir()
+    page.write_text("---\ngroup_category_id: 12345\n---\n\nBody\n")
+    rf.run_upgrade(tmp_path, today=date(2026, 9, 26), target_version=7)
+    text = path.read_text()
+    data = tomllib.loads(text)
+    assert data["format_version"] == 7
+    assert data["group_categories"] == []
+    assert '# Course settings\ntitle = "x"  # name\ngroup_categories = []\n\n[[assignment_groups]]' in text
+    assert data["assignment_groups"] == [{"title": "Labs"}]
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 7}
+    assert page.read_text() == "---\ngroup_category_id: 12345\n---\n\nBody\n"
+    assert "Add an empty group_categories = [] list" in capsys.readouterr().out
+
+
+def test_migration_6_to_7_leaves_an_existing_list(tmp_path, capsys):
+    body = 'group_categories = ["Project Groups"]  # keep\n' + _V6_BODY
+    path = _settings(tmp_path, "format_version = 6\n" + body)
+    rf.run_upgrade(tmp_path, target_version=7)
+    text = path.read_text()
+    assert body in text
+    assert tomllib.loads(text)["group_categories"] == ["Project Groups"]
+    assert "already present" in capsys.readouterr().out
+
+
+def test_migration_6_to_7_noop_reports_and_writes_nothing(tmp_path, capsys):
+    path = _settings(tmp_path, "format_version = 6\n" + _V6_BODY)
+    before = path.read_bytes()
+    rf.run_upgrade(tmp_path, noop=True)
+    assert path.read_bytes() == before
+    out = capsys.readouterr().out
+    assert "Add an empty group_categories = [] list" in out
+    assert "no files were written" in out
+
+
+def test_migration_6_to_7_skips_settings_already_at_7(tmp_path):
+    path = _settings(tmp_path, "format_version = 7\nx = 1\n")
+    manifest = _manifest(tmp_path, version=6)
+    rf.run_upgrade(tmp_path)
+    assert "group_categories" not in path.read_text()
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 7}
+
+
+def test_upgrade_from_scratch_gets_group_categories(tmp_path):
+    rf.run_upgrade(tmp_path)
+    text = (tmp_path / "course_settings/course_settings.toml").read_text()
+    data = tomllib.loads(text)
+    assert data["group_categories"] == []
+    assert text.index("group_categories") < text.index("[relative_due_dates")

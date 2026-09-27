@@ -88,6 +88,7 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
     - [`course_settings.toml`](#course_settingstoml)
       - [Centralized due dates](#centralized-due-dates)
       - [Pinned resources (`pinned_resources`)](#pinned-resources-pinned_resources)
+      - [Group sets/group categories (`group_categories`)](#group-setsgroup-categories-group_categories)
     - [Syllabus (`course_settings/syllabus.md`)](#syllabus-course_settingssyllabusmd)
     - [Rubrics (`course_settings/rubrics.toml`)](#rubrics-course_settingsrubricstoml)
     - [Other `course_settings/` files (import-only)](#other-course_settings-files-import-only)
@@ -1115,7 +1116,7 @@ to push the changes.
 Use `cp` to copy pages, assignments, discussions, announcements, quizzes,
 question banks or whole modules from one course repo into another. It copies
 what the content needs along with it: images and other assets, snippets, and
-rubrics.
+rubrics, and the names of the group sets/group categories it uses.
 
 ```text
 Usage: markdown-to-canvas cp [OPTIONS] SRC... COURSE_DIR
@@ -1170,8 +1171,9 @@ gg cp --noop modules/week-1.md 143
   it doesn't, `update` on the destination reports the broken link as an error
   and skips uploading that item until you fix it (copy the target too, or
   change the link).
-* Nothing in `course_settings/` is copied except rubric blocks and the
-  `module_order.toml` entry described here. `cp course_settings/...` is an error.
+* Nothing in `course_settings/` is copied except rubric blocks, the
+  `module_order.toml` entry and the `group_categories` names described here.
+  `cp course_settings/...` is an error.
 * Files matched by the source's `.canvasignore` are skipped and listed.
 * Manifests are not read or changed, and nothing is `git add`ed.
 
@@ -1206,12 +1208,22 @@ rubric by title, `cp` checks the destination's `course_settings/rubrics.toml`:
 copied discussion's rubric is added to `rubrics.toml` but not associated on
 Canvas.
 
+**Group sets/group categories.** For each copied assignment or discussion whose
+`group_category_id` is a name, `cp` adds that name to the destination's
+`group_categories` list in `course_settings.toml` if it is not already there
+(creating the key, above the first `[section]`, when the file has none). Each
+name is added once and reported; the rest of the file is left untouched. The
+next `update` on the destination creates the group set/group category on Canvas;
+you still put students into its groups there. A numeric `group_category_id` is
+not added and gets a warning instead.
+
 **Warnings.** Copied files are never edited. `cp` warns about values that won't
 work in the destination:
 
 * an `assignment_group_id` name that the destination's `course_settings.toml`
   does not define, and numeric `assignment_group_id`, `group_category_id` or
-  `final_grader_id` values;
+  `final_grader_id` values (a `group_category_id` *name* is added to the
+  destination instead, as described above);
 * course flags (in `#if` directives or `published_if`) that the destination does
   not define;
 * items whose dates are set in the source's `due_dates` or `relative_due_dates`
@@ -1612,6 +1624,14 @@ due_dates = [
     { name = "Midterm Quiz", type = "quiz", unlock_at = "NONE", due_at = "2025-03-01T23:59:00-05:00", lock_at = "CREATE_NONE_THEN_KEEP" },
 ]
 
+# ── Group sets/group categories ─────────────────────────────────────────
+# Names of the course's group sets/group categories. `update` creates any
+# that the Canvas course lacks (empty; add students to groups in Canvas).
+# A group_category_id name in a discussion or assignment must be listed here.
+# See "Group sets/group categories" below. Top-level key: keep it BEFORE any
+# [section] or [[section]] header.
+group_categories = ["Project Groups"]
+
 # ── Default post policy (when grades become visible to students) ──────────
 [default_post_policy]
 post_manually = true   # true = grades hidden until you post them; false = automatic
@@ -1824,6 +1844,88 @@ update immediately** (before anything is uploaded), telling you to pin the
 whole quiz folder instead. Only the quiz folder or its main `.md` file (the
 bank folder or its main `.toml`) are valid pin targets under `quizzes/` and
 `question_banks/`.
+
+#### Group sets/group categories (`group_categories`)
+
+Canvas's UI calls these **group sets** (People → Groups); its API and course
+exports call them **group categories**. A group set/group category holds the
+groups of a course, and each group holds some of its students. A discussion
+attached to one becomes a **group discussion**: Canvas gives each group its own
+copy that only that group's members can see. An assignment attached to one
+becomes a **group assignment**.
+
+List the course's group sets/group categories by name in the top-level
+`group_categories` array:
+
+```toml
+group_categories = ["Project Groups", "Study Buddies"]
+```
+
+and name one in a discussion's or assignment's frontmatter with
+`group_category_id` (see [Discussion](#discussion-discussions) and
+[Assignment](#assignment-assignments)):
+
+```yaml
+group_category_id: "Project Groups"
+```
+
+* **`update` creates the missing ones.** Before uploading any content, a full
+  `update` compares the list with the Canvas course and creates each listed
+  group set/group category that the course does not have, printing
+  `Created group set/group category: …`. It creates it **empty**: put
+  students into groups in Canvas (People → Groups). It never renames, changes or
+  deletes a group set/group category, including ones on Canvas that are not
+  listed. A targeted `update` (`-t`/`-s`) creates a listed one only when a file
+  it uploads needs it. `update --check-all` reports what it would create and
+  does not contact Canvas.
+* **Every name must be listed**, even when the group set/group category
+  already exists on Canvas. A discussion or assignment whose `group_category_id`
+  names one that is not listed is **not uploaded** (neither created nor
+  updated); `update` prints an error naming the file and the missing name, lists
+  it in the end-of-run error summary, and exits non-zero. Other files still
+  sync. This is deliberate: uploading the file without the setting would create
+  a whole-class discussion (or an individual assignment), and Canvas may not let
+  you convert it once students have posted. `update --check-all` reports the same
+  error, so a typo is caught offline.
+* **Names are resolved per Canvas course.** The same repo file gets the right
+  ID in every course it is synced to (for example two sections with separate
+  `canvas.toml` files), because `update` looks the name up in the course it is
+  syncing. It does this with one request per run (only when `group_categories`
+  is not empty); the IDs are not stored in the manifest.
+* **A numeric `group_category_id`** (an ID copied from Canvas) is sent as it is,
+  without a lookup and without needing to be listed. It only works in the
+  course it came from, so prefer names.
+* If Canvas has two group sets/group categories with the same name, files that
+  use that name are not uploaded until you rename or delete one in Canvas.
+* **Student work is protected.** When the discussion or assignment already
+  exists on Canvas, `update`:
+  * does not send the group set/group category at all when Canvas already has
+    that one, so re-syncing a group discussion after students have posted is
+    safe;
+  * adds one to an existing whole-class discussion or individual assignment only
+    if it has no replies or submissions yet;
+  * never switches an item from one group set/group category to another.
+
+  In the refused cases the file is not uploaded and `update` prints an error
+  naming the group set/group category on Canvas and the one the file asks for.
+  To resolve it, either change `group_category_id` in the file to match Canvas
+  (or remove it, for an item that has no group set/group category yet), or make
+  the change yourself in Canvas: edit the discussion and use "This is a Group
+  Discussion" under Options, or edit the assignment and use "This is a Group
+  Assignment" and Group Set under Group Assignment. Then run `update` again.
+  Canvas may itself refuse to change the group set once students have work
+  there; then make a new discussion or assignment instead.
+* **Removing `group_category_id` does not un-group an item.** When the key is
+  absent, `update` sends no group setting, so a group discussion stays a group
+  discussion on Canvas (and a group assignment stays a group assignment). To turn
+  one back into a whole-class discussion or individual assignment, change it in
+  Canvas.
+
+`import` writes `group_categories` for you (an empty `[]` when the export has
+none), `cp` adds the names that copied files use, and `upgrade` adds an empty list
+to repos created before format version 7. `update` checks the list when it
+starts: a value that is not an array of names, an empty name, or a name listed
+twice stops the run before anything is sent to Canvas.
 
 ### Syllabus (`course_settings/syllabus.md`)
 
@@ -2078,7 +2180,8 @@ use_for_grading: true                    # use the rubric score as the assignmen
                                          #   for feedback-only rubrics
 
 # ── Group assignment ──────────────────────────────────────────────────────
-group_category_id: 12345                 # numeric ID of an existing group set
+group_category_id: "Project Groups"      # name of a group set/group category
+                                         #   listed in course_settings.toml
                                          #   (see note below); makes this a
                                          #   group assignment
 grade_group_students_individually: false # true = "assign grades to each
@@ -2125,14 +2228,23 @@ peer reviews** are all settable from the frontmatter above. A few caveats:
   created (or updated) on each assignment sync. `use_for_grading` defaults to
   `true`; set it to `false` for advisory-only (feedback without grade impact)
   rubrics.
-* **Group set:** Canvas identifies a group set (group *category*) by numeric ID,
-  not by name. This tool does **not** create or manage group sets — create the
-  group set in the Canvas UI (or via the API) first, then put its numeric
-  `group_category_id` here. (The ID appears in the URL when you view the group
-  set in Canvas: `.../groups#tab-<id>`.)
+* **Group set/group category:** `group_category_id` names a group set/group
+  category listed in `group_categories` in `course_settings.toml`; `update`
+  creates it on Canvas if the course lacks it and sends the course's own ID. A
+  name that is not listed stops this file from being uploaded. A numeric Canvas
+  ID also works but only in the course it came from. See
+  [Group sets/group categories](#group-setsgroup-categories-group_categories),
+  including what `update` will and won't change once students have submitted.
 * **Moderated grading:** Canvas requires `grader_count` (and usually
   `final_grader_id`) when `moderated_grading` is `true`. `final_grader_id` is a
   Canvas **user** ID.
+* **`published: false` after students have submitted:** Canvas will not
+  unpublish an assignment that has student submissions (including ones made with
+  "View As Student"), and it will not unpublish a graded discussion that has
+  replies. `update` then uploads the file's other changes, leaves the item
+  published, and reports an error telling you to set `published: true` or
+  remove the submissions in Canvas. The error repeats on every `update` until
+  one of those is done; the rest of the run is not affected.
 
 ### Discussion (`discussions/`)
 
@@ -2157,10 +2269,24 @@ unlock_at: "2025-01-27T00:00:00-05:00"
 lock_at:   "2025-02-08T23:59:00-05:00"
 assignment_group_id: "Labs"  # name of an assignment group defined in
                              #   course_settings.toml, or a numeric Canvas ID
+
+# Group discussion — include this to give each student group its own copy:
+group_category_id: "Project Groups"  # a group set/group category listed in
+                                     #   course_settings.toml
 ---
 
 Post your initial response by Wednesday, then reply to two classmates.
 ```
+
+**Group discussions.** With `group_category_id`, Canvas splits the discussion
+into one copy per group in that group set/group category, and each student sees
+only their own group's copy. It works for graded and ungraded discussions. The
+name must be listed in `group_categories` in `course_settings.toml`, or the
+discussion is not uploaded; `update` creates the group set/group category on
+Canvas if needed, but you put students into its groups in Canvas. Deleting the
+`group_category_id` line later does not turn it back into a whole-class
+discussion. See
+[Group sets/group categories](#group-setsgroup-categories-group_categories).
 
 ### Announcement (`announcements/`)
 
@@ -3052,8 +3178,8 @@ anything on Canvas. If a version differs from the tool's, the command stops and
 changes nothing:
 
 ```text
-Error: This course repo is format version 0 but this tool (markdown-to-canvas 0.2.1) uses format version 6. Run `markdown-to-canvas upgrade` first.
-Error: course_settings/course_settings.toml is format version 7 but this tool (markdown-to-canvas 0.2.1) only understands format version 6. Update markdown-to-canvas.
+Error: This course repo is format version 0 but this tool (markdown-to-canvas 0.2.1) uses format version 7. Run `markdown-to-canvas upgrade` first.
+Error: course_settings/course_settings.toml is format version 8 but this tool (markdown-to-canvas 0.2.1) only understands format version 7. Update markdown-to-canvas.
 ```
 
 A manifest that is older than the repo is named in the message. This happens
@@ -3173,6 +3299,16 @@ fenced code are not touched. The migration prints a `NOTICE:` for:
 Quizzes whose files changed are uploaded again by the next `update`, and their
 question text on Canvas changes to what the files now say.
 
+Migration 6 to 7 goes with `group_category_id` accepting a group set/group
+category name (see
+[Group sets/group categories](#group-setsgroup-categories-group_categories)).
+It adds an empty top-level `group_categories = []` to `course_settings.toml`,
+above the first section header, unless the file already has a
+`group_categories` key, and records version 7 in every manifest. No content file
+changes: a numeric `group_category_id` keeps working. An older tool would
+silently drop a named `group_category_id` from a discussion, which is why the
+version changes.
+
 `upgrade` also checks that `tab_configuration` is a top-level key. The tool
 only reads it there, so when it is nested under a section
 (`[default_post_policy]`, for example) `upgrade` moves it to the top level,
@@ -3207,6 +3343,8 @@ This converts pages, assignments, discussions, announcements, quizzes, question 
 Every top-level folder the tool recognizes (`pages/`, `assignments/`, `discussions/`, `announcements/`, `quizzes/`, `question_banks/`, `modules/`, `snippets/`, `assets/`, `course_settings/`) is created even if the course has nothing to put in it, so the repo layout always matches [How it works](#how-it-works) and there's an obvious place to add new content later. A starter `.gitignore` and `.canvasignore` are also written — both cover common OS/editor/Office junk files, plus commented-out examples of course-specific patterns (per-term-only material, feedback drafts) you can uncomment or adapt as the course grows. `.canvasignore` also actively excludes `course_definition/**` — instructor reference material (scope-and-sequence docs, curriculum outcome guides) that should never be uploaded to Canvas — and `question_banks/**`, since Canvas's API cannot create or update question banks. If the export contains any question banks, `import` prints a warning saying they cannot be re-uploaded.
 
 **Front page.** If the export marks a page as the course home page, `import` writes `front_page = "pages/<slug>.md"` into `course_settings/course_settings.toml`. Canvas stores this on the page itself rather than in its course-settings file, so `default_view` alone does not say *which* page is the home page. Keeping the key matters for more than `update`: a home page is in no module and nothing links to it, so `front_page` is the only thing marking it as referenced — without it, `find-local-orphans` reports your landing page as unused. Imports made before 2026-09 are missing the key; if your home page went missing after an orphan cleanup, recover it from git and add the key by hand.
+
+**Group sets/group categories.** A Canvas export names the group set/group category of each group discussion and group assignment, but does not contain the group sets/group categories themselves or their groups (those are roster data). `import` writes `group_category_id: "<name>"` into each such discussion's and assignment's frontmatter and lists every name once in `group_categories` in `course_settings.toml` (written as `group_categories = []` when the course has none). The first `update` into a course that lacks them creates them, empty; put students into groups in Canvas. See [Group sets/group categories](#group-setsgroup-categories-group_categories).
 
 **Announcements** are imported into an `announcements/` folder, one Markdown file per announcement. Only the announcement itself is imported — any student replies, likes, or comments are not part of a Canvas export, so there is nothing to import. Each file gets `published: false`, which means `update` leaves it **staged (not posted)** until you set `published: true` — handy for re-posting announcements when the time is right (e.g. a midterm reminder the week before the midterm). The frontmatter keeps `title` and `published` as active fields; the original export's other metadata (post date, workflow state, etc.) is preserved as commented-out lines you can uncomment to apply (see [Announcement](#announcement-announcements)).
 

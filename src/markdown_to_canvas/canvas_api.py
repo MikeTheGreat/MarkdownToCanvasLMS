@@ -441,6 +441,24 @@ def get_assignment_group_ids(course) -> dict[str, int]:
     return {ag.name: ag.id for ag in course.get_assignment_groups()}
 
 
+def get_group_category_ids(course) -> dict[str, list[int]]:
+    """Return {name: [canvas_id, ...]} for the course's group sets/group categories.
+
+    Names are trimmed. A list holds more than one ID only when Canvas has
+    several group sets/group categories with the same name; the caller decides
+    what to do about that.
+    """
+    ids: dict[str, list[int]] = {}
+    for category in course.get_group_categories():
+        ids.setdefault(category.name.strip(), []).append(category.id)
+    return ids
+
+
+def create_group_category(course, name: str) -> int:
+    """Create an empty group set/group category; return its Canvas ID."""
+    return course.create_group_category(name).id
+
+
 def update_late_policy(course, late_policy: dict[str, Any]) -> None:
     """Create or update the course late policy via raw API calls."""
     if not late_policy:
@@ -1024,13 +1042,85 @@ def _retry_without_dates(do_call, kwargs: dict[str, Any], strip_fn) -> dict[str,
         return result
 
 
+class GroupCategoryChangeRefused(Exception):
+    """Canvas already has student work under the item, or a different group
+    set/group category; the tool leaves the change to the user in Canvas.
+
+    ``reason`` is "switch" (Canvas has a different one) or "student_work"
+    (Canvas has none, but the item has replies/submissions). ``current`` and
+    ``wanted`` are Canvas group category IDs; sync.py turns them into names
+    for the message it prints.
+    """
+
+    def __init__(self, what: str, reason: str, current: Any, wanted: Any) -> None:
+        self.what = what
+        self.reason = reason
+        self.current = current
+        self.wanted = wanted
+        if reason == "switch":
+            text = (
+                f"the Canvas {what} already uses group set/group category {current}; "
+                f"the tool will not switch it to {wanted}"
+            )
+        else:
+            text = (
+                f"the Canvas {what} has student work, so the tool will not make it "
+                f"a group {what}"
+            )
+        super().__init__(text)
+
+
+def _guard_group_category(
+    kwargs: dict[str, Any], current: Any, has_student_work: Any, what: str
+) -> dict[str, Any]:
+    """Apply the group set/group category change rules to an update of an
+    existing ``what`` ("discussion" or "assignment").
+
+    Returns ``kwargs`` without ``group_category_id`` when Canvas already has
+    that value, so it is never re-sent under student work. Raises
+    GroupCategoryChangeRefused when the update would add one to an item with
+    replies/submissions (``has_student_work`` missing counts as having some) or
+    replace a different one.
+    """
+    wanted = kwargs["group_category_id"]
+    if current == wanted:
+        return {k: v for k, v in kwargs.items() if k != "group_category_id"}
+    if current:
+        raise GroupCategoryChangeRefused(what, "switch", current, wanted)
+    if has_student_work is None or has_student_work:
+        raise GroupCategoryChangeRefused(what, "student_work", current, wanted)
+    return kwargs
+
+
+def _retry_without_unpublish(do_call, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """Run ``do_call(**kwargs)``; if Canvas refuses to unpublish the item
+    because students have submitted or posted, retry without ``published`` so
+    the other changes still go up, tagging the result with ``unpublish_refused``.
+
+    Other ``BadRequest`` errors propagate unchanged."""
+    try:
+        return do_call(**kwargs)
+    except BadRequest as exc:
+        text = str(exc).lower()
+        if kwargs.get("published") is not False or (
+            "unpublish" not in text and "draft state" not in text
+        ):
+            raise
+        result = do_call(**{k: v for k, v in kwargs.items() if k != "published"})
+        result["unpublish_refused"] = str(exc)
+        return result
+
+
 def create_or_update_assignment(
     course, canvas_id: int | None, title: str, body: str, **kwargs
 ) -> dict[str, Any]:
-    return _retry_without_dates(
-        lambda **kw: _do_assignment(course, canvas_id, title, body, **kw),
+    return _retry_without_unpublish(
+        lambda **kw: _retry_without_dates(
+            lambda **kw2: _do_assignment(course, canvas_id, title, body, **kw2),
+            kw,
+            _strip_top_level_dates,
+        ),
         kwargs,
-        _strip_top_level_dates,
     )
 
 
@@ -1040,6 +1130,13 @@ def _do_assignment(
     if canvas_id is not None:
         try:
             assignment = course.get_assignment(canvas_id)
+            if "group_category_id" in kwargs:
+                kwargs = _guard_group_category(
+                    kwargs,
+                    getattr(assignment, "group_category_id", None),
+                    getattr(assignment, "has_submitted_submissions", None),
+                    "assignment",
+                )
             assignment = assignment.edit(assignment={"name": title, "description": body, **kwargs})
         except ResourceDoesNotExist:
             print(f"  Canvas assignment {canvas_id} was deleted; re-creating")
@@ -1073,10 +1170,13 @@ def _strip_discussion_dates(kwargs: dict[str, Any]) -> dict[str, Any]:
 def create_or_update_discussion(
     course, canvas_id: int | None, title: str, body: str, **kwargs
 ) -> dict[str, Any]:
-    return _retry_without_dates(
-        lambda **kw: _do_discussion(course, canvas_id, title, body, **kw),
+    return _retry_without_unpublish(
+        lambda **kw: _retry_without_dates(
+            lambda **kw2: _do_discussion(course, canvas_id, title, body, **kw2),
+            kw,
+            _strip_discussion_dates,
+        ),
         kwargs,
-        _strip_discussion_dates,
     )
 
 
@@ -1124,6 +1224,14 @@ def _do_discussion(
     if canvas_id is not None:
         try:
             topic = course.get_discussion_topic(canvas_id)
+            if "group_category_id" in kwargs:
+                subentries = getattr(topic, "discussion_subentry_count", None)
+                kwargs = _guard_group_category(
+                    kwargs,
+                    getattr(topic, "group_category_id", None),
+                    None if subentries is None else subentries > 0,
+                    "discussion",
+                )
             topic = topic.update(title=title, message=body, **kwargs)
         except ResourceDoesNotExist:
             print(f"  Canvas {canvas_type} {canvas_id} was deleted; re-creating")

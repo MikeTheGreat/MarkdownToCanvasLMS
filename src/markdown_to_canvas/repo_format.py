@@ -22,14 +22,15 @@ from typing import Any
 import tomli_w
 import tomlkit
 import yaml
-from tomlkit.items import AoT, Array, InlineTable, Table, Whitespace
+from tomlkit.items import AoT, Array, InlineTable, Table
 
 from . import manifest as manifest_lib
+from . import toml_write
 
 #: The format version this tool reads and writes. Increase it (and add a
 #: migration to MIGRATIONS) whenever a change makes the tool read an existing
 #: repo file differently. See CLAUDE.md.
-FORMAT_VERSION = 6
+FORMAT_VERSION = 7
 
 SETTINGS_RELPATH = Path("course_settings") / "course_settings.toml"
 
@@ -105,14 +106,7 @@ def read_manifest_versions(repo: Path) -> dict[Path, int]:
 # tab_configuration placement
 # ---------------------------------------------------------------------------
 
-def _insert_key(doc: tomlkit.TOMLDocument, position: int, key: str, value: Any) -> None:
-    """Insert ``key = value`` at body index ``position`` (``doc.add`` only appends,
-    which would land after any table header and nest the key)."""
-    if position >= len(doc.body):
-        doc.add(key, value)  # nothing follows, so appending is the same thing
-        return
-    # Container._insert_at is private but the only way to insert at a position.
-    doc._insert_at(position, key, value)
+_insert_key = toml_write.insert_key
 
 
 def _is_table(value: Any) -> bool:
@@ -161,15 +155,7 @@ def fix_tab_configuration(doc: tomlkit.TOMLDocument) -> str | None:
         )
     value = parent[TAB_CONFIGURATION_KEY]
     del parent[TAB_CONFIGURATION_KEY]
-    position = len(doc.body)
-    for i, (_key, item) in enumerate(doc.body):
-        if isinstance(item, (Table, AoT)):
-            position = i
-            break
-    # Stay above the blank line that separates the top-level keys from the table.
-    while position > 0 and isinstance(doc.body[position - 1][1], Whitespace):
-        position -= 1
-    _insert_key(doc, position, TAB_CONFIGURATION_KEY, value)
+    toml_write.insert_top_level_key(doc, TAB_CONFIGURATION_KEY, value)
     return (
         f"Moved {dotted} to a top-level '{TAB_CONFIGURATION_KEY}' key in "
         f"course_settings.toml (it is only read at the top level)"
@@ -531,6 +517,35 @@ def _migrate_5_to_6(state: UpgradeState) -> list[str]:
     return lines
 
 
+#: Top-level course_settings.toml key listing the course's group sets/group
+#: categories by name (format 7).
+GROUP_CATEGORIES_KEY = "group_categories"
+
+
+def _migrate_6_to_7(state: UpgradeState) -> list[str]:
+    """Add an empty top-level ``group_categories`` list; stamp the manifests.
+
+    Format 7 lets ``group_category_id`` name a group set/group category; an
+    older tool would drop the name on a discussion or send it to Canvas as an
+    ID on an assignment. Content files need no change: numeric IDs stay valid.
+    """
+    lines: list[str] = []
+    if not settings_path(state.repo).exists() or read_repo_version(state.repo) >= 7:
+        pass  # nothing to edit, or the settings file is already at version 7
+    elif GROUP_CATEGORIES_KEY in state.settings_doc:
+        lines.append(f"{GROUP_CATEGORIES_KEY} is already present; left as it is")
+    else:
+        toml_write.insert_top_level_key(
+            state.settings_doc, GROUP_CATEGORIES_KEY, toml_write.scalar_array([])
+        )
+        lines.append(
+            f"Add an empty {GROUP_CATEGORIES_KEY} = [] list to {SETTINGS_RELPATH.name}"
+        )
+    for path in state.manifests:
+        lines.append(f"Record format version 7 in {path.name}")
+    return lines
+
+
 #: Ordered migrations, keyed by the version they migrate *from*.
 MIGRATIONS: dict[int, Migration] = {
     0: _migrate_0_to_1,
@@ -539,6 +554,7 @@ MIGRATIONS: dict[int, Migration] = {
     3: _migrate_3_to_4,
     4: _migrate_4_to_5,
     5: _migrate_5_to_6,
+    6: _migrate_6_to_7,
 }
 
 

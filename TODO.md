@@ -141,9 +141,15 @@ Same question applies to the rest of `_IMPORT_ONLY_NOT_UPLOADED`
 skipped because nobody implemented them, not because Canvas is known to refuse
 them.
 
-## Group sets and group assignments
+## Groups inside group sets/group categories
 
-Currently we don't manage this, but it would be nice
+`update` creates the group sets/group categories listed in `group_categories`
+(empty) and attaches discussions and assignments to them by name. It does not
+create the groups inside a group set/group category or put students in them,
+and it has no settings for them (self sign-up, group limit, auto-created group
+count). Both would need design first: group membership is roster data that
+differs per section and per term, and per-set settings would need
+`group_categories` to become an array of tables (a format change).
 
 ## all commands must use die() for user-facing errors — no tracebacks, no raw exceptions
 

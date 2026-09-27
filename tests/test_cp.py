@@ -513,6 +513,17 @@ class TestWarnings:
         assert any("group_category_id 34" in w for w in ws)
         assert any("final_grader_id 56" in w for w in ws)
 
+    def test_group_category_name_is_not_warned_about(self, src, dest):
+        _write(src, "discussions/team.md", """
+            ---
+            title: Team
+            group_category_id: Project Groups
+            ---
+            x
+        """)
+        ws = self._warnings(src, dest, "discussions/team.md")
+        assert not any("group_category_id" in w for w in ws)
+
     def test_undefined_flags(self, src, dest):
         _write(src, "pages/flags.md", """
             ---
@@ -751,3 +762,67 @@ def test_cp_copies_asset_linked_from_snippet_of_deep_page(tmp_path, dest):
     _cp([src / "pages/week1/intro.md"], dest)
     assert (dest / "assets/logo.png").exists()
     assert (dest / "snippets/policy.md").exists()
+
+
+# ---------------------------------------------------------------------------
+# group_categories merged into the destination
+# ---------------------------------------------------------------------------
+
+
+class TestGroupCategories:
+    def _team(self, src, name="team", group="Project Groups"):
+        _write(src, f"discussions/{name}.md", f"""
+            ---
+            title: {name}
+            group_category_id: "{group}"
+            ---
+            x
+        """)
+        return src / f"discussions/{name}.md"
+
+    def _settings(self, dest):
+        return (dest / "course_settings/course_settings.toml").read_text()
+
+    def test_missing_name_is_appended(self, src, dest, capsys):
+        path = dest / "course_settings/course_settings.toml"
+        path.write_text(path.read_text() + 'group_categories = ["Study Buddies"]  # sets\n\n[late_policy]\nx = 1\n')
+        before = self._settings(dest)
+        assert _cp([self._team(src)], dest)
+        after = self._settings(dest)
+        assert after == before.replace(
+            'group_categories = ["Study Buddies"]', 'group_categories = ["Study Buddies", "Project Groups"]'
+        )
+        assert "Adding group set/group category 'Project Groups'" in capsys.readouterr().out
+
+    def test_present_name_leaves_settings_unchanged(self, src, dest, capsys):
+        path = dest / "course_settings/course_settings.toml"
+        path.write_text(path.read_text() + 'group_categories = ["Project Groups"]\n')
+        before = self._settings(dest)
+        assert _cp([self._team(src)], dest)
+        assert self._settings(dest) == before
+        assert "group set/group category" not in capsys.readouterr().out
+
+    def test_absent_key_is_created_above_the_first_table(self, src, dest):
+        path = dest / "course_settings/course_settings.toml"
+        path.write_text(path.read_text() + "\n[late_policy]\nx = 1\n")
+        assert _cp([self._team(src)], dest)
+        text = self._settings(dest)
+        assert tomllib.loads(text)["group_categories"] == ["Project Groups"]
+        assert text.index("group_categories") < text.index("[late_policy]")
+
+    def test_several_files_one_name(self, src, dest):
+        files = [self._team(src, n) for n in ("a", "b", "c")]
+        assert _cp(files, dest)
+        assert tomllib.loads(self._settings(dest))["group_categories"] == ["Project Groups"]
+
+    def test_noop_reports_and_writes_nothing(self, src, dest, capsys):
+        before = self._settings(dest)
+        assert _cp([self._team(src)], dest, noop=True)
+        assert self._settings(dest) == before
+        assert "Would add group set/group category 'Project Groups'" in capsys.readouterr().out
+
+    def test_numeric_id_is_not_added(self, src, dest):
+        _write(src, "assignments/ids.md", "---\ntitle: IDs\ngroup_category_id: 34\n---\nx\n")
+        before = self._settings(dest)
+        assert _cp([src / "assignments/ids.md"], dest)
+        assert self._settings(dest) == before

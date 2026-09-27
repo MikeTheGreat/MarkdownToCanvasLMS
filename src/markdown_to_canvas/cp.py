@@ -22,7 +22,7 @@ from typing import Any
 import tomlkit
 import yaml
 
-from . import repo_format
+from . import repo_format, toml_write
 from .conditionals import find_referenced_flags, find_referenced_flags_in_frontmatter
 from .config import find_repo_root
 from .convert import (
@@ -47,6 +47,9 @@ _GRADED_TYPES = {"assignments": "assignment", "discussions": "discussion", "quiz
 
 _RUBRICS_KEY = "course_settings/rubrics.toml"
 _MODULE_ORDER_KEY = "course_settings/module_order.toml"
+_SETTINGS_KEY = "course_settings/course_settings.toml"
+# Folders whose files may name a group set/group category (group_category_id).
+_GROUP_CATEGORY_DIRS = {"assignments", "discussions"}
 _RUBRICS_HEADER_RE = re.compile(r"^\s*\[\[\s*rubrics\s*\]\]\s*(#.*)?$")
 _COURSE_URL_RE = re.compile(r"/courses/(\d+)\b")
 
@@ -77,6 +80,10 @@ class CopyPlan:
     rubric_appends: list[str] = field(default_factory=list)
     # Full new text of the destination's rubrics.toml, when anything is appended.
     rubrics_text: str | None = None
+    # Group set/group category names added to the destination's
+    # course_settings.toml group_categories, and the file's new text.
+    group_category_appends: list[str] = field(default_factory=list)
+    course_settings_text: str | None = None
     # Module filenames appended to module_order.toml, and its new text.
     module_order_appends: list[str] = field(default_factory=list)
     module_order_text: str | None = None
@@ -519,6 +526,39 @@ def _plan_module_order(planner: _Planner) -> None:
 
 
 # ---------------------------------------------------------------------------
+# course_settings.toml group_categories
+# ---------------------------------------------------------------------------
+
+
+def _plan_group_categories(planner: _Planner) -> None:
+    """Add the group set/group category names copied files use to the
+    destination's group_categories, so `update` there accepts them."""
+    names: list[str] = []
+    for rel in planner.copied_md():
+        if rel.split("/")[0] not in _GROUP_CATEGORY_DIRS:
+            continue
+        fm = _frontmatter(planner.src / rel, planner.snippets_dir) or {}
+        name = fm.get("group_category_id")
+        if isinstance(name, str) and name.strip():
+            names.append(name)
+    if not names:
+        return
+    path = planner.dest / _SETTINGS_KEY
+    doc = tomlkit.parse(path.read_text())
+    try:
+        added = toml_write.add_to_top_level_array(doc, "group_categories", names)
+    except ValueError:
+        planner.plan.warnings.append(
+            f"the destination's {_SETTINGS_KEY} has a group_categories value that is "
+            f"not an array; add {', '.join(sorted(set(names)))} to it by hand"
+        )
+        return
+    if added:
+        planner.plan.group_category_appends = added
+        planner.plan.course_settings_text = tomlkit.dumps(doc)
+
+
+# ---------------------------------------------------------------------------
 # Warnings about course-specific values
 # ---------------------------------------------------------------------------
 
@@ -606,9 +646,11 @@ def _plan_warnings(planner: _Planner) -> None:
                 f"source course"
             )
         for key in ("group_category_id", "final_grader_id"):
-            if fm.get(key) is not None:
+            value = fm.get(key)
+            # A group_category_id name is merged instead (_plan_group_categories).
+            if value is not None and not (key == "group_category_id" and isinstance(value, str)):
                 plan.warnings.append(
-                    f"{rel}: {key} {fm[key]!r} is a Canvas ID from the source course"
+                    f"{rel}: {key} {value!r} is a Canvas ID from the source course"
                 )
 
         flags = find_referenced_flags(text) | find_referenced_flags_in_frontmatter(fm)
@@ -682,6 +724,7 @@ def build_copy_plan(srcs: list[Path], dest_root: Path, overwrite: bool = False) 
     planner.classify()
     _plan_rubrics(planner)
     _plan_module_order(planner)
+    _plan_group_categories(planner)
     _plan_warnings(planner)
     return planner.plan
 
@@ -712,6 +755,9 @@ def _print_plan(plan: CopyPlan, noop: bool, verbose: bool, overwrite: bool) -> N
     for name in plan.module_order_appends:
         verb = "Would add" if noop else "Adding"
         print(f"  {verb} {name} to {_MODULE_ORDER_KEY}")
+    for name in plan.group_category_appends:
+        verb = "Would add" if noop else "Adding"
+        print(f"  {verb} group set/group category '{name}' to group_categories in {_SETTINGS_KEY}")
     if plan.links_not_followed:
         print("\nLinks to content that was not copied (left unchanged):")
         for referrer, key, exists in plan.links_not_followed:
@@ -740,6 +786,8 @@ def _write(plan: CopyPlan, overwrite: bool) -> int:
         path.write_text(plan.rubrics_text)
     if plan.module_order_text is not None:
         (plan.dest_root / _MODULE_ORDER_KEY).write_text(plan.module_order_text)
+    if plan.course_settings_text is not None:
+        (plan.dest_root / _SETTINGS_KEY).write_text(plan.course_settings_text)
     return count
 
 
