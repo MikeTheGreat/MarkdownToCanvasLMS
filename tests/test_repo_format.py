@@ -708,8 +708,8 @@ def test_migration_3_to_4_rewrites_link_written_for_deeper_includers(tmp_path, c
     assert _snippet(tmp_path) == "Intro.\n\n![](../assets/logo.png)\n\nEnd.\n"
     assert tomllib.loads(
         (tmp_path / "course_settings/course_settings.toml").read_text()
-    )["format_version"] == 4
-    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 4}
+    )["format_version"] == FORMAT_VERSION
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": FORMAT_VERSION}
     out = capsys.readouterr().out
     assert "Migration 3 -> 4" in out
     assert "Rewrite link in snippets/policy.md: ../../assets/logo.png -> ../assets/logo.png" in out
@@ -874,7 +874,7 @@ def test_migration_3_to_4_skips_settings_already_at_4(tmp_path):
     manifest = _manifest(tmp_path, version=3)
     rf.run_upgrade(tmp_path)
     assert _snippet(tmp_path) == "![](../../assets/logo.png)\n"
-    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 4}
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": FORMAT_VERSION}
 
 
 def test_migration_3_to_4_working_includers_win_over_broken_ones(tmp_path, capsys):
@@ -918,3 +918,296 @@ def test_migration_3_to_4_converts_refs_to_other_snippets(tmp_path):
         assert preprocess_snippets(
             path.read_text(), path, tmp_path / "snippets"
         ).strip() == "Hi Mike! [Syllabus](https://x.edu/courses/1/syllabus)"
+
+
+# --- migration 4 -> 5: multiple_response_question -> multiple_answers_question
+
+
+def _v4_repo(tmp_path, files):
+    _settings(tmp_path, "format_version = 4\n")
+    for rel, text in files.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return tmp_path
+
+
+def test_migration_4_to_5_renames_the_question_type(tmp_path, capsys):
+    q = "quizzes/q1/questions/pick.md"
+    _v4_repo(tmp_path, {
+        q: (
+            "---\ntitle: Pick\nquestion_type: \"multiple_response_question\"  # checkboxes\n"
+            "correct: [1]\n---\n\nSay multiple_response_question here.\n\n## Answers\n\n1. a\n"
+        ),
+    })
+    manifest = _manifest(tmp_path, version=4)
+    rf.run_upgrade(tmp_path, target_version=5)
+    assert (tmp_path / q).read_text() == (
+        "---\ntitle: Pick\nquestion_type: \"multiple_answers_question\"  # checkboxes\n"
+        "correct: [1]\n---\n\nSay multiple_response_question here.\n\n## Answers\n\n1. a\n"
+    )
+    assert rf.read_repo_version(tmp_path) == 5
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 5}
+    out = capsys.readouterr().out
+    assert "Migration 4 -> 5" in out
+    assert f"multiple_answers_question in {q}" in out
+
+
+@pytest.mark.parametrize("line", [
+    "question_type: multiple_response_question",
+    "question_type: 'multiple_response_question'",
+    "  question_type:   multiple_response_question   ",
+])
+def test_migration_4_to_5_handles_quoting_and_spacing(tmp_path, line):
+    _v4_repo(tmp_path, {"question_banks/b/questions/q.md": f"---\n{line}\n---\n\nBody\n"})
+    rf.run_upgrade(tmp_path)
+    text = (tmp_path / "question_banks/b/questions/q.md").read_text()
+    assert "multiple_response_question" not in text
+    assert "multiple_answers_question" in text
+
+
+def test_migration_4_to_5_rewrites_frontmatter_snippets(tmp_path):
+    _v4_repo(tmp_path, {
+        "snippets/checkbox-defaults.md": "question_type: multiple_response_question\npoints_possible: 1\n",
+        "snippets/block.md": "Never rewritten: question_type: multiple_response_question\n",
+    })
+    rf.run_upgrade(tmp_path)
+    assert (tmp_path / "snippets/checkbox-defaults.md").read_text() == (
+        "question_type: multiple_answers_question\npoints_possible: 1\n"
+    )
+    assert (tmp_path / "snippets/block.md").read_text() == (
+        "Never rewritten: question_type: multiple_response_question\n"
+    )
+
+
+def test_migration_4_to_5_leaves_bodies_other_types_and_hidden_files(tmp_path, capsys):
+    files = {
+        "pages/about.md": "question_type: multiple_response_question\n",  # no frontmatter
+        "quizzes/q/questions/mcq.md": "---\nquestion_type: multiple_choice_question\n---\n",
+        ".hidden/q.md": "---\nquestion_type: multiple_response_question\n---\n",
+        "quizzes/q/questions/commented.md": "---\n# question_type: multiple_response_question\n---\n",
+    }
+    _v4_repo(tmp_path, files)
+    rf.run_upgrade(tmp_path)
+    for rel, text in files.items():
+        assert (tmp_path / rel).read_text() == text
+    assert "Change question_type" not in capsys.readouterr().out
+
+
+def test_migration_4_to_5_reports_what_it_cannot_rewrite(tmp_path, capsys):
+    q = "quizzes/q/questions/flow.md"
+    text = "---\n{question_type: multiple_response_question, title: T}\n---\n"
+    _v4_repo(tmp_path, {q: text})
+    rf.run_upgrade(tmp_path)
+    assert (tmp_path / q).read_text() == text
+    assert f"NOTICE: {q} still sets question_type multiple_response_question" in (
+        capsys.readouterr().out
+    )
+
+
+def test_migration_4_to_5_noop_writes_nothing(tmp_path, capsys):
+    q = "quizzes/q/questions/pick.md"
+    text = "---\nquestion_type: multiple_response_question\n---\n"
+    _v4_repo(tmp_path, {q: text})
+    rf.run_upgrade(tmp_path, noop=True)
+    assert (tmp_path / q).read_text() == text
+    assert f"multiple_answers_question in {q}" in capsys.readouterr().out
+
+
+def test_migration_4_to_5_skips_settings_already_at_5(tmp_path):
+    """A manifest lagging a current settings file: only the manifest is stamped."""
+    q = "quizzes/q/questions/pick.md"
+    text = "---\nquestion_type: multiple_response_question\n---\n"
+    _settings(tmp_path, "format_version = 5\n")
+    (tmp_path / q).parent.mkdir(parents=True)
+    (tmp_path / q).write_text(text)
+    manifest = _manifest(tmp_path, version=4)
+    rf.run_upgrade(tmp_path, target_version=5)
+    assert (tmp_path / q).read_text() == text
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 5}
+
+
+def test_migrated_question_parses_as_multiple_answers(tmp_path):
+    from markdown_to_canvas.quiz import parse_question_file
+    q = "quizzes/q/questions/pick.md"
+    _v4_repo(tmp_path, {
+        q: "---\nquestion_type: multiple_response_question\ncorrect: [2]\n---\n\n"
+           "Pick.\n\n## Answers\n\n1. a\n2. b\n",
+    })
+    rf.run_upgrade(tmp_path)
+    errors: list[str] = []
+    parsed = parse_question_file(tmp_path / q, errors=errors)
+    assert errors == []
+    assert parsed["question_type"] == "multiple_answers_question"
+    assert [a["weight"] for a in parsed["answers"]] == [0, 100]
+
+
+# --- migration 5 -> 6: question-file sections become H1 --------------------
+
+
+def _v5_repo(tmp_path, files):
+    _settings(tmp_path, "format_version = 5\n")
+    for rel, text in files.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return tmp_path
+
+
+_OLD_IMPORTED = (
+    "---\ntitle: \"compareTo #2\"\nquestion_type: \"multiple_choice_question\"\n"
+    "correct: 1\n# original_answer_ids: [1, 2]\n---\n\n"
+    "## Answers\n\n1. zero\n1. positive\n\n"
+    "## Feedback\n\n### General\n\nG\n\n### Per-answer\n\n- answer 1: yes\n\n"
+    "## Question\n\n## The compareTo method\n\n**21. Consider:**\n\n"
+    "```\n## not a heading\n### General\n```\n"
+)
+_NEW_IMPORTED = (
+    "---\ntitle: \"compareTo #2\"\nquestion_type: \"multiple_choice_question\"\n"
+    "correct: 1\n# original_answer_ids: [1, 2]\n---\n\n"
+    "# Answers\n\n1. zero\n1. positive\n\n"
+    "# Feedback\n\n## General\n\nG\n\n## Per-answer\n\n- answer 1: yes\n\n"
+    "# Question\n\n## The compareTo method\n\n**21. Consider:**\n\n"
+    "```\n## not a heading\n### General\n```\n"
+)
+
+
+def test_migration_5_to_6_promotes_sections_and_keeps_content_headings(tmp_path, capsys):
+    q = "quizzes/quiz/questions/compareto-2.md"
+    _v5_repo(tmp_path, {
+        "quizzes/quiz/quiz.md": "---\ntitle: Quiz\n---\n\n1. [Q](questions/compareto-2.md)\n",
+        q: _OLD_IMPORTED,
+    })
+    manifest = _manifest(tmp_path, version=5)
+    rf.run_upgrade(tmp_path)
+    assert (tmp_path / q).read_text() == _NEW_IMPORTED
+    assert rf.read_repo_version(tmp_path) == 6
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 6}
+    out = capsys.readouterr().out
+    assert "Migration 5 -> 6" in out
+    assert "Promote question-file section headings to H1 in 1 file(s)" in out
+    assert "NOTICE" not in out
+
+
+def test_migration_5_to_6_result_parses_with_the_heading_in_the_text(tmp_path, capsys):
+    from markdown_to_canvas.quiz import parse_question_file
+    q = "question_banks/bank/questions/compareto-2.md"
+    _v5_repo(tmp_path, {q: _OLD_IMPORTED})
+    rf.run_upgrade(tmp_path)
+    capsys.readouterr()
+    parsed = parse_question_file(tmp_path / q)
+    assert "The compareTo method" in parsed["question_text"]
+    assert parsed["neutral_comments"] == "G"
+    assert parsed["answers"][0]["answer_comments"] == "yes"
+    assert "WARNING" not in capsys.readouterr().out
+
+
+def test_migration_5_to_6_matches_what_import_now_writes(tmp_path):
+    from markdown_to_canvas.imscc_import import _write_question_file
+    q = {
+        "title": "T", "question_type": "essay_question", "points_possible": 1.0,
+        "question_text": "<h2>Heading</h2><p>Body</p>", "answers": [],
+        "feedback": {"general_fb": "<p>G</p>", "correct_fb": "<p>C</p>"},
+        "solution": "<p>S</p>", "slug": "t",
+    }
+    new = tmp_path / "new.md"
+    _write_question_file(q, new)
+    new_text = new.read_text()
+    old_text = new_text
+    for name in ("Question", "Feedback", "Sample Solution"):
+        old_text = old_text.replace(f"\n# {name}\n", f"\n## {name}\n")
+    for name in ("General", "Correct"):
+        old_text = old_text.replace(f"\n## {name}\n", f"\n### {name}\n")
+    assert "\n## Heading\n" in old_text
+    from markdown_to_canvas.question_migration import migrate_question_text
+    assert migrate_question_text(old_text) == (new_text, [])
+
+
+def test_migration_5_to_6_user_layout_without_question_section(tmp_path, capsys):
+    """Question text above ## Answers, with its own ## heading (the College 101 survey)."""
+    q = "quizzes/s/questions/q1.md"
+    _v5_repo(tmp_path, {
+        q: "---\ntitle: Q1\n---\n\n## What days work?\n\nCheck all.\n\n## Answers\n\n1. a\n",
+    })
+    rf.run_upgrade(tmp_path)
+    assert (tmp_path / q).read_text() == (
+        "---\ntitle: Q1\n---\n\n## What days work?\n\nCheck all.\n\n# Answers\n\n1. a\n"
+    )
+    assert "NOTICE" not in capsys.readouterr().out
+
+
+def test_migration_5_to_6_notices_content_headings_outside_the_question(tmp_path, capsys):
+    q = "quizzes/s/questions/q.md"
+    _v5_repo(tmp_path, {
+        q: "---\n---\n\n## Question\n\nText\n\n## Answers\n\n1. a\n\n## Extra\n\n1. b\n",
+    })
+    rf.run_upgrade(tmp_path)
+    assert (tmp_path / q).read_text() == (
+        "---\n---\n\n# Question\n\nText\n\n# Answers\n\n1. a\n\n## Extra\n\n1. b\n"
+    )
+    assert (
+        f"NOTICE: {q}: '## Extra' under ## Answers was ignored before; it is now read "
+        "as part of that section" in capsys.readouterr().out
+    )
+
+
+def test_migration_5_to_6_notices_an_existing_h1(tmp_path, capsys):
+    q = "question_banks/b/questions/q.md"
+    text = "---\n---\n\n## Question\n\n# Required Question 1\n\nText\n"
+    _v5_repo(tmp_path, {q: text})
+    rf.run_upgrade(tmp_path)
+    assert (tmp_path / q).read_text() == "---\n---\n\n# Question\n\n# Required Question 1\n\nText\n"
+    assert (
+        f"NOTICE: {q}: '# Required Question 1' is a heading in the text; from format 6 "
+        "it would start a (misnamed) section, so change it to '## Required Question 1'"
+    ) in capsys.readouterr().out
+
+
+def test_migration_5_to_6_subsections_only_under_feedback(tmp_path):
+    q = "quizzes/s/questions/q.md"
+    text = "---\n---\n\n## Question\n\n### Correct\n\nText\n\n## Feedback\n\n### Correct\n\nC\n"
+    _v5_repo(tmp_path, {q: text})
+    rf.run_upgrade(tmp_path)
+    assert (tmp_path / q).read_text() == (
+        "---\n---\n\n# Question\n\n### Correct\n\nText\n\n# Feedback\n\n## Correct\n\nC\n"
+    )
+
+
+def test_migration_5_to_6_finds_only_question_files(tmp_path):
+    files = {
+        # referenced from the quiz, outside a questions/ folder
+        "quizzes/quiz/quiz.md": "---\n---\n\n## Intro\n\n1. [Q](extra/q.md)\n",
+        "quizzes/quiz/extra/q.md": "## Answers\n\n1. a\n",
+        # unreferenced, in a questions/ folder
+        "quizzes/quiz/questions/orphan.md": "## Answers\n\n1. a\n",
+        "question_banks/b/questions/q.md": "## Answers\n\n1. a\n",
+        # not question files
+        "pages/p.md": "## Answers\n\nText\n",
+        "quizzes/.hidden/questions/q.md": "## Answers\n",
+    }
+    _v5_repo(tmp_path, files)
+    rf.run_upgrade(tmp_path)
+    for rel in ("quizzes/quiz/extra/q.md", "quizzes/quiz/questions/orphan.md",
+                "question_banks/b/questions/q.md"):
+        assert (tmp_path / rel).read_text() == "# Answers\n\n1. a\n", rel
+    for rel in ("quizzes/quiz/quiz.md", "pages/p.md", "quizzes/.hidden/questions/q.md"):
+        assert (tmp_path / rel).read_text() == files[rel], rel
+
+
+def test_migration_5_to_6_noop_writes_nothing(tmp_path, capsys):
+    q = "question_banks/b/questions/q.md"
+    _v5_repo(tmp_path, {q: _OLD_IMPORTED})
+    rf.run_upgrade(tmp_path, noop=True)
+    assert (tmp_path / q).read_text() == _OLD_IMPORTED
+    assert "in 1 file(s)" in capsys.readouterr().out
+
+
+def test_migration_5_to_6_skips_settings_already_at_6(tmp_path):
+    q = "question_banks/b/questions/q.md"
+    _settings(tmp_path, "format_version = 6\n")
+    (tmp_path / q).parent.mkdir(parents=True)
+    (tmp_path / q).write_text("## Question\n\n## Heading\n")
+    manifest = _manifest(tmp_path, version=5)
+    rf.run_upgrade(tmp_path)
+    assert (tmp_path / q).read_text() == "## Question\n\n## Heading\n"
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 6}

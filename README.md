@@ -1408,7 +1408,7 @@ to avoid surprises.
 > `<!-- #if flag -->` … `<!-- #endif -->` with a flag defined in
 > `course_settings.toml`. This works everywhere, including the structured lists
 > the tool parses itself: quiz question links, module items, and question
-> `## Answers` entries inside a false branch are skipped (not uploaded, not
+> `# Answers` entries inside a false branch are skipped (not uploaded, not
 > published). See
 > [Course flags — conditional content](#course-flags--conditional-content-if--elif--else--endif).
 >
@@ -2464,24 +2464,56 @@ when `quiz_type` is `assignment` or `graded_survey`; it has no effect for
 | `question_type`   | `essay_question`   | See types below                      |
 | `points_possible` | `0`                |                                      |
 
+**Question file sections.** A question file's body is split into sections at
+H1 (`#`) headings. Only four are recognized: `# Question`, `# Answers`,
+`# Feedback` and `# Sample Solution` (case doesn't matter). The section headings
+themselves are never sent to Canvas. The question text is the `# Question`
+section, or, when there is none, the text above the first `#` heading, and it
+can use `##` and deeper headings like any other content. Inside `# Feedback` the
+subsections are `## General`, `## Correct`, `## Incorrect` and `## Per-answer`,
+so headings inside feedback text must be `###` or deeper.
+
+Text in an unrecognized `#` section is ignored. `update` and `publish` print a
+warning for:
+
+- each unrecognized `#` heading (saying so when the question ends up with no
+  text at all);
+- text above the first heading when a `# Question` section makes it unused;
+- a `##` heading named like a section (`## Answers`, the layout before format
+  version 6), which is now ordinary content, and a `###` heading named like a
+  feedback subsection inside `# Feedback`;
+- an unrecognized `##` heading inside `# Feedback`, whose text is ignored.
+
+Before format version 6 the sections were `##` and the feedback subsections
+`###`, and any other `##` heading started an ignored section. Canvas question
+text often starts with an `<h2>`, which `import` wrote as a `##` line, so many
+imported questions uploaded with no text. `upgrade` converts old files (see
+[Upgrading a repo](#upgrading-a-repo-upgrade)).
+
 **Supported question types and their required fields:**
 
 > **Note:** None of these fields are required for the *sync to succeed* — a question with missing fields will upload without errors. However, the question will be ungradable in Canvas until the fields are provided.
 
 | Question type                | Fields needed to be gradable                                                         |
 | ---------------------------- | ------------------------------------------------------------------------------------ |
-| `multiple_choice_question`   | `correct` (1-based index of the right answer) + `## Answers` section listing choices |
+| `multiple_choice_question`   | `correct` (1-based index of the right answer) + `# Answers` section listing choices  |
 | `true_false_question`        | `correct: true` or `correct: false`                                                  |
-| `multiple_response_question` | `correct` (list of 1-based indices, e.g. `[1, 3]`) + `## Answers` section            |
+| `multiple_answers_question`  | `correct` (list of 1-based indices, e.g. `[1, 3]`) + `# Answers` section             |
 | `fill_in_blank_question`     | `answers` list in frontmatter (accepted strings)                                     |
 | `pattern_match_question`     | `answers` list in frontmatter (accepted patterns)                                    |
 | `essay_question`             | — (manually graded; no`correct` needed)                                             |
+
+> `multiple_answers_question` is Canvas's checkbox question: students tick any
+> number of choices. In a survey there are no right answers, so leave out
+> `correct`. Before format version 5 this type was called
+> `multiple_response_question`; `upgrade` renames it, and `update` stops with an
+> error on a question that still uses the old name.
 
 > `fill_in_blank_question` and `pattern_match_question` are both uploaded to Canvas
 > as a *Short Answer* question. For `pattern_match_question`, only the **first**
 > entry in `answers` is used.
 
-Example MCQ question file (the `## Answers` list numbering is ignored — choices are
+Example MCQ question file (the `# Answers` list numbering is ignored — choices are
 read in order, and `correct` is the 1-based position of the right one):
 
 ```markdown
@@ -2489,31 +2521,31 @@ read in order, and `correct` is the 1-based position of the right one):
 title: "What is 2+2?"              # defaults to the filename if omitted
 question_type: multiple_choice_question
 points_possible: 1
-correct: 2                        # 1-based index into the ## Answers list below
+correct: 2                        # 1-based index into the # Answers list below
 ---
 
 What is the result of adding 2 and 2?
 
-## Answers
+# Answers
 
 1. 3
 2. 4
 3. 5
 ```
 
-Example multiple-response question file (`correct` is a list of 1-based indices):
+Example multiple-answers (checkbox) question file (`correct` is a list of 1-based indices):
 
 ```markdown
 ---
 title: "Which are prime numbers?"
-question_type: multiple_response_question
+question_type: multiple_answers_question
 points_possible: 2
 correct: [1, 3]                   # answers 2 and 4 are wrong
 ---
 
 Select all of the prime numbers.
 
-## Answers
+# Answers
 
 1. 2
 2. 4
@@ -2574,8 +2606,8 @@ In 3–5 paragraphs, explain the concept of gravity.
 ```
 
 **Optional feedback and sample solutions** — any question type may add a
-`## Feedback` section with up to four subsections, and essay questions may add a
-`## Sample Solution`:
+`# Feedback` section with up to four subsections, and essay questions may add a
+`# Sample Solution`:
 
 ```markdown
 ---
@@ -2587,36 +2619,36 @@ correct: 2
 
 What is the result of adding 2 and 2?
 
-## Answers
+# Answers
 
 1. 3
 2. 4
 3. 5
 
-## Feedback
+# Feedback
 
-### General
+## General
 
 Shown to every student regardless of their answer.
 
-### Correct
+## Correct
 
 Shown when the student answers correctly.
 
-### Incorrect
+## Incorrect
 
 Shown when the student answers incorrectly.
 
-### Per-answer
+## Per-answer
 
-For MCQ, multiple-response, and true/false questions only — feedback shown when
+For MCQ, multiple-answers, and true/false questions only — feedback shown when
 the student picks one specific answer, keyed by the answer's 1-based position in
-`## Answers` (or `1`/`2` for True/False, matching `True` then `False`). The word
+`# Answers` (or `1`/`2` for True/False, matching `True` then `False`). The word
 `answer` is matched case-insensitively (`import` always writes it lowercase, as
 shown below):
 
 ```markdown
-### Per-answer
+## Per-answer
 
 - answer 1: Feedback shown if the student picks answer 1.
 - answer 2: Feedback shown if the student picks answer 2.
@@ -2625,10 +2657,10 @@ shown below):
 A line after an `- answer N:` item that isn't itself a new `- answer M:` item is
 treated as a continuation of that item's feedback (a second paragraph, etc.).
 
-## Sample Solution
+# Sample Solution
 
 For essay-type questions, this text is uploaded as the question's neutral
-(general) comment. Ignored if a `## Feedback` → `### General` block is also present.
+(general) comment. Ignored if a `# Feedback` → `## General` block is also present.
 ```
 
 > The `import` command may also emit a commented-out `# original_answer_ids:`
@@ -2658,8 +2690,8 @@ bank_title = "Midterm Pool"   # defaults to the folder name if omitted
 ```
 
 The question files use the **exact same format** as quiz question files (see
-[Quiz (`quizzes/`)](#quiz-quizzes) above) — all question types, the `## Answers`
-section, and the `## Feedback` / `## Sample Solution` sections all work the same way.
+[Quiz (`quizzes/`)](#quiz-quizzes) above) — all question types, the `# Answers`
+section, and the `# Feedback` / `# Sample Solution` sections all work the same way.
 
 > Question banks **cannot be uploaded to Canvas**. Canvas's public API has no way
 > to create or update a question bank (its question-bank endpoints are read-only),
@@ -3020,8 +3052,8 @@ anything on Canvas. If a version differs from the tool's, the command stops and
 changes nothing:
 
 ```text
-Error: This course repo is format version 0 but this tool (markdown-to-canvas 0.2.1) uses format version 4. Run `markdown-to-canvas upgrade` first.
-Error: course_settings/course_settings.toml is format version 5 but this tool (markdown-to-canvas 0.2.1) only understands format version 4. Update markdown-to-canvas.
+Error: This course repo is format version 0 but this tool (markdown-to-canvas 0.2.1) uses format version 6. Run `markdown-to-canvas upgrade` first.
+Error: course_settings/course_settings.toml is format version 7 but this tool (markdown-to-canvas 0.2.1) only understands format version 6. Update markdown-to-canvas.
 ```
 
 A manifest that is older than the repo is named in the message. This happens
@@ -3108,6 +3140,38 @@ that does not name an existing file. Only the rewritten paths change; the rest
 of each snippet file is kept byte for byte. Links inside fenced code blocks and
 the other forms that are never rebased are not touched. Review the result with
 `git diff snippets/`.
+
+Migration 4 to 5 renames the checkbox question type from
+`multiple_response_question` (the IMS Common Cartridge name) to
+`multiple_answers_question` (Canvas's name), which is what `update` now sends to
+Canvas and what `import` writes. It rewrites the `question_type:` line in the
+frontmatter of every `.md` file outside hidden folders, and in frontmatter
+snippets under `snippets/`. Only that value changes; quoting, comments and the
+rest of each file are kept. A file that still sets the old type in a form the
+migration cannot rewrite (for example a `{...}` flow mapping) gets a `NOTICE:`
+line; change those by hand. Before this change `import` also skipped every
+checkbox question in a Canvas export, so re-import a course if you need them.
+
+Migration 5 to 6 changes question files so that their section headings are H1
+(see the question-file sections under [Quiz (`quizzes/`)](#quiz-quizzes)):
+`## Question`, `## Answers`, `## Feedback` and `## Sample Solution` become `#`,
+and `### General`, `### Correct`, `### Incorrect` and `### Per-answer` under
+Feedback become `##`. A question file is every file a quiz lists, plus every
+`.md` in a `questions/` folder of a quiz or question bank (hidden folders
+excluded). Every other `##` heading is left as it is, so from now on it and the
+text under it are part of the question instead of being dropped; this is what
+restores imported questions whose text started with a heading. Headings inside
+fenced code are not touched. The migration prints a `NOTICE:` for:
+
+- a `##` heading under `## Answers`, `## Feedback` or `## Sample Solution`: its
+  text was ignored before and is now read as part of that section (a numbered
+  list under it would become extra answer choices, for example), so move it
+  under `# Question` or delete it;
+- an existing H1 in a question file's text, which would now start an
+  (unrecognized) section: change it to `##` by hand.
+
+Quizzes whose files changed are uploaded again by the next `update`, and their
+question text on Canvas changes to what the files now say.
 
 `upgrade` also checks that `tab_configuration` is a top-level key. The tool
 only reads it there, so when it is nested under a section

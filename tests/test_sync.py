@@ -1310,7 +1310,7 @@ def _quiz_course_root(tmp_path: Path) -> Path:
     (q_dir / "what-is-2-plus-2.md").write_text(
         "---\ntitle: What is 2+2?\nquestion_type: multiple_choice_question\n"
         "points_possible: 1\ncorrect: 2\n---\n\n"
-        "What is 2+2?\n\n## Answers\n\n1. 3\n2. 4\n3. 5\n"
+        "What is 2+2?\n\n# Answers\n\n1. 3\n2. 4\n3. 5\n"
     )
     (q_dir / "explain-something.md").write_text(
         "---\ntitle: Explain something\nquestion_type: essay_question\n"
@@ -2721,7 +2721,7 @@ def test_tab_configuration_misplaced_under_section_is_left_alone(
     (root / "course_settings").mkdir(parents=True)
     settings = root / "course_settings" / "course_settings.toml"
     settings.write_text(
-        'format_version = 4\ntitle = "Intro to CS"\n\n[late_policy]\n'
+        'format_version = 6\ntitle = "Intro to CS"\n\n[late_policy]\n'
         "missing_submission_deduction_enabled = false\n\n"
         'tab_configuration = [\n    { id = "modules" },\n]\n'
     )

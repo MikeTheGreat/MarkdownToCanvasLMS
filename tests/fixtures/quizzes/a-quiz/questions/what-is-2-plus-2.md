@@ -7,7 +7,7 @@ correct: 2
 
 What is the result of adding 2 and 2?
 
-## Answers
+# Answers
 
 1. 3
 2. 4

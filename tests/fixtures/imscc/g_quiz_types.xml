@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Standalone QTI fixture covering cc.multiple_response, cc.fib, cc.pattern_match question types. -->
+<!-- Standalone QTI fixture covering cc.multiple_response (imported as multiple_answers_question), cc.fib, cc.pattern_match question types. -->
 <questestinterop xmlns="http://www.imsglobal.org/xsd/ims_qtiasiv1p2"
                  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
   <assessment ident="g_quiz_types" title="Question Types Test">
     <section ident="root_section">
 
-      <!-- multiple_response_question (cc.multiple_response.v0p1) -->
+      <!-- multiple_answers_question (cc.multiple_response.v0p1) -->
       <item ident="g_q_mr_1" title="Which are prime numbers?">
         <itemmetadata>
           <qtimetadata>

@@ -5,6 +5,28 @@
 - Look in the todo/ folder for more items!
 - Look in the openspec/ folder
 
+## `upgrade`: repeat the notices at the end of the run
+
+`run_upgrade()` prints each migration's lines as it goes (and returns them), but
+never repeats the `NOTICE:` / `WARNING:` lines at the end. In a long run (for
+example the 3 -> 4 snippet migration or the 5 -> 6 question-section migration
+across a large repo) the ones that need a manual fix scroll past among the
+routine "Change ..." and "Record format version ..." lines. Collect every
+`NOTICE:`/`WARNING:` line from the run and print them again under a closing
+heading such as "Needs attention:", with a count, for all migrations (and the
+`tab_configuration` placement notice). With `--noop` the summary should be
+printed too.
+
+## `import`: headings inside question feedback
+
+Since format 6, feedback subsections are `## General` / `## Correct` /
+`## Incorrect` / `## Per-answer` under `# Feedback`, so a heading inside feedback
+text must be `###` or deeper. `import` writes a Canvas `<h2>` in feedback as
+`## ...`, which `parse_question_file` then treats as an unknown subsection: the
+text under it is dropped, with a warning. No question file in the College 101 or
+CS 142/143 repos had one (checked 2026-09-26), so nothing was done. If it shows
+up, `import` could shift headings inside feedback text down to start at `###`.
+
 ## Let `-t`, `-s` and `mv` use the course registry
 
 `update`, `publish` and the other commands that take `COURSE_DIR` can now name a

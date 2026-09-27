@@ -102,7 +102,7 @@ What the tool does instead (`_sync_quiz` in `sync.py` + `finalize_quiz_publish_s
 
 All Markdown-input parsing respects fenced code blocks, built on shared primitives in `convert.py` (`split_fenced_segments`, `iter_lines_with_fence_info`, `apply_outside_fences`):
 
-- **Code fences** are literal text: numbered `[x](y.md)` links inside them are not quiz questions (`quiz.split_quiz_body`, shared by sync and the publish study guide), `- [x](y.md)` / `# heading` lines are not module items (`parse_module_body`), `## Answers`-lookalikes do not split question files (`_split_on_headings`), and numbered lines are not answers. Raw-attribute blocks (```` ```{=html} ```` etc.) are fences like any other; there is no special handling beyond what Pandoc itself does with them. (Content is *excluded* via course-flag conditionals, not via raw-attribute "comment" blocks — that older convention has been removed.)
+- **Code fences** are literal text: numbered `[x](y.md)` links inside them are not quiz questions (`quiz.split_quiz_body`, shared by sync and the publish study guide), `- [x](y.md)` / `# heading` lines are not module items (`parse_module_body`), `# Answers`-lookalikes do not split question files (`_split_on_headings`), and numbered lines are not answers. Raw-attribute blocks (```` ```{=html} ```` etc.) are fences like any other; there is no special handling beyond what Pandoc itself does with them. (Content is *excluded* via course-flag conditionals, not via raw-attribute "comment" blocks — that older convention has been removed.)
 - **Snippet expansion** (`preprocess_snippets`) and the staleness probe (`find_referenced_snippets`) skip fence content, so `$path.md$` / snippet links in a code block stay literal.
 - **publish's Pandoc-syntax cleanup** (`_strip_pandoc_syntax`, `_rewrite_quiz_links`) applies only outside fences, so literal `{#id}` / span / quiz-link examples in code blocks survive staging.
 - Fence matching follows CommonMark closely enough for course content: ` ``` ` or `~~~` (3+, up to 3 leading spaces), closed by an equal-or-longer fence of the same character; an unclosed fence runs to end of file; fence-lookalikes inside a longer outer fence (e.g. a ``` ``` ``` example shown inside a ` ````markdown ` block) are content, not fences. Indented (4-space) code blocks and inline backtick spans are *not* considered fences by these parsers.
@@ -980,7 +980,7 @@ Done. Wrote course repo to: ./my-course/
 
 `repo_format.py` owns the format version, the check every repo-reading operation runs, and the migrations behind `upgrade`.
 
-**Where the version lives.** `course_settings/course_settings.toml` has a top-level integer `format_version` (missing file or key = 0); `import` also writes `created_by` (the tool version that ran `import`), and `upgrade` appends one string per version-changing run to `upgraded_by` (`"<tool version> on <date>: <from> -> <to>"`). These are the first keys in the file. Every `.manifest-*.toml` has its own `_repo_format` stamp (see the manifest file section), because manifests are local and can lag behind the committed settings on a second machine. `repo_format.FORMAT_VERSION` is the tool's version (currently 4). `tool_version()` returns `importlib.metadata.version("markdown-to-canvas")`, or `"unknown"`. `pyproject.toml` uses `hatch-vcs` (`dynamic = ["version"]`, `fallback-version = "0.0.0+unknown"`), so the version comes from git tags: `0.2.1.devN+g<hash>` after a `v0.2.0` tag. An editable dev install reports the version from its last install, so `created_by`/`upgraded_by` can be stale there.
+**Where the version lives.** `course_settings/course_settings.toml` has a top-level integer `format_version` (missing file or key = 0); `import` also writes `created_by` (the tool version that ran `import`), and `upgrade` appends one string per version-changing run to `upgraded_by` (`"<tool version> on <date>: <from> -> <to>"`). These are the first keys in the file. Every `.manifest-*.toml` has its own `_repo_format` stamp (see the manifest file section), because manifests are local and can lag behind the committed settings on a second machine. `repo_format.FORMAT_VERSION` is the tool's version (currently 6). `tool_version()` returns `importlib.metadata.version("markdown-to-canvas")`, or `"unknown"`. `pyproject.toml` uses `hatch-vcs` (`dynamic = ["version"]`, `fallback-version = "0.0.0+unknown"`), so the version comes from git tags: `0.2.1.devN+g<hash>` after a `v0.2.0` tag. An editable dev install reports the version from its last install, so `created_by`/`upgraded_by` can be stale there.
 
 **The check.** `check_repo_format(repo) -> None` reads the repo version and every manifest's stamp and raises `RepoFormatError` if any differs from `FORMAT_VERSION`: older says to run `markdown-to-canvas upgrade`, newer says to update the tool, and both versions and any offending manifest are named. It compares versions only; it never edits a file, so a matching version is taken to mean the files were set up correctly (`upgrade` is the one place that repairs `tab_configuration`). `RepoFormatError` subclasses `Exception`, not `ValueError`, so `_handle_cli_errors` does not prefix it with "KeyError or ValueError:". It is called first thing in each library entry point, so no code path reads a repo without it:
 
@@ -1011,6 +1011,10 @@ Done. Wrote course repo to: ./my-course/
 **Migration 2 -> 3** (`_migrate_2_to_3`): the term file no longer names a table, and the table `generate-due-dates` uses is `--table`, else `default`. Two edits, both only when the settings file's own version is below 3 (same guard as 1 -> 2), and a manifest stamp. (1) `UpgradeState` now also holds the in-repo term file (`course_settings/term_dates.toml`, a `tomlkit` document when it exists, plus a `term_changed` flag that `run_upgrade` writes with the manifests, so `--noop` writes neither); an uncommented `relative_table` key is deleted from it. It never creates the file and cannot reach term files outside the repo. (2) `_migrate_relative_tables` renames the table: a lone table not called `default`, or the one non-empty table when the only other is the empty `default` that 1 -> 2 added (that block is dropped first). Anything else (several real tables, or `default` plus two others) is left alone with a `NOTICE: ... --table NAME` line. The rename is done on the *text* by `_rename_table_headers` / `_drop_table_block`, rewriting only the `[relative_due_dates.tables.NAME...]` and `[[...]]` header lines, because that keeps comments and both item layouts (inline `items = [...]` and `[[...items]]` blocks) byte-identical, which moving a `tomlkit` table under a new key does not guarantee. Comment lines directly above the next header stay with that header when an empty `default` is dropped. Afterwards the result is parsed and compared with the expected data; if it does not match (dotted keys, inline `tables = {...}`, quoted oddities) the file is left unchanged and a "could not rename" notice says to use `--table NAME`. `state.settings_doc` is reassigned to the re-parsed document, which is safe because `run_upgrade` reads the attribute afresh.
 
 **Migration 3 -> 4** (`_migrate_3_to_4`, logic in `snippet_migration.py`): links inside block snippets become relative to the snippet file. Only when the settings file's own version is below 4; always stamps the manifests. `find_includers()` maps each snippet file to the files outside `snippets/` that block-include it (a snippet including a snippet is not an includer here, because before format 4 nested refs were never expanded, so there is no old reading to preserve): every `.md` outside `snippets/` and hidden folders, `.canvasignore`d files included, frontmatter split off textually (no YAML parse, so a malformed block does not hide an includer), refs inside fences, `PASTE_SNIPPET_INTO_FRONTMATTER` refs and inline `$...$` refs ignored. `migrate_snippet_links()` runs `links.transform_links(text, snippet_dir, snippet_dir, {}, url_map=...)` over each snippet outside fences, so it sees exactly the links rebasing sees; the `url_map` callback decides each link; `$...$` inline ref paths and block refs to other snippets are decided the same way (`rewrite_inline_snippets` stays on), since they were written for the includers too. With W the set of includer targets that exist (the readings that worked on Canvas) and S the snippet target: W is one file different from S → rewrite to the path from the snippet folder to it (percent-encoding and fragment/query kept), even if other includers resolved the link to nothing, since those were already broken; W = {S} → unchanged; W empty and S exists → unchanged; otherwise (W has several files, or nothing exists) unchanged with a `NOTICE:` listing each includer's reading. The rule was loosened from "every includer agrees" after a trial on a real course, where a snippet included at two depths had one working and one broken reading and the stricter rule left the working pages broken. A snippet with no includers gets a notice for each link whose S does not exist. New text goes to `state.pending_writes`, so `--noop` writes nothing. Undecodable snippet files are skipped with a notice.
+
+**Migration 4 -> 5** (`_migrate_4_to_5`): the checkbox question type `multiple_response_question` becomes `multiple_answers_question` (see "Type names" in the quiz section). Only when the settings file's own version is below 5; always stamps the manifests. Every `.md` outside hidden folders that contains the old name is examined: the YAML region is the leading frontmatter, split exactly as `convert.parse_frontmatter` splits it (`---\n` ... `\n---\n`), or, for a file under `snippets/` with no frontmatter, the whole file (a `PASTE_SNIPPET_INTO_FRONTMATTER` snippet is a bare YAML mapping). Within it `_QUESTION_TYPE_LINE` rewrites block-style `question_type:` lines, keeping indentation, quotes and a trailing comment; body text and commented-out lines are untouched. The rewritten region is then parsed with YAML, and if `question_type` is still the old value (a flow mapping, say) a `NOTICE:` asks for a manual edit. New text goes to `state.pending_writes`.
+
+**Migration 5 -> 6** (`_migrate_5_to_6`, logic in `question_migration.py`): question-file sections become H1 and feedback subsections H2 (see "Question file sections" in the quiz section). Only when the settings file's own version is below 6; always stamps the manifests. `find_question_files()` takes every file a `quizzes/<f>/<f>.md` lists (`quiz.split_quiz_body` on the raw body, so links inside `#if` blocks count) plus every `quizzes/*/questions/*.md` and `question_banks/*/questions/*.md`, skipping hidden paths but not `.canvasignore`d ones; quiz main files and other content are never touched. `migrate_question_text()` splits off the frontmatter like `parse_frontmatter`, then walks `split_fenced_segments` (fenced segments verbatim) line by line with `splitlines(keepends=True)`, the same line breaks `_split_on_headings` sees. It tracks two states: `old_section`, the section the old parser was in (the last `##` line of any name), and `kept_section`, the section the new parser will be in (the last *known* `##`). A `##` line with a known section name loses one `#`; a `###` line with a feedback subsection name loses one `#` only while `old_section` is `feedback`, matching the old reading. Any other `##` line is kept and so becomes content of `kept_section`: silent when that is the question (or the implicit section), a `NOTICE:` when it is answers, feedback or sample solution, since that text was ignored before and would now be read there. An existing body H1 gets a `NOTICE:` (it would start an unknown section); the tool does not demote it. One summary line gives the number of files changed, so the output stays short on repos with hundreds of questions. Run read-only over the nine real repos (722 questions) before release, the only notice was the one body H1 (CS 142 `midterm-factor-redundant-code.md`, fixed by hand), and afterwards every question had text except one whose source is empty.
 
 **Adding a migration.** Increase `FORMAT_VERSION`, add the function to `MIGRATIONS` keyed by the previous version, and test it (see `tests/test_repo_format.py`). CLAUDE.md states when a bump is required.
 
@@ -1558,7 +1562,7 @@ Read each question carefully before answering.
 
 **Multiple choice question** (`question_type: multiple_choice_question`):
 
-`correct` is the 1-based index of the correct answer in the `## Answers` list.
+`correct` is the 1-based index of the correct answer in the `# Answers` list.
 
 ```yaml
 ---
@@ -1570,7 +1574,7 @@ correct: 2
 
 What is the result of adding 2 and 2?
 
-## Answers
+# Answers
 
 1. 3
 2. 4
@@ -1579,7 +1583,7 @@ What is the result of adding 2 and 2?
 
 **True/false question** (`question_type: true_false_question`):
 
-No `## Answers` section — Canvas always provides "True" and "False". `correct` is the boolean value.
+No `# Answers` section — Canvas always provides "True" and "False". `correct` is the boolean value.
 
 ```yaml
 ---
@@ -1594,7 +1598,7 @@ The sky appears blue during the day due to Rayleigh scattering.
 
 **Essay question** (`question_type: essay_question`):
 
-No `correct` field or `## Answers` section — manually graded.
+No `correct` field or `# Answers` section — manually graded.
 
 ```yaml
 ---
@@ -1606,21 +1610,21 @@ points_possible: 5
 In 3–5 paragraphs, explain the concept of gravity and how it affects objects with different masses.
 ```
 
-**Multiple-response question** (`question_type: multiple_response_question`):
+**Multiple-answers (checkbox) question** (`question_type: multiple_answers_question`):
 
 `correct` is a list of 1-based indices of all correct answers. Answers section is the same format as MCQ.
 
 ```yaml
 ---
 title: "Select all prime numbers"
-question_type: multiple_response_question
+question_type: multiple_answers_question
 points_possible: 2
 correct: [1, 2, 4]
 ---
 
 Which of the following are prime numbers? Select all that apply.
 
-## Answers
+# Answers
 
 1. 2
 1. 3
@@ -1630,7 +1634,7 @@ Which of the following are prime numbers? Select all that apply.
 
 **Fill-in-blank question** (`question_type: fill_in_blank_question`):
 
-`answers` is a list of all accepted correct strings (case-insensitive exact match). No `## Answers` section.
+`answers` is a list of all accepted correct strings (case-insensitive exact match). No `# Answers` section.
 
 ```yaml
 ---
@@ -1659,11 +1663,11 @@ match_type: substring
 Name a programming language used in data science.
 ```
 
-**Question feedback** (all types): If the QTI item has `<itemfeedback>` elements, a `## Feedback` section is appended after the question text / answers with subsections `### General`, `### Correct`, `### Incorrect`, and `### Per-answer` (only those present in the source). Per-answer feedback lists each answer by 1-based index, written as `- answer N: text` bullets (a following line that isn't itself a `- answer M:` bullet is treated as a continuation paragraph of the same item).
+**Question feedback** (all types): If the QTI item has `<itemfeedback>` elements, a `# Feedback` section is appended after the question text / answers with subsections `## General`, `## Correct`, `## Incorrect`, and `## Per-answer` (only those present in the source). Per-answer feedback lists each answer by 1-based index, written as `- answer N: text` bullets (a following line that isn't itself a `- answer M:` bullet is treated as a continuation paragraph of the same item).
 
-On the sync side, `quiz.parse_question_file()` reads all four subsections: `### General`/`### Correct`/`### Incorrect` become the question's `neutral_comments`/`correct_comments`/`incorrect_comments` (forwarded to Canvas by `canvas_api._build_question_params`), and `### Per-answer` becomes an `answer_comments` key on the matching entry in `answers` (MCQ/multiple-response/true-false only — matched by the same 1-based position used elsewhere for `correct`).
+On the sync side, `quiz.parse_question_file()` reads all four subsections: `## General`/`## Correct`/`## Incorrect` become the question's `neutral_comments`/`correct_comments`/`incorrect_comments` (forwarded to Canvas by `canvas_api._build_question_params`), and `## Per-answer` becomes an `answer_comments` key on the matching entry in `answers` (MCQ/multiple-answers/true-false only — matched by the same 1-based position used elsewhere for `correct`).
 
-**Essay sample solution**: If the QTI item has `<itemfeedback ident="solution">`, a `## Sample Solution` section is appended after the question text.
+**Essay sample solution**: If the QTI item has `<itemfeedback ident="solution">`, a `# Sample Solution` section is appended after the question text.
 
 **Quiz manifest entry:**
 
@@ -1682,20 +1686,23 @@ canvas_question_ids = {"questions/what-is-2-plus-2.md" = 111, "questions/explain
 - The quiz is re-synced if the quiz `.md` file **or any question file** has mtime newer than `last_synced`. A change to a single question triggers a full quiz re-sync.
 - On each sync, all existing Canvas questions are deleted and re-created in the order listed in the quiz `.md`. This keeps question order correct and avoids stale questions after edits.
 - Canvas module items reference the quiz by `canvas_id` and use module item type `"Quiz"`.
+- Question file sections (format 6): `quiz._split_sections` splits the body at every H1 (`_SECTION_HEADING_RE`, `^#\s+`) outside fences, keyed by the lowercased heading, and `_parse_feedback_section` splits `# Feedback` at H2 (`_SUBSECTION_HEADING_RE`). `parse_question_file` reads only `question` (else the implicit section before the first heading), `answers`, `feedback` and `sample solution` (`_QUESTION_SECTIONS`); other sections are dropped, and so is feedback text outside `general`/`correct`/`incorrect`/`per-answer` (`_FEEDBACK_SUBSECTIONS`). Sections are H1 so that question text can use `##` and deeper: Canvas question HTML often starts with an `<h2>`, and before format 6 (sections at `##`, subsections at `###`) that heading started an ignored section, so 339 of 722 question files (nearly all imported) in the College 101 and CS 142/143 repos uploaded with empty text. The section lines are split off before `markdown_to_html`, so no `<h1>` reaches Canvas (content files, by contrast, fail on an `<h1>`). `_warn_ignored_sections` prints (without adding to `errors`, so the upload goes ahead) a `WARNING:` for each unrecognized `#` heading (noting when the question text is empty), for text above the first heading made unused by `# Question`, for a `##` heading named like a section and (inside `# Feedback`) a `###` named like a subsection, i.e. the old layout (`_OLD_SECTION_HEADING_RE`), and for an unrecognized `##` inside `# Feedback`. `import` writes nothing but `#` sections and `##` feedback subsections, and does not shift headings in question text; a Canvas `<h2>` inside *feedback* is written as `##` and dropped with a warning (see TODO.md; none occurred in the real repos).
 - Quiz description HTML and question text HTML are passed through `rewrite_links()` before upload, so cross-links to other course content resolve to correct Canvas URLs.
 - A question file listed in the quiz `.md` but missing on disk is a hard error: the whole quiz upload is skipped (nothing recorded in the manifest, so the quiz is retried next run) and the run's error summary fails the run.
 
-**Supported question types:** `multiple_choice_question`, `true_false_question`, `essay_question`, `multiple_response_question`, `fill_in_blank_question`, `pattern_match_question`. Other types emit a warning and are skipped.
+**Supported question types:** `multiple_choice_question`, `true_false_question`, `essay_question`, `multiple_answers_question`, `fill_in_blank_question`, `pattern_match_question`. On import, other types emit a warning and are skipped.
+
+**Type names.** Question files use Canvas's Classic Quiz API names, and `canvas_api._build_question_params` sends `question_type` unchanged, except that `fill_in_blank_question` and `pattern_match_question` are sent as `short_answer_question` (`quiz.parse_question_file`). The checkbox type was `multiple_response_question` (the IMS CC `cc.multiple_response.v0p1` name) before format 5; Canvas does not know that name, and the importer, which reads Canvas's `non_cc_assessments` QTI with its `question_type` label, skipped every `multiple_answers_question` in real exports. Format 5 uses `multiple_answers_question` throughout: `_CC_PROFILE_MAP` maps the CC profile to it, and `parse_question_file` reports a question still using the old name as an error through `errors` (so `sync` skips the quiz) instead of uploading a type Canvas does not recognise.
 
 **Effectively required fields per question type** (missing them won't crash the upload, but the question will be ungradable in Canvas):
 
 | Question type | Field | Effect if missing |
 | --- | --- | --- |
 | `multiple_choice_question` | `correct` (1-based int) | No answer marked correct |
-| `multiple_choice_question` | `## Answers` section | No answer choices at all |
+| `multiple_choice_question` | `# Answers` section | No answer choices at all |
 | `true_false_question` | `correct` (bool) | Neither True nor False marked correct |
-| `multiple_response_question` | `correct` (list of 1-based ints) | No answers marked correct |
-| `multiple_response_question` | `## Answers` section | No answer choices at all |
+| `multiple_answers_question` | `correct` (list of 1-based ints) | No answers marked correct |
+| `multiple_answers_question` | `# Answers` section | No answer choices at all |
 | `fill_in_blank_question` | `answers` (list of strings) | No accepted answers |
 | `pattern_match_question` | `answers` (list of patterns) | No accepted patterns |
 

@@ -21,6 +21,7 @@ from typing import Any
 
 import tomli_w
 import tomlkit
+import yaml
 from tomlkit.items import AoT, Array, InlineTable, Table, Whitespace
 
 from . import manifest as manifest_lib
@@ -28,7 +29,7 @@ from . import manifest as manifest_lib
 #: The format version this tool reads and writes. Increase it (and add a
 #: migration to MIGRATIONS) whenever a change makes the tool read an existing
 #: repo file differently. See CLAUDE.md.
-FORMAT_VERSION = 4
+FORMAT_VERSION = 6
 
 SETTINGS_RELPATH = Path("course_settings") / "course_settings.toml"
 
@@ -437,12 +438,107 @@ def _migrate_3_to_4(state: UpgradeState) -> list[str]:
     return lines
 
 
+#: The checkbox question type before format 5 (the IMS Common Cartridge name)
+#: and from format 5 (Canvas's name, sent to the API unchanged).
+OLD_MULTIPLE_ANSWERS_TYPE = "multiple_response_question"
+NEW_MULTIPLE_ANSWERS_TYPE = "multiple_answers_question"
+
+_QUESTION_TYPE_LINE = re.compile(
+    r"^(\s*question_type\s*:\s*)([\"']?)" + OLD_MULTIPLE_ANSWERS_TYPE + r"\2(?=\s*(?:#.*)?$)",
+    re.MULTILINE,
+)
+
+
+def _yaml_question_type(text: str) -> Any:
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError:
+        return None
+    return data.get("question_type") if isinstance(data, dict) else None
+
+
+def _rename_question_type(text: str, in_snippets: bool) -> tuple[str, bool]:
+    """(new text, whether the old type is still set) for one .md file.
+
+    Only the YAML the tool reads is touched: a leading frontmatter block,
+    split the same way ``convert.parse_frontmatter`` splits it, or, for a file
+    under snippets/ without one, the whole file (a frontmatter snippet).
+    """
+    if text.startswith("---\n") and (end := text.find("\n---\n", 4)) != -1:
+        start = 4
+    elif in_snippets:
+        start, end = 0, len(text)
+    else:
+        return text, False
+    yaml_text = _QUESTION_TYPE_LINE.sub(
+        lambda m: m.group(1) + m.group(2) + NEW_MULTIPLE_ANSWERS_TYPE + m.group(2),
+        text[start:end],
+    )
+    still_old = _yaml_question_type(yaml_text) == OLD_MULTIPLE_ANSWERS_TYPE
+    return text[:start] + yaml_text + text[end:], still_old
+
+
+def _migrate_4_to_5(state: UpgradeState) -> list[str]:
+    """``question_type: multiple_response_question`` becomes ``multiple_answers_question``.
+
+    Rewrites the value in every visible .md file's frontmatter and in
+    frontmatter snippets; reports any it cannot rewrite. Stamps the manifests.
+    """
+    lines: list[str] = []
+    if read_repo_version(state.repo) < 5:
+        snippets = state.repo / "snippets"
+        for path in sorted(state.repo.rglob("*.md")):
+            rel = path.relative_to(state.repo)
+            if not path.is_file() or any(part.startswith(".") for part in rel.parts):
+                continue
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if OLD_MULTIPLE_ANSWERS_TYPE not in text:
+                continue
+            new_text, still_old = _rename_question_type(text, path.is_relative_to(snippets))
+            if new_text != text:
+                state.pending_writes[path] = new_text
+                lines.append(
+                    f"Change question_type {OLD_MULTIPLE_ANSWERS_TYPE} -> "
+                    f"{NEW_MULTIPLE_ANSWERS_TYPE} in {rel.as_posix()}"
+                )
+            if still_old:
+                lines.append(
+                    f"NOTICE: {rel.as_posix()} still sets question_type "
+                    f"{OLD_MULTIPLE_ANSWERS_TYPE} in a form upgrade cannot rewrite; "
+                    f"change it to {NEW_MULTIPLE_ANSWERS_TYPE} by hand"
+                )
+    for path in state.manifests:
+        lines.append(f"Record format version 5 in {path.name}")
+    return lines
+
+
+def _migrate_5_to_6(state: UpgradeState) -> list[str]:
+    """Question-file sections become H1 and feedback subsections H2.
+
+    See question_migration. Stamps the manifests.
+    """
+    from .question_migration import migrate_question_sections
+
+    lines: list[str] = []
+    if read_repo_version(state.repo) < 6:
+        writes, lines = migrate_question_sections(state.repo)
+        state.pending_writes.update(writes)
+    for path in state.manifests:
+        lines.append(f"Record format version 6 in {path.name}")
+    return lines
+
+
 #: Ordered migrations, keyed by the version they migrate *from*.
 MIGRATIONS: dict[int, Migration] = {
     0: _migrate_0_to_1,
     1: _migrate_1_to_2,
     2: _migrate_2_to_3,
     3: _migrate_3_to_4,
+    4: _migrate_4_to_5,
+    5: _migrate_5_to_6,
 }
 
 

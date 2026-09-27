@@ -389,7 +389,7 @@ def test_quiz_mcq_has_correct_frontmatter(imported_dir: Path) -> None:
 
 def test_quiz_mcq_has_answers_section(imported_dir: Path) -> None:
     text = (imported_dir / "quizzes" / "a-quiz" / "questions" / "what-is-22.md").read_text()
-    assert "## Answers" in text
+    assert "\n# Answers" in text
     assert "3" in text
     assert "4" in text
     assert "5" in text
@@ -930,7 +930,7 @@ def test_module_external_url_comment_is_html_style(imported_dir: Path) -> None:
 
 def test_quiz_mcq_feedback_section_present(imported_dir: Path) -> None:
     text = (imported_dir / "quizzes" / "a-quiz" / "questions" / "what-is-22.md").read_text()
-    assert "## Feedback" in text
+    assert "\n# Feedback" in text
 
 
 def test_quiz_mcq_general_feedback_text(imported_dir: Path) -> None:
@@ -940,25 +940,25 @@ def test_quiz_mcq_general_feedback_text(imported_dir: Path) -> None:
 
 def test_quiz_mcq_correct_feedback_subsection(imported_dir: Path) -> None:
     text = (imported_dir / "quizzes" / "a-quiz" / "questions" / "what-is-22.md").read_text()
-    assert "### Correct" in text
+    assert "\n## Correct" in text
     assert "That is correct!" in text
 
 
 def test_quiz_mcq_incorrect_feedback_subsection(imported_dir: Path) -> None:
     text = (imported_dir / "quizzes" / "a-quiz" / "questions" / "what-is-22.md").read_text()
-    assert "### Incorrect" in text
+    assert "\n## Incorrect" in text
     assert "Try again." in text
 
 
 def test_quiz_mcq_per_answer_feedback(imported_dir: Path) -> None:
     text = (imported_dir / "quizzes" / "a-quiz" / "questions" / "what-is-22.md").read_text()
-    assert "### Per-answer" in text
+    assert "\n## Per-answer" in text
     assert "3 is not the sum of 2+2." in text
 
 
 def test_quiz_essay_sample_solution_present(imported_dir: Path) -> None:
     text = (imported_dir / "quizzes" / "a-quiz" / "questions" / "explain-something.md").read_text()
-    assert "## Sample Solution" in text
+    assert "\n# Sample Solution" in text
     assert "A good answer would discuss the key concepts" in text
 
 

@@ -1127,32 +1127,63 @@ def test_weblink_without_target_has_no_target_key() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_qti_multiple_response_type_parsed() -> None:
+def test_qti_multiple_answers_type_parsed() -> None:
     path = FIXTURE_DIR / "g_quiz_types.xml"
     questions = parse_qti_questions(path)
     types = [q["question_type"] for q in questions]
-    assert "multiple_response_question" in types
+    assert "multiple_answers_question" in types
 
 
-def test_qti_multiple_response_correct_idents() -> None:
+def test_qti_multiple_answers_correct_idents() -> None:
     path = FIXTURE_DIR / "g_quiz_types.xml"
     questions = parse_qti_questions(path)
-    mr = next(q for q in questions if q["question_type"] == "multiple_response_question")
+    mr = next(q for q in questions if q["question_type"] == "multiple_answers_question")
     assert set(mr["correct_idents"]) == {"A", "B", "D"}
 
 
-def test_qti_multiple_response_incorrect_not_in_correct_idents() -> None:
+def test_qti_multiple_answers_incorrect_not_in_correct_idents() -> None:
     path = FIXTURE_DIR / "g_quiz_types.xml"
     questions = parse_qti_questions(path)
-    mr = next(q for q in questions if q["question_type"] == "multiple_response_question")
+    mr = next(q for q in questions if q["question_type"] == "multiple_answers_question")
     assert "C" not in mr["correct_idents"]
 
 
-def test_qti_multiple_response_has_four_answers() -> None:
+def test_qti_multiple_answers_has_four_answers() -> None:
     path = FIXTURE_DIR / "g_quiz_types.xml"
     questions = parse_qti_questions(path)
-    mr = next(q for q in questions if q["question_type"] == "multiple_response_question")
+    mr = next(q for q in questions if q["question_type"] == "multiple_answers_question")
     assert len(mr["answers"]) == 4
+
+
+def test_qti_canvas_multiple_answers_question_type_parsed(tmp_path: Path) -> None:
+    """Canvas's own export (non_cc_assessments) labels the type with question_type."""
+    path = tmp_path / "canvas.xml.qti"
+    path.write_text(
+        '<questestinterop xmlns="http://www.imsglobal.org/xsd/ims_qtiasiv1p2">'
+        '<assessment ident="a" title="A"><section ident="root_section">'
+        '<item ident="q1" title="Pick times">'
+        "<itemmetadata><qtimetadata>"
+        "<qtimetadatafield><fieldlabel>question_type</fieldlabel>"
+        "<fieldentry>multiple_answers_question</fieldentry></qtimetadatafield>"
+        "<qtimetadatafield><fieldlabel>points_possible</fieldlabel>"
+        "<fieldentry>1.0</fieldentry></qtimetadatafield>"
+        "</qtimetadata></itemmetadata>"
+        '<presentation><material><mattext texttype="text/html">When?</mattext></material>'
+        '<response_lid ident="response1" rcardinality="Multiple"><render_choice>'
+        '<response_label ident="11"><material><mattext>Mornings</mattext></material></response_label>'
+        '<response_label ident="22"><material><mattext>Evenings</mattext></material></response_label>'
+        "</render_choice></response_lid></presentation>"
+        "<resprocessing><respcondition continue=\"No\"><conditionvar><and>"
+        '<varequal respident="response1">22</varequal>'
+        '<not><varequal respident="response1">11</varequal></not>'
+        "</and></conditionvar></respcondition></resprocessing>"
+        "</item></section></assessment></questestinterop>",
+        encoding="utf-8",
+    )
+    (q,) = parse_qti_questions(path)
+    assert q["question_type"] == "multiple_answers_question"
+    assert q["answers"] == [("11", "Mornings"), ("22", "Evenings")]
+    assert q["correct_idents"] == ["22"]
 
 
 def test_qti_fib_type_parsed() -> None:
@@ -1197,11 +1228,11 @@ def test_qti_pattern_match_has_match_type() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_write_multiple_response_correct_is_index_list(tmp_path: Path) -> None:
+def test_write_multiple_answers_correct_is_index_list(tmp_path: Path) -> None:
     from markdown_to_canvas.imscc_import import _write_question_file
     q = {
         "title": "Select primes",
-        "question_type": "multiple_response_question",
+        "question_type": "multiple_answers_question",
         "points_possible": 2.0,
         "question_text": "Which are prime?",
         "answers": [("A", "2"), ("B", "3"), ("C", "4"), ("D", "5")],
@@ -1217,9 +1248,9 @@ def test_write_multiple_response_correct_is_index_list(tmp_path: Path) -> None:
     p = tmp_path / "q.md"
     _write_question_file(q, p)
     text = p.read_text()
-    assert 'question_type: "multiple_response_question"' in text
+    assert 'question_type: "multiple_answers_question"' in text
     assert "correct: [1, 2, 4]" in text
-    assert "## Answers" in text
+    assert "\n# Answers" in text
 
 
 def test_write_fill_in_blank_has_answers_frontmatter(tmp_path: Path) -> None:
@@ -1245,7 +1276,7 @@ def test_write_fill_in_blank_has_answers_frontmatter(tmp_path: Path) -> None:
     assert 'question_type: "fill_in_blank_question"' in text
     assert "answers:" in text
     assert "300000" in text
-    assert "## Answers" not in text
+    assert "\n# Answers" not in text
 
 
 def test_write_pattern_match_has_match_type_frontmatter(tmp_path: Path) -> None:
@@ -1352,14 +1383,14 @@ def test_write_feedback_section_written(tmp_path: Path) -> None:
     p = tmp_path / "q.md"
     _write_question_file(q, p)
     text = p.read_text()
-    assert "## Feedback" in text
-    assert "### General" in text
+    assert "\n# Feedback" in text
+    assert "\n## General" in text
     assert "General hint." in text
-    assert "### Correct" in text
+    assert "\n## Correct" in text
     assert "Right!" in text
-    assert "### Incorrect" in text
+    assert "\n## Incorrect" in text
     assert "Wrong." in text
-    assert "### Per-answer" in text
+    assert "\n## Per-answer" in text
     assert "answer 1: Yes is correct." in text
 
 
@@ -1383,7 +1414,7 @@ def test_write_sample_solution_written(tmp_path: Path) -> None:
     p = tmp_path / "q.md"
     _write_question_file(q, p)
     text = p.read_text()
-    assert "## Sample Solution" in text
+    assert "\n# Sample Solution" in text
     assert "A good answer covers A and B." in text
 
 
@@ -1407,8 +1438,8 @@ def test_write_no_feedback_section_when_empty(tmp_path: Path) -> None:
     p = tmp_path / "q.md"
     _write_question_file(q, p)
     text = p.read_text()
-    assert "## Feedback" not in text
-    assert "## Sample Solution" not in text
+    assert "\n# Feedback" not in text
+    assert "\n# Sample Solution" not in text
 
 
 # ---------------------------------------------------------------------------
@@ -1866,3 +1897,22 @@ def test_collapse_spans_removes_the_pandoc_backtracking_blowup() -> None:
     start = time.time()
     markdown_to_html(_collapse_redundant_spans(md))
     assert time.time() - start < 5.0
+
+
+def test_imported_question_with_h2_round_trips_through_the_parser(tmp_path: Path) -> None:
+    """Canvas question text often starts with an <h2>; before format 6 the
+    written `## ...` line started an ignored section and the text uploaded empty."""
+    from markdown_to_canvas.imscc_import import _write_question_file
+    from markdown_to_canvas.quiz import parse_question_file
+    q = {
+        "title": "Challenging?", "question_type": "essay_question", "points_possible": 1.0,
+        "question_text": "<h2>What was challenging?</h2><p>Tell me.</p>", "answers": [],
+        "feedback": {"general_fb": "<p>Thanks</p>"}, "solution": "",
+        "slug": "challenging",
+    }
+    p = tmp_path / "q.md"
+    _write_question_file(q, p)
+    parsed = parse_question_file(p)
+    assert "What was challenging?" in parsed["question_text"]
+    assert "Tell me." in parsed["question_text"]
+    assert "Thanks" in parsed["neutral_comments"]

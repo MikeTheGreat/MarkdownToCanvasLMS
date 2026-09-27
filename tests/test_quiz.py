@@ -1,6 +1,7 @@
 """Unit tests for quiz.py — quiz and question file parsing."""
 from pathlib import Path
 
+import pytest
 
 from markdown_to_canvas.quiz import parse_question_file, parse_quiz_file
 
@@ -191,40 +192,40 @@ def test_parse_true_false_correct_false(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# parse_question_file — multiple_response_question
+# parse_question_file — multiple_answers_question
 # ---------------------------------------------------------------------------
 
-def test_parse_multiple_response_type(tmp_path):
+def test_parse_multiple_answers_type(tmp_path):
     md = tmp_path / "q.md"
     md.write_text(
         "---\n"
         "title: Select all primes\n"
-        "question_type: multiple_response_question\n"
+        "question_type: multiple_answers_question\n"
         "points_possible: 2\n"
         "correct: [1, 3]\n"
         "---\n\n"
         "Select all prime numbers.\n\n"
-        "## Answers\n\n"
+        "# Answers\n\n"
         "1. 2\n"
         "2. 4\n"
         "3. 7\n"
         "4. 9\n"
     )
     q = parse_question_file(md)
-    assert q["question_type"] == "multiple_response_question"
+    assert q["question_type"] == "multiple_answers_question"
 
 
-def test_parse_multiple_response_correct_answers_have_weight_100(tmp_path):
+def test_parse_multiple_answers_correct_answers_have_weight_100(tmp_path):
     md = tmp_path / "q.md"
     md.write_text(
         "---\n"
         "title: Select primes\n"
-        "question_type: multiple_response_question\n"
+        "question_type: multiple_answers_question\n"
         "points_possible: 2\n"
         "correct: [1, 3]\n"
         "---\n\n"
         "Pick all primes.\n\n"
-        "## Answers\n\n"
+        "# Answers\n\n"
         "1. 2\n"
         "2. 4\n"
         "3. 7\n"
@@ -236,6 +237,29 @@ def test_parse_multiple_response_correct_answers_have_weight_100(tmp_path):
     assert q["answers"][1]["weight"] == 0
     assert q["answers"][2]["weight"] == 100   # index 3 correct
     assert q["answers"][3]["weight"] == 0
+
+
+def test_multiple_answers_type_sent_to_canvas_unchanged(tmp_path):
+    """Canvas's Classic Quiz API name for a checkbox question is multiple_answers_question."""
+    from markdown_to_canvas.canvas_api import _build_question_params
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\nquestion_type: multiple_answers_question\n---\n\nPick.\n\n"
+        "# Answers\n\n1. a\n2. b\n"
+    )
+    params = _build_question_params(parse_question_file(md))
+    assert params["question_type"] == "multiple_answers_question"
+    assert [a["weight"] for a in params["answers"]] == [0, 0]  # a survey: none correct
+
+
+def test_old_multiple_response_type_is_an_error(tmp_path, capsys):
+    md = tmp_path / "q.md"
+    md.write_text("---\nquestion_type: multiple_response_question\n---\n\nPick.\n")
+    errors: list[str] = []
+    parse_question_file(md, errors=errors, source_desc="quizzes/x/questions/q.md")
+    assert len(errors) == 1
+    assert "quizzes/x/questions/q.md" in errors[0]
+    assert "multiple_answers_question" in errors[0]
 
 
 # ---------------------------------------------------------------------------
@@ -309,13 +333,13 @@ def test_parse_question_feedback_correct_incorrect(tmp_path):
         "correct: 2\n"
         "---\n\n"
         "What is the answer?\n\n"
-        "## Answers\n\n"
+        "# Answers\n\n"
         "1. Wrong\n"
         "2. Right\n\n"
-        "## Feedback\n\n"
-        "### Correct\n"
+        "# Feedback\n\n"
+        "## Correct\n"
         "Well done!\n\n"
-        "### Incorrect\n"
+        "## Incorrect\n"
         "Try again.\n"
     )
     q = parse_question_file(md)
@@ -333,8 +357,8 @@ def test_parse_question_feedback_general(tmp_path):
         "points_possible: 5\n"
         "---\n\n"
         "Explain something.\n\n"
-        "## Feedback\n\n"
-        "### General\n"
+        "# Feedback\n\n"
+        "## General\n"
         "General feedback here.\n"
     )
     q = parse_question_file(md)
@@ -367,11 +391,11 @@ def test_parse_question_per_answer_feedback_mcq(tmp_path):
         "correct: 2\n"
         "---\n\n"
         "What is the answer?\n\n"
-        "## Answers\n\n"
+        "# Answers\n\n"
         "1. Wrong\n"
         "2. Right\n\n"
-        "## Feedback\n\n"
-        "### Per-answer\n\n"
+        "# Feedback\n\n"
+        "## Per-answer\n\n"
         "- answer 1: Nope, try again.\n"
         "- answer 2: Correct!\n"
     )
@@ -391,11 +415,11 @@ def test_parse_question_per_answer_feedback_case_insensitive(tmp_path):
         "correct: 2\n"
         "---\n\n"
         "What is the answer?\n\n"
-        "## Answers\n\n"
+        "# Answers\n\n"
         "1. Wrong\n"
         "2. Right\n\n"
-        "## Feedback\n\n"
-        "### Per-answer\n\n"
+        "# Feedback\n\n"
+        "## Per-answer\n\n"
         "- Answer 1: Nope, try again.\n"
         "- ANSWER 2: Correct!\n"
     )
@@ -414,11 +438,11 @@ def test_parse_question_per_answer_feedback_multiline(tmp_path):
         "correct: 1\n"
         "---\n\n"
         "What is the answer?\n\n"
-        "## Answers\n\n"
+        "# Answers\n\n"
         "1. Right\n"
         "2. Wrong\n\n"
-        "## Feedback\n\n"
-        "### Per-answer\n\n"
+        "# Feedback\n\n"
+        "## Per-answer\n\n"
         "- answer 2: First line of feedback.\n\n"
         "Second paragraph, still about answer 2.\n"
     )
@@ -439,8 +463,8 @@ def test_parse_question_per_answer_feedback_true_false(tmp_path):
         "correct: true\n"
         "---\n\n"
         "The sky is blue.\n\n"
-        "## Feedback\n\n"
-        "### Per-answer\n\n"
+        "# Feedback\n\n"
+        "## Per-answer\n\n"
         "- answer 1: Correct, the sky is blue.\n"
     )
     q = parse_question_file(md)
@@ -461,7 +485,7 @@ def test_parse_essay_sample_solution_becomes_neutral_comments(tmp_path):
         "points_possible: 5\n"
         "---\n\n"
         "Explain the concept of gravity.\n\n"
-        "## Sample Solution\n\n"
+        "# Sample Solution\n\n"
         "Gravity is a force that attracts two masses toward each other.\n"
     )
     q = parse_question_file(md)
@@ -477,7 +501,7 @@ def test_parse_essay_sample_solution_does_not_bleed_into_question_text(tmp_path)
         "points_possible: 5\n"
         "---\n\n"
         "Explain the concept of gravity.\n\n"
-        "## Sample Solution\n\n"
+        "# Sample Solution\n\n"
         "Gravity is a force that attracts two masses toward each other.\n"
     )
     q = parse_question_file(md)
@@ -580,7 +604,7 @@ def test_parse_quiz_file_works_without_snippets_dir():
 # ---------------------------------------------------------------------------
 
 def test_question_heading_lookalike_in_code_fence_is_not_a_section(tmp_path):
-    """A '## Answers'-looking line inside a code fence (e.g. a bash or markdown
+    """A '# Answers'-looking line inside a code fence (e.g. a bash or markdown
     example) must not split the question into sections."""
     md = tmp_path / "q.md"
     md.write_text(
@@ -592,10 +616,10 @@ def test_question_heading_lookalike_in_code_fence_is_not_a_section(tmp_path):
         "---\n\n"
         "What does this markdown do?\n\n"
         "```markdown\n"
-        "## Answers\n"
+        "# Answers\n"
         "1. fake answer\n"
         "```\n\n"
-        "## Answers\n\n"
+        "# Answers\n\n"
         "1. real answer\n"
         "2. other answer\n"
     )
@@ -605,3 +629,108 @@ def test_question_heading_lookalike_in_code_fence_is_not_a_section(tmp_path):
     assert "fake answer" in q["question_text"]
 
 
+# ---------------------------------------------------------------------------
+# parse_question_file — sections are H1, so ## headings are question text
+# ---------------------------------------------------------------------------
+
+def test_h2_heading_is_part_of_the_question_text(tmp_path, capsys):
+    """The layout `import` wrote before format 6 lost this text."""
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\nquestion_type: essay_question\n---\n\n"
+        "# Question\n\n## What was challenging?\n\nTell me.\n\n### Detail\n\nMore.\n"
+    )
+    q = parse_question_file(md)
+    assert "What was challenging?" in q["question_text"]
+    assert "<h2" in q["question_text"] and "Tell me." in q["question_text"]
+    assert "More." in q["question_text"]
+    assert "WARNING" not in capsys.readouterr().out
+
+
+def test_h2_in_feedback_subsection_content_is_kept(tmp_path):
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\nquestion_type: essay_question\n---\n\nQ\n\n# Feedback\n\n"
+        "## General\n\nIntro\n\n### Hint\n\nDetail\n"
+    )
+    q = parse_question_file(md)
+    assert "Hint" in q["neutral_comments"] and "Detail" in q["neutral_comments"]
+
+
+# ---------------------------------------------------------------------------
+# parse_question_file — warnings for text that is never uploaded
+# ---------------------------------------------------------------------------
+
+def test_unknown_section_warns_that_the_question_has_no_text(tmp_path, capsys):
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\nquestion_type: essay_question\n---\n\n"
+        "# What Days Work?\n\nPick some.\n"
+    )
+    q = parse_question_file(md, source_desc="quizzes/s/questions/q.md")
+    assert q["question_text"] == ""
+    out = capsys.readouterr().out
+    assert "WARNING: quizzes/s/questions/q.md: '# What Days Work?' is not a question-file section" in out
+    assert "the question has no text" in out
+
+
+def test_unknown_section_after_question_text_warns_without_no_text_note(tmp_path, capsys):
+    md = tmp_path / "q.md"
+    md.write_text("---\n---\n\nQuestion text.\n\n# Notes\n\nDropped.\n")
+    parse_question_file(md)
+    out = capsys.readouterr().out
+    assert "'# Notes' is not a question-file section" in out
+    assert "no text" not in out
+
+
+def test_text_above_question_section_warns(tmp_path, capsys):
+    md = tmp_path / "q.md"
+    md.write_text("---\n---\n\nStray intro.\n\n# Question\n\nReal text.\n")
+    q = parse_question_file(md)
+    assert "Stray intro" not in q["question_text"]
+    assert "text above the first # heading is ignored" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("heading, fixed", [
+    ("## Answers", "# Answers"),
+    ("## question", "# question"),
+    ("## Sample Solution", "# Sample Solution"),
+])
+def test_old_style_section_heading_warns(tmp_path, capsys, heading, fixed):
+    md = tmp_path / "q.md"
+    md.write_text(f"---\n---\n\nText\n\n{heading}\n\n1. a\n")
+    parse_question_file(md, source_desc="q.md")
+    out = capsys.readouterr().out
+    assert f"WARNING: q.md: '{heading}' is ordinary content, not a section" in out
+    assert f"written '{fixed}'" in out
+
+
+def test_old_style_feedback_subsection_warns(tmp_path, capsys):
+    md = tmp_path / "q.md"
+    md.write_text("---\n---\n\nText\n\n# Feedback\n\n### Correct\n\nYes\n")
+    q = parse_question_file(md)
+    assert "correct_comments" not in q
+    out = capsys.readouterr().out
+    assert "'### Correct' is ordinary content, not a feedback subsection" in out
+    assert "written '## Correct'" in out
+
+
+def test_unknown_h2_in_feedback_warns(tmp_path, capsys):
+    md = tmp_path / "q.md"
+    md.write_text("---\n---\n\nText\n\n# Feedback\n\n## General\n\nA\n\n## Hint\n\nB\n")
+    q = parse_question_file(md)
+    assert q["neutral_comments"] == "A"
+    assert "'## Hint' in # Feedback is not a feedback subsection" in capsys.readouterr().out
+
+
+def test_known_sections_and_fenced_headings_do_not_warn(tmp_path, capsys):
+    md = tmp_path / "q.md"
+    md.write_text(
+        "---\nquestion_type: multiple_choice_question\ncorrect: 1\n---\n\n"
+        "# QUESTION\n\nText\n\n```\n# not a heading\n## Answers\n```\n\n"
+        "## Sub-heading\n\n### Correct\n\n"
+        "# Answers\n\n1. a\n2. b\n\n# Feedback\n\n## General\n\nOk\n\n### Hint\n\n"
+        "# Sample Solution\n\nS\n"
+    )
+    parse_question_file(md)
+    assert "WARNING" not in capsys.readouterr().out

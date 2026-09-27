@@ -1446,7 +1446,7 @@ _CC_PROFILE_MAP: dict[str, str] = {
     "cc.multiple_choice.v0p1": "multiple_choice_question",
     "cc.true_false.v0p1": "true_false_question",
     "cc.essay.v0p1": "essay_question",
-    "cc.multiple_response.v0p1": "multiple_response_question",
+    "cc.multiple_response.v0p1": "multiple_answers_question",
     "cc.fib.v0p1": "fill_in_blank_question",
     "cc.pattern_match.v0p1": "pattern_match_question",
 }
@@ -1455,7 +1455,7 @@ _SUPPORTED_QUESTION_TYPES = frozenset({
     "multiple_choice_question",
     "true_false_question",
     "essay_question",
-    "multiple_response_question",
+    "multiple_answers_question",
     "fill_in_blank_question",
     "pattern_match_question",
 })
@@ -1479,8 +1479,8 @@ def _extract_choice_answers(item_el: ET.Element) -> tuple[list[tuple[str, str]],
     return answers, correct_ident
 
 
-def _extract_multiple_response_answers(item_el: ET.Element) -> tuple[list[tuple[str, str]], list[str]]:
-    """Extract answers and correct identifiers for multiple response."""
+def _extract_multiple_answers(item_el: ET.Element) -> tuple[list[tuple[str, str]], list[str]]:
+    """Extract answers and correct identifiers for multiple answers."""
     answers: list[tuple[str, str]] = []
     correct_idents: list[str] = []
     for rl_el in item_el.iter():
@@ -1547,7 +1547,7 @@ def _extract_feedback(item_el: ET.Element) -> tuple[dict[str, str], str]:
 def _parse_qti_items(root_el: ET.Element) -> list[dict[str, Any]]:
     """Parse all <item> elements under root_el and return question dicts.
 
-    Handles multiple_choice, true_false, essay, multiple_response,
+    Handles multiple_choice, true_false, essay, multiple_answers,
     fill_in_blank, pattern_match question types; extracts itemfeedback,
     sample solutions, and original_answer_ids.
     """
@@ -1616,8 +1616,8 @@ def _parse_qti_items(root_el: ET.Element) -> list[dict[str, Any]]:
 
         if question_type in ("multiple_choice_question", "true_false_question"):
             answers, correct_ident = _extract_choice_answers(item_el)
-        elif question_type == "multiple_response_question":
-            answers, correct_idents = _extract_multiple_response_answers(item_el)
+        elif question_type == "multiple_answers_question":
+            answers, correct_idents = _extract_multiple_answers(item_el)
         elif question_type == "fill_in_blank_question":
             fib_answers = _extract_fib_answers(item_el)
         elif question_type == "pattern_match_question":
@@ -1686,24 +1686,24 @@ def _write_multiple_choice_body(
             correct_idx = i
             break
     fm_fields["correct"] = correct_idx
-    body_lines.append("## Answers")
+    body_lines.append("# Answers")
     body_lines.append("")
     for _, text in answers:
         answer_md = _html_to_markdown(text).strip() if text else ""
         body_lines.append(f"1. {answer_md}")
 
 
-def _write_multiple_response_body(
+def _write_multiple_answers_body(
     q: dict[str, Any], fm_fields: dict[str, Any], answers: list[tuple[str, str]], body_lines: list[str]
 ) -> None:
-    """Add multiple response question-specific fields and answers to body."""
+    """Add multiple answers question-specific fields and answers to body."""
     correct_idents_set = set(q.get("correct_idents", []))
     correct_indices = [
         i for i, (ident, _) in enumerate(answers, start=1)
         if ident in correct_idents_set
     ]
     fm_fields["correct"] = correct_indices
-    body_lines.append("## Answers")
+    body_lines.append("# Answers")
     body_lines.append("")
     for _, text in answers:
         answer_md = _html_to_markdown(text).strip() if text else ""
@@ -1727,22 +1727,22 @@ def _write_feedback_section(
     """Add feedback section to question body."""
     if not feedback:
         return
-    body_lines.extend(["", "## Feedback", ""])
+    body_lines.extend(["", "# Feedback", ""])
     if "general_fb" in feedback:
         fb_md = _html_to_markdown(feedback["general_fb"]).strip()
-        body_lines.extend(["### General", "", fb_md, ""])
+        body_lines.extend(["## General", "", fb_md, ""])
     if "correct_fb" in feedback:
         fb_md = _html_to_markdown(feedback["correct_fb"]).strip()
-        body_lines.extend(["### Correct", "", fb_md, ""])
+        body_lines.extend(["## Correct", "", fb_md, ""])
     if "general_incorrect_fb" in feedback:
         fb_md = _html_to_markdown(feedback["general_incorrect_fb"]).strip()
-        body_lines.extend(["### Incorrect", "", fb_md, ""])
+        body_lines.extend(["## Incorrect", "", fb_md, ""])
     per_answer = {
         k: v for k, v in feedback.items()
         if k not in ("general_fb", "correct_fb", "general_incorrect_fb")
     }
     if per_answer and answers:
-        body_lines.append("### Per-answer")
+        body_lines.append("## Per-answer")
         body_lines.append("")
         for i, (ident, _) in enumerate(answers, start=1):
             fb_key = f"{ident}_fb"
@@ -1776,8 +1776,8 @@ def _write_question_file(q: dict[str, Any], q_path: Path) -> None:
         _write_true_false_body(q, fm_fields, answers, body_lines)
     elif qt == "multiple_choice_question":
         _write_multiple_choice_body(q, fm_fields, answers, body_lines)
-    elif qt == "multiple_response_question":
-        _write_multiple_response_body(q, fm_fields, answers, body_lines)
+    elif qt == "multiple_answers_question":
+        _write_multiple_answers_body(q, fm_fields, answers, body_lines)
     elif qt == "fill_in_blank_question":
         _write_fib_body(q, fm_fields)
     elif qt == "pattern_match_question":
@@ -1788,11 +1788,11 @@ def _write_question_file(q: dict[str, Any], q_path: Path) -> None:
     # Sample solution for essay questions (spec §4.10.11.2)
     if solution:
         solution_md = _html_to_markdown(solution).strip()
-        body_lines.extend(["", "## Sample Solution", "", solution_md])
+        body_lines.extend(["", "# Sample Solution", "", solution_md])
 
     # Question text goes last under its own heading
     if question_md:
-        body_lines.extend(["", "## Question", "", question_md])
+        body_lines.extend(["", "# Question", "", question_md])
 
     fm = _build_frontmatter(fm_fields, commented_fields=commented_fields)
     body = "\n".join(body_lines).strip()
