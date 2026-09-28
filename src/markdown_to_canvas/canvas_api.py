@@ -1356,7 +1356,13 @@ def create_or_update_module(course, canvas_id: int | None, title: str, **kwargs)
             print(f"  Canvas module {canvas_id} was deleted; re-creating")
         else:
             return module.edit(module={"name": title, **kwargs})
-    return course.create_module(module={"name": title, **kwargs})
+    # Canvas's create-module endpoint has no `published` parameter and always
+    # creates the module unpublished, so publishing takes a follow-up edit.
+    published = kwargs.pop("published", None)
+    module = course.create_module(module={"name": title, **kwargs})
+    if published:
+        module.edit(module={"published": True})
+    return module
 
 
 def get_module_ids_by_name(course) -> dict[str, list[int]]:

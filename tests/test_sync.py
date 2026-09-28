@@ -6044,3 +6044,44 @@ def test_staleness_probe_includes_nested_snippets(tmp_path) -> None:
     page.parent.mkdir()
     page.write_text("---\ntitle: P\n---\n\n[o](../snippets/outer.md)\n")
     assert (snippets / "inner.md").resolve() in _file_referenced_snippets(page, snippets)
+
+
+# ---------------------------------------------------------------------------
+# create_or_update_module: publish state on create
+# ---------------------------------------------------------------------------
+
+
+def test_new_published_module_is_published_by_follow_up_edit() -> None:
+    """Canvas ignores `published` on create, so a new module needs an edit."""
+    course = MagicMock()
+    created = course.create_module.return_value
+
+    result = _capi.create_or_update_module(
+        course, None, "Mod", published=True, require_sequential_progress=False
+    )
+
+    course.create_module.assert_called_once_with(
+        module={"name": "Mod", "require_sequential_progress": False}
+    )
+    created.edit.assert_called_once_with(module={"published": True})
+    assert result is created
+
+
+def test_new_unpublished_module_needs_no_edit() -> None:
+    course = MagicMock()
+    created = course.create_module.return_value
+
+    _capi.create_or_update_module(course, None, "Mod", published=False)
+
+    course.create_module.assert_called_once_with(module={"name": "Mod"})
+    created.edit.assert_not_called()
+
+
+def test_existing_module_sets_published_in_its_edit() -> None:
+    course = MagicMock()
+    existing = course.get_module.return_value
+
+    _capi.create_or_update_module(course, 42, "Mod", published=True)
+
+    course.create_module.assert_not_called()
+    existing.edit.assert_called_once_with(module={"name": "Mod", "published": True})
