@@ -78,7 +78,7 @@ def _settings_text(root: Path) -> str:
 
 
 def _run(root, term, *args, **kwargs):
-    return CliRunner().invoke(main, ["generate-due-dates", str(term), str(root), *args], **kwargs)
+    return CliRunner().invoke(main, ["generate-due-dates", str(root), "--term", str(term), *args], **kwargs)
 
 
 def _entries(root: Path) -> dict[str, dict]:

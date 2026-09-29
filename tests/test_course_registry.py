@@ -195,6 +195,70 @@ def test_toml_suffix_is_not_looked_up_as_a_name(home, tmp_path, monkeypatch):
         reg.resolve_term("2026Fall.toml")
 
 
+# current_term: the registry's fallback term file
+
+
+def test_current_term_relative_to_the_registry_file(home, tmp_path, monkeypatch):
+    term = make_term(home, "2026Fall")
+    write_registry(home, 'current_term = "terms/2026Fall.toml"\n[courses]\n')
+    monkeypatch.chdir(tmp_path)  # relative to the registry, not the cwd
+    assert reg.current_term() == term
+
+
+def test_current_term_absolute_path(home, tmp_path):
+    term = tmp_path / "elsewhere" / "Fall.toml"
+    term.parent.mkdir()
+    term.write_text("")
+    write_registry(home, f'current_term = "{term}"\n')
+    assert reg.current_term() == term
+
+
+def test_current_term_tilde_path(home):
+    term = home / "my-terms" / "Fall.toml"
+    term.parent.mkdir()
+    term.write_text("")
+    write_registry(home, 'current_term = "~/my-terms/Fall.toml"\n')
+    assert reg.current_term() == term
+
+
+def test_current_term_is_not_looked_up_as_a_term_name(home):
+    make_term(home, "2026Fall")
+    write_registry(home, 'current_term = "2026Fall"\n')
+    with pytest.raises(reg.RegistryError, match="no file at"):
+        reg.current_term()
+
+
+def test_current_term_without_a_registry(home):
+    with pytest.raises(reg.RegistryError, match="no course registry"):
+        reg.current_term()
+
+
+def test_current_term_missing_key_suggests_adding_it(home):
+    write_registry(home, '[courses]\n')
+    with pytest.raises(reg.RegistryError, match="has no current_term key.*--term"):
+        reg.current_term()
+
+
+def test_current_term_under_the_courses_header_is_explained(home):
+    make_term(home, "2026Fall")
+    write_registry(home, '[courses]\ncurrent_term = "terms/2026Fall.toml"\n')
+    with pytest.raises(reg.RegistryError, match=r"inside \[courses\].*above"):
+        reg.current_term()
+
+
+def test_current_term_file_missing_names_the_resolved_path(home):
+    write_registry(home, 'current_term = "terms/Gone.toml"\n')
+    with pytest.raises(reg.RegistryError) as e:
+        reg.current_term()
+    assert str(home / ".config" / "markdown-to-canvas" / "terms" / "Gone.toml") in str(e.value)
+
+
+def test_current_term_must_be_a_string(home):
+    write_registry(home, 'current_term = 3\n')
+    with pytest.raises(reg.RegistryError, match="must be a path"):
+        reg.current_term()
+
+
 # ---------------------------------------------------------------------------
 # add_entry
 # ---------------------------------------------------------------------------
@@ -381,9 +445,10 @@ def test_a_real_completion_request_offers_keys_and_term_names(home, tmp_path):
     make_term(home, "2026Fall")
 
     assert "plain,142" in _complete(home, "markdown-to-canvas update 14", 2)
-    assert "plain,2026Fall" in _complete(home, "markdown-to-canvas generate-due-dates 20", 2)
-    # The course comes second for generate-due-dates.
-    assert "plain,143" in _complete(home, "markdown-to-canvas generate-due-dates 2026Fall 14", 3)
+    assert "plain,143" in _complete(home, "markdown-to-canvas generate-due-dates 14", 2)
+    assert "plain,2026Fall" in _complete(
+        home, "markdown-to-canvas generate-due-dates 142 --term 20", 4
+    )
 
 
 def test_a_key_added_after_install_is_offered_without_reinstalling(home, tmp_path):

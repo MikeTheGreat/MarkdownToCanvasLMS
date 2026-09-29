@@ -221,7 +221,7 @@ CLI_COMMANDS = {
     "find-local-orphans": lambda r: ["find-local-orphans", str(r)],
     "find-canvas-orphans": lambda r: ["find-canvas-orphans", str(r)],
     "list-titles": lambda r: ["list-titles", str(r)],
-    "generate-due-dates": lambda r: ["generate-due-dates", str(_term_file(r)), str(r)],
+    "generate-due-dates": lambda r: ["generate-due-dates", str(r), "--term", str(_term_file(r))],
 }
 
 

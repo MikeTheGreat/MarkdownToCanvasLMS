@@ -408,20 +408,49 @@ markdown-to-canvas list-titles 142
 
 #### Term names
 
-`generate-due-dates` takes a term file. Its `TERM_FILE` argument may also be a
+`generate-due-dates` needs a term file. Its `--term` option may be a path or a
 term name: the name of a file in `~/.config/markdown-to-canvas/terms/` without
 the `.toml`. A file that exists at the path you typed wins over a name.
 
 ```bash
 # ~/.config/markdown-to-canvas/terms/2026Fall.toml holds the term's dates
-markdown-to-canvas generate-due-dates 2026Fall 142
-markdown-to-canvas generate-due-dates 2026Fall          # inside a course
-markdown-to-canvas generate-due-dates course_settings/term_dates.toml 142   # a path still works
+markdown-to-canvas generate-due-dates 142 --term 2026Fall
+markdown-to-canvas generate-due-dates --term 2026Fall          # inside a course
+markdown-to-canvas generate-due-dates 142 --term course_settings/term_dates.toml   # a path still works
 ```
 
-The term comes first and the course second. See
+See
 [Generating due dates from offsets](#generating-due-dates-from-offsets-generate-due-dates)
 for what a term file holds; several courses can share one term file.
+
+#### The current term
+
+Instead of passing `--term` every time, name the current term's file in the
+registry with a top-level `current_term` key. It must come before the
+`[courses]` header; below it, TOML would make it part of `[courses]`.
+
+```toml
+# ~/.config/markdown-to-canvas/course_registry.toml
+current_term = "terms/2026Fall.toml"
+[courses]
+    142 = "~/Courses/it142"
+```
+
+The value is a path: absolute, starting with `~`, or relative to the directory
+the registry file is in. A bare term name such as `"2026Fall"` is not looked up
+in the terms directory. When `--term` is left out, `generate-due-dates` uses
+this file and prints `Term file: ...` so you can see which one it picked:
+
+```bash
+markdown-to-canvas generate-due-dates 142
+```
+
+The command stops with an error, and writes nothing, when there is no registry,
+no `current_term` key, or no file at that path, and when the term's `last_day`
+is before today (today's date in the term file's `time_zone`). The last check
+catches a `current_term` left over from a term that has ended. A term that has
+not started yet is accepted, because due dates are usually generated before the
+first day. An explicit `--term` skips the date check.
 
 #### Registering on import, and Tab completion
 
@@ -438,7 +467,7 @@ the file; everything else is up to you.
 
 After `markdown-to-canvas install-completion`, pressing Tab after a command
 offers your registry keys (as well as directories) for `COURSE_DIR`, and your
-term names (as well as files) for `TERM_FILE`. The lists are read each time you
+term names (as well as files) for `--term`. The lists are read each time you
 press Tab, so a key you add later shows up without reinstalling.
 
 ### Which course a manifest belongs to
@@ -974,9 +1003,17 @@ in green) and writes nothing. With `--apply` it rewrites the files; run
 ```
 
 It looks at every content file, module, snippet, quiz and question-bank file
-(including question files) and `course_settings/syllabus.md`. Frontmatter and
-fenced code blocks are never changed, and neither are brackets or quotes inside
-`inline code`. What it changes:
+(including question files) and `course_settings/syllabus.md`. Fenced code
+blocks are never changed, and neither are brackets or quotes inside
+`inline code`. Frontmatter is changed in one way only (see the first item
+below). What it changes:
+
+- **Frontmatter comment lines.** A frontmatter line that starts with `#` (such
+  as the commented-out `# due_at: ...` lines that older versions of `import`
+  wrote) is indented by four spaces, so VS Code stops showing it as a heading.
+  Import has written them this way since 2026-09-27. A comment right after a
+  multi-line value (`key: |`) is left alone, since indenting it would make it
+  part of that value.
 
 - **Word attribute blocks.** A `{...}` block containing a marker only Word
   writes (`.EOP`, `.SCXW…`, `.BCX…`, `.TextRun`, `ccp-props=…`, and similar)
@@ -3450,13 +3487,16 @@ contacts Canvas.
 
 ```bash
 # Show what would change, without writing anything
-markdown-to-canvas generate-due-dates course_settings/term_dates.toml --noop
+markdown-to-canvas generate-due-dates --term course_settings/term_dates.toml --noop
 
 # Compute the dates, show the changes, and ask before writing them
-markdown-to-canvas generate-due-dates TERM_FILE [COURSE_DIR] [--table NAME]
+markdown-to-canvas generate-due-dates [COURSE_DIR] [--term TERM_FILE] [--table NAME]
 
 # Both may be short names from the registry and the terms directory
-markdown-to-canvas generate-due-dates 2026Fall 142
+markdown-to-canvas generate-due-dates 142 --term 2026Fall
+
+# Without --term: the registry's current_term (see "The current term")
+markdown-to-canvas generate-due-dates 142
 
 # Then send them to Canvas as usual
 markdown-to-canvas update
@@ -3464,8 +3504,9 @@ markdown-to-canvas update
 
 It works from two inputs: a **term file** that holds what changes each term
 (dates, holidays, time zone), and a **relative table** in `course_settings.toml`
-that holds the schedule. The term file is a required argument, so a new term
-needs a new term file and no edit to the schedule.
+that holds the schedule. The term file comes from `--term`, or from the
+registry's [`current_term`](#the-current-term) when `--term` is left out, so a
+new term needs a new term file and no edit to the schedule.
 
 ### The term file
 

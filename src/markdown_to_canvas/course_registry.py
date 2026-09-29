@@ -1,8 +1,10 @@
 """Per-user registry of courses and terms, kept under ~/.config/markdown-to-canvas/.
 
 ``course_registry.toml`` maps a short key to a course directory (and, optionally,
-the canvas.toml to use for it); ``terms/<name>.toml`` are term files that
-``generate-due-dates`` accepts by name; ``.env`` is a fallback for the API token.
+the canvas.toml to use for it), and may name the ``current_term`` file that
+``generate-due-dates`` uses when ``--term`` is not given; ``terms/<name>.toml``
+are term files that ``--term`` accepts by name; ``.env`` is a fallback for the
+API token.
 
 The registry is read lazily: a bad file only matters to a command that has to
 look up a key, so a path argument or a walk-up keeps working when it is broken.
@@ -25,6 +27,7 @@ REGISTRY_NAME = "course_registry.toml"
 TERMS_DIR_NAME = "terms"
 ENV_NAME = ".env"
 COURSES_KEY = "courses"
+CURRENT_TERM_KEY = "current_term"
 _ENTRY_KEYS = ("path", "config")
 
 
@@ -83,16 +86,24 @@ def load_env_files() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _read_courses() -> dict[str, Any] | None:
-    """The raw ``[courses]`` table, or None when there is no registry file."""
+def _read_registry() -> dict[str, Any] | None:
+    """The whole parsed registry, or None when there is no registry file."""
     path = registry_path()
     if not path.is_file():
         return None
     try:
         with open(path, "rb") as f:
-            data = tomllib.load(f)
+            return tomllib.load(f)
     except tomllib.TOMLDecodeError as e:
         raise RegistryError(f"{path} is not valid TOML: {e}") from None
+
+
+def _read_courses() -> dict[str, Any] | None:
+    """The raw ``[courses]`` table, or None when there is no registry file."""
+    data = _read_registry()
+    if data is None:
+        return None
+    path = registry_path()
     courses = data.get(COURSES_KEY, {})
     if not isinstance(courses, dict):
         raise RegistryError(f"{path}: {COURSES_KEY} must be a table of key = path entries")
@@ -211,6 +222,46 @@ def resolve_term(arg: str) -> Path:
         f"{arg!r} is neither a term file ({as_path.resolve()}) nor a term name "
         f"({by_name}). Terms found: {names}"
     )
+
+
+def current_term() -> Path:
+    """The term file named by the registry's top-level ``current_term`` key.
+
+    The value may be absolute, start with ~, or be relative to the registry
+    file's directory. Raises RegistryError when there is no registry, no key,
+    a value that is not a string, or no file at the path. Whether the term is
+    still running is the caller's check (it needs the term file's contents).
+    """
+    path = registry_path()
+    data = _read_registry()
+    if data is None:
+        raise RegistryError(
+            f"No --term given, and there is no course registry ({path}) with a "
+            f"{CURRENT_TERM_KEY} key to fall back on."
+        )
+    if CURRENT_TERM_KEY not in data:
+        courses = data.get(COURSES_KEY)
+        if isinstance(courses, dict) and CURRENT_TERM_KEY in courses:
+            raise RegistryError(
+                f"No --term given, and {path} has {CURRENT_TERM_KEY} inside [{COURSES_KEY}]. "
+                f"Move the {CURRENT_TERM_KEY} line above the [{COURSES_KEY}] header."
+            )
+        raise RegistryError(
+            f"No --term given, and {path} has no {CURRENT_TERM_KEY} key. Add a line like "
+            f'{CURRENT_TERM_KEY} = "terms/2026Fall.toml" above [{COURSES_KEY}], or pass --term.'
+        )
+    raw = data[CURRENT_TERM_KEY]
+    if not isinstance(raw, str) or not raw:
+        raise RegistryError(f"{path}: {CURRENT_TERM_KEY} must be a path (a string), not {raw!r}")
+    term = Path(raw).expanduser()
+    if not term.is_absolute():
+        term = path.parent / term
+    if not term.is_file():
+        raise RegistryError(
+            f"{path}: {CURRENT_TERM_KEY} = {raw!r}, but there is no file at {term}. "
+            f"Fix the path, or pass --term."
+        )
+    return term
 
 
 # ---------------------------------------------------------------------------

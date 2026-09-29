@@ -359,7 +359,7 @@ def test_find_canvas_orphans_by_key_prints_the_directory(home, tmp_path, unrelat
 
 
 # ---------------------------------------------------------------------------
-# generate-due-dates: TERM_FILE by name, then COURSE_DIR by key
+# generate-due-dates: COURSE_DIR by key, --term by name
 # ---------------------------------------------------------------------------
 
 
@@ -378,7 +378,7 @@ def test_generate_due_dates_takes_a_term_name_and_a_course_key(home, tmp_path, u
     register(home, f'[courses]\n142 = "{course}"\n')
     _write_term(home, "2026Fall")
 
-    result = run("generate-due-dates", "2026Fall", "142", "--noop")
+    result = run("generate-due-dates", "142", "--term", "2026Fall", "--noop")
 
     assert result.exit_code == 0, result.output
     assert first_line(result) == f"Course dir: {course.resolve()}  (course 142)"
@@ -392,7 +392,7 @@ def test_generate_due_dates_walks_up_when_the_course_is_omitted(home, tmp_path, 
     _write_term(home, "2026Fall")
     monkeypatch.chdir(course / "assignments")
 
-    result = run("generate-due-dates", "2026Fall", "--noop")
+    result = run("generate-due-dates", "--term", "2026Fall", "--noop")
 
     assert result.exit_code == 0, result.output
     assert first_line(result) == f"Course dir: {course.resolve()}"
@@ -403,7 +403,83 @@ def test_generate_due_dates_unknown_term_lists_the_terms(home, tmp_path, unrelat
 
     course = _repo(tmp_path)
     _write_term(home, "2026Fall")
-    result = run("generate-due-dates", "2027Spring", str(course), "--noop")
+    result = run("generate-due-dates", str(course), "--term", "2027Spring", "--noop")
     assert result.exit_code == 1
     assert "2026Fall" in result.output and "2027Spring" in result.output
+    assert "Traceback" not in result.output
+
+
+def _fix_today(monkeypatch, day: str) -> None:
+    from datetime import date
+
+    from markdown_to_canvas import generate_due_dates
+
+    monkeypatch.setattr(generate_due_dates, "current_date", lambda zone: date.fromisoformat(day))
+
+
+@pytest.mark.parametrize("day", ["2026-08-01", "2026-09-30", "2026-12-18"])
+def test_generate_due_dates_uses_current_term_until_its_last_day(
+    day, home, tmp_path, unrelated, monkeypatch
+):
+    from tests.test_generate_due_dates import _repo
+
+    course = _repo(tmp_path)
+    _write_term(home, "2026Fall")
+    register(home, f'current_term = "terms/2026Fall.toml"\n[courses]\n142 = "{course}"\n')
+    _fix_today(monkeypatch, day)
+
+    result = run("generate-due-dates", "142", "--noop")
+
+    assert result.exit_code == 0, result.output
+    term = home / ".config" / "markdown-to-canvas" / "terms" / "2026Fall.toml"
+    assert f"Term file: {term}" in result.output
+    assert "Relative table: default" in result.output
+
+
+def test_generate_due_dates_refuses_a_current_term_that_has_ended(
+    home, tmp_path, unrelated, monkeypatch
+):
+    from tests.test_generate_due_dates import _repo
+
+    course = _repo(tmp_path)
+    _write_term(home, "2026Fall")
+    register(home, f'current_term = "terms/2026Fall.toml"\n[courses]\n142 = "{course}"\n')
+    _fix_today(monkeypatch, "2026-12-19")
+
+    result = run("generate-due-dates", "142", "--noop")
+
+    assert result.exit_code == 1
+    assert "ended on 2026-12-18" in result.output
+    assert "today is 2026-12-19" in result.output
+    assert "--term" in result.output
+    assert "Relative table" not in result.output
+
+
+def test_generate_due_dates_explicit_term_skips_the_date_check(
+    home, tmp_path, unrelated, monkeypatch
+):
+    from tests.test_generate_due_dates import _repo
+
+    course = _repo(tmp_path)
+    _write_term(home, "2026Fall")
+    register(home, f'current_term = "terms/2026Fall.toml"\n[courses]\n142 = "{course}"\n')
+    _fix_today(monkeypatch, "2027-06-01")
+
+    result = run("generate-due-dates", "142", "--term", "2026Fall", "--noop")
+
+    assert result.exit_code == 0, result.output
+    assert "Term file:" not in result.output
+
+
+def test_generate_due_dates_without_term_or_current_term_stops(home, tmp_path, monkeypatch):
+    from tests.test_generate_due_dates import _repo
+
+    course = _repo(tmp_path)
+    register(home, "[courses]\n")
+    monkeypatch.chdir(course)
+
+    result = run("generate-due-dates")
+
+    assert result.exit_code == 1
+    assert "has no current_term key" in result.output
     assert "Traceback" not in result.output

@@ -23,9 +23,11 @@ from .course_registry import (  # noqa: E402  (safe: imports nothing that reads 
     check_key_free,
     complete_course,
     complete_term,
+    current_term,
     load_env_files,
     resolve_config,
     resolve_course,
+    registry_path,
     resolve_term,
 )
 
@@ -46,7 +48,7 @@ from .config import Config, find_repo_root
 from .config import load as load_config
 from .course_guard import CourseGuardError, check_course
 from .cp import CpError, run_cp
-from .generate_due_dates import apply_plan, plan_generation, render_plan
+from .generate_due_dates import apply_plan, check_term_not_over, plan_generation, render_plan
 from .imscc_import import run_import
 from .local_orphans import find_local_orphans
 from .local_orphans import print_report as print_local_orphan_report
@@ -1023,9 +1025,19 @@ def _stdin_is_terminal() -> bool:
     return sys.stdin.isatty()
 
 
-@main.command(name="generate-due-dates", no_args_is_help=True)
-@click.argument("term_file", type=str, shell_complete=complete_term)
+@main.command(name="generate-due-dates")
 @_course_dir_argument()
+@click.option(
+    "--term",
+    "term_file",
+    default=None,
+    shell_complete=complete_term,
+    help=(
+        "The term file: a path, or a term name (a file in "
+        "~/.config/markdown-to-canvas/terms/ without its .toml). Default: the "
+        "current_term file named in the course registry."
+    ),
+)
 @click.option(
     "--table",
     "table_name",
@@ -1046,15 +1058,18 @@ def _stdin_is_terminal() -> bool:
     "Write the changes without asking. Needed when there is no terminal to ask."
 ))
 def generate_due_dates_cmd(
-    term_file: str, course_dir: str | None, table_name: str | None, noop: bool, assume_yes: bool
+    course_dir: str | None, term_file: str | None, table_name: str | None, noop: bool,
+    assume_yes: bool,
 ) -> None:
     """Fill the due_dates table from the relative due dates in course_settings.toml.
 
-    TERM_FILE is a TOML file with this term's first and last day, time zone,
+    The term file is a TOML file with this term's first and last day, time zone,
     default due time and non-instructional days (`import` writes a commented
-    example, course_settings/term_dates.toml), given as a path or as a term name:
-    the name of a file in ~/.config/markdown-to-canvas/terms/ without its .toml.
-    Each item of the chosen table in
+    example, course_settings/term_dates.toml). --term names it, as a path or as a
+    term name. Without --term, the file named by current_term in the course
+    registry (~/.config/markdown-to-canvas/course_registry.toml) is used, as long
+    as that term's last day has not passed; otherwise the command stops with an
+    error. Each item of the chosen table in
     [relative_due_dates] is turned into absolute unlock_at / due_at / lock_at
     values and written into the matching due_dates entry, or a new one. Other
     keys of an entry, such as only_if, are kept.
@@ -1069,9 +1084,15 @@ def generate_due_dates_cmd(
     """
     repo, _ = _resolve_course(course_dir)
     try:
-        term_path = resolve_term(term_file)
+        term_path = resolve_term(term_file) if term_file is not None else current_term()
     except RegistryError as e:
         die(str(e))
+    if term_file is None:
+        try:
+            check_term_not_over(term_path, f"current_term in {registry_path()}")
+        except RelativeDueDatesError as e:
+            die(str(e))
+        click.echo(f"Term file: {term_path}  (current_term in the course registry)")
     try:
         plan = plan_generation(repo, term_path, table_name)
     except (RepoFormatError, RelativeDueDatesError) as e:

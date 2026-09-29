@@ -14,9 +14,10 @@ from __future__ import annotations
 
 import tomllib
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import tomlkit
 from tomlkit.items import AoT, Array, Table
@@ -185,6 +186,31 @@ def title_warnings(
             + ", ".join(repr(n) for n in leftovers)
         )
     return warnings, notices
+
+
+def current_date(zone: ZoneInfo) -> date:
+    """Today's date in ``zone`` (a function so tests can fix the date)."""
+    return datetime.now(zone).date()
+
+
+def check_term_not_over(term_path: Path, source: str) -> None:
+    """Raise RelativeDueDatesError when the term's last_day is before today.
+
+    Used only for a term taken from the registry's ``current_term``, to catch a
+    registry entry left over from a term that has ended. Today is taken in the
+    term file's time zone; a term that has not started yet passes, because due
+    dates are normally generated before the first day. ``source`` says where the
+    term came from, for the message.
+    """
+    term = rd.load_term(term_path)
+    today = current_date(term.time_zone)
+    if today > term.last_day:
+        raise RelativeDueDatesError(
+            f"The current term ({term_path}, from {source}) ended on "
+            f"{term.last_day.isoformat()} (first day {term.first_day.isoformat()}), and "
+            f"today is {today.isoformat()}. Point current_term at this term's file, "
+            f"or pass --term."
+        )
 
 
 def plan_generation(repo: Path, term_path: Path, table_name: str | None = None) -> GenerationPlan:

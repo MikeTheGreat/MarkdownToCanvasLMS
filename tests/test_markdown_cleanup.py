@@ -456,6 +456,28 @@ def test_frontmatter_is_untouched() -> None:
     )
 
 
+def test_frontmatter_comments_are_indented() -> None:
+    text = (
+        "---\ntitle: \"Forum\"\n# Due dates are managed centrally\n"
+        "# due_at: \"2026-04-04T06:59:00\"\n---\n# Body heading\n"
+    )
+    assert clean_markdown_file_text(text) == (
+        "---\ntitle: \"Forum\"\n    # Due dates are managed centrally\n"
+        "    # due_at: \"2026-04-04T06:59:00\"\n---\n# Body heading\n"
+    )
+
+
+def test_indented_frontmatter_comments_are_unchanged() -> None:
+    text = "---\ntitle: x\n    # due_at: y\n  # two spaces\n---\nbody\n"
+    assert clean_markdown_file_text(text) == text
+
+
+def test_frontmatter_comment_after_block_scalar_is_left_alone() -> None:
+    # Indenting "# note" would make it part of the description's text.
+    text = "---\ndescription: |\n    line\n# note\ntitle: x\n---\nbody\n"
+    assert clean_markdown_file_text(text) == text
+
+
 def test_existing_two_space_hard_break_is_kept_on_a_changed_line() -> None:
     md = "it\\'s here  \nnext line\n"
     assert clean_markdown_body(md) == "it's here  \nnext line\n"

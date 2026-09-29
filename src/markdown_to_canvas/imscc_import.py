@@ -2708,7 +2708,7 @@ _IMPORT_ONLY_NOT_UPLOADED = (
 _RELATIVE_DUE_DATES_HELP = """\
 # --- Relative due dates, used by `generate-due-dates` ---
 # Describe due dates as offsets from the start of the term. `generate-due-dates
-# TERM_FILE` turns them into absolute dates in the due_dates table, once per
+# --term TERM_FILE` turns them into absolute dates in the due_dates table, once per
 # term; after that you edit due_dates by hand. course_settings/term_dates.toml
 # shows the term file. Items are matched to content by title, like due_dates.
 #
@@ -2771,7 +2771,7 @@ _TERM_EXAMPLE = """\
 # Everything here is commented out. Remove the leading "# " from each line you
 # want, fill in your term's values, and run:
 #
-#   markdown-to-canvas generate-due-dates course_settings/term_dates.toml
+#   markdown-to-canvas generate-due-dates --term course_settings/term_dates.toml
 #
 # Nothing else reads this file, so it may live anywhere.
 

@@ -28,6 +28,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import yaml
+
 from .convert import apply_outside_fences, split_fenced_segments
 
 # One attribute: #id, .class, or key=value. Pandoc writes double-quoted values
@@ -904,9 +906,38 @@ def split_frontmatter_raw(text: str) -> tuple[str, str]:
     return "", text
 
 
+# Matches import's `_build_frontmatter`, which writes its commented-out keys
+# with this indent.
+FRONTMATTER_COMMENT_INDENT = "    "
+
+
+def indent_frontmatter_comments(front: str) -> str:
+    """Indent frontmatter lines that start with ``#`` by four spaces.
+
+    VS Code reads a column-0 ``# ...`` line in frontmatter as a Markdown H1.
+    YAML ignores whitespace before a comment, but an indented ``#`` line
+    after a block scalar (``key: |``) would join the scalar's text, so the
+    change is kept only if the frontmatter parses to the same data.
+    """
+    lines = front.split("\n")
+    # lines[0] and the last "---" line are the delimiters.
+    changed = [
+        FRONTMATTER_COMMENT_INDENT + line if line.startswith("#") else line
+        for line in lines
+    ]
+    if changed == lines:
+        return front
+    try:
+        before = yaml.safe_load("\n".join(lines[1:-2]))
+        after = yaml.safe_load("\n".join(changed[1:-2]))
+    except yaml.YAMLError:
+        return front
+    return "\n".join(changed) if before == after else front
+
+
 def clean_markdown_file_text(text: str) -> str:
     front, body = split_frontmatter_raw(text)
-    return front + clean_markdown_body(body)
+    return indent_frontmatter_comments(front) + clean_markdown_body(body)
 
 
 @dataclass
