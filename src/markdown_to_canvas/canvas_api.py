@@ -1254,11 +1254,8 @@ def create_stub(course, canvas_type: str, title: str) -> dict[str, Any]:
     if canvas_type == "discussion":
         topic = course.create_discussion_topic(title=title, message="", published=False)
         return {"canvas_type": "discussion", "canvas_id": topic.id}
-    if canvas_type == "announcement":
-        topic = course.create_discussion_topic(
-            title=title, message="", published=False, is_announcement=True
-        )
-        return {"canvas_type": "announcement", "canvas_id": topic.id}
+    # No "announcement" stub: Canvas posts an announcement the moment it is
+    # created, so rewrite_links() leaves links to unposted ones unresolved.
     if canvas_type == "quiz":
         # Title only; _do_quiz() edits this stub by id when the quiz file is
         # processed, filling in quiz_type, settings and questions.

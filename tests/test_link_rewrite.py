@@ -331,6 +331,56 @@ def test_stub_creator_called_once_for_repeated_reference(tmp_path: Path) -> None
     stub_creator.assert_called_once()  # not twice
 
 
+def test_link_to_unposted_announcement_is_left_unresolved(
+    tmp_path: Path, capsys: pytest.CaptureFixture
+) -> None:
+    """Canvas has no draft announcements, so no stub is made: the <a> loses its
+    href (the text stays) and the target is reported through ``deferred``."""
+    course_root, source_file = _setup(tmp_path)
+    (course_root / "announcements").mkdir()
+    (course_root / "announcements" / "welcome.md").touch()
+    html = (
+        '<a href="../announcements/welcome.md" title="Hi">Welcome</a> '
+        '<a href="../announcements/welcome.md">again</a>'
+    )
+    deferred: list[str] = []
+    errors: list[str] = []
+    result = rewrite_links(
+        html, source_file, course_root, {}, COURSE_ID, _no_stub, errors,
+        deferred=deferred,
+    )
+    assert result == '<a title="Hi">Welcome</a> <a>again</a>'
+    assert deferred == ["announcements/welcome.md"]
+    assert errors == []
+    assert "not been posted" in capsys.readouterr().out
+
+
+def test_img_pointing_at_unposted_announcement_removed(tmp_path: Path) -> None:
+    course_root, source_file = _setup(tmp_path)
+    (course_root / "announcements").mkdir()
+    (course_root / "announcements" / "welcome.md").touch()
+    html = '<p><img src="../announcements/welcome.md" alt="x"></p>'
+    result = rewrite_links(html, source_file, course_root, {}, COURSE_ID, _no_stub)
+    assert result == "<p></p>"
+
+
+def test_link_to_posted_announcement_rewritten(tmp_path: Path) -> None:
+    course_root, source_file = _setup(tmp_path)
+    (course_root / "announcements").mkdir()
+    (course_root / "announcements" / "welcome.md").touch()
+    manifest = {
+        "announcements/welcome.md": {"canvas_type": "announcement", "canvas_id": 77}
+    }
+    deferred: list[str] = []
+    html = '<a href="../announcements/welcome.md">Welcome</a>'
+    result = rewrite_links(
+        html, source_file, course_root, manifest, COURSE_ID, _no_stub,
+        deferred=deferred,
+    )
+    assert f'href="/courses/{COURSE_ID}/discussion_topics/77"' in result
+    assert deferred == []
+
+
 # ---------------------------------------------------------------------------
 # rewrite_links — mixed content
 # ---------------------------------------------------------------------------

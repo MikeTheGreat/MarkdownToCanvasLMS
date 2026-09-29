@@ -412,6 +412,102 @@ def test_unpublished_announcement_skipped_before_link_rewriting(
     assert "does-not-exist.md" not in out
 
 
+def _write_page_linking_unposted_announcement(root: Path) -> None:
+    (root / "pages").mkdir(parents=True)
+    (root / "announcements").mkdir()
+    (root / "announcements" / "welcome.md").write_text(
+        '---\ntitle: "Welcome"\npublished: false\n---\n\nHello.\n'
+    )
+    (root / "pages" / "p.md").write_text(
+        "---\ntitle: P\npublished: true\n---\n\n"
+        "See [the welcome](../announcements/welcome.md).\n"
+    )
+
+
+def test_link_to_unposted_announcement_uploads_but_stays_stale(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    """Canvas would post an announcement stub, so none is made. The page is
+    uploaded with the link text only, and keeps its canvas_id without a
+    last_synced stamp so the next update retries it."""
+    manifest: dict = {}
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    _write_page_linking_unposted_announcement(root)
+    mock_course.create_page.return_value = _mock_page(501, "p")
+
+    make_current(root)
+    had_errors = run_sync(_config(), root)
+
+    assert not had_errors
+    assert _announcement_create_call(mock_course) is None
+    body = mock_course.create_page.call_args.kwargs["wiki_page"]["body"]
+    assert "<a>the welcome</a>" in body
+    assert "announcements/welcome.md" not in manifest
+    entry = manifest["pages/p.md"]
+    assert entry["canvas_id"] == 501
+    assert "last_synced" not in entry
+    assert "will be retried on the next update" in capsys.readouterr().out
+
+
+def test_stale_referrer_resolves_once_announcement_is_posted(
+    mock_course, mocker, tmp_path
+) -> None:
+    """The retry after the announcement posts rewrites the link and stamps the page."""
+    manifest: dict = {
+        "pages/p.md": {"canvas_id": 501, "canvas_type": "page", "canvas_url": "p"},
+        "announcements/welcome.md": {
+            "canvas_id": 77, "canvas_type": "announcement",
+            "last_synced": _FUTURE_SYNCED,
+        },
+    }
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    _write_page_linking_unposted_announcement(root)
+    page = _mock_page(501, "p")
+    mock_course.get_page.return_value = page
+
+    make_current(root)
+    run_sync(_config(), root)
+
+    body = page.edit.call_args.kwargs["wiki_page"]["body"]
+    assert f'href="/courses/{COURSE_ID}/discussion_topics/77"' in body
+    assert "last_synced" in manifest["pages/p.md"]
+
+
+def test_announcements_processed_before_other_content_folders(
+    mock_course, mocker, tmp_path
+) -> None:
+    """activities/ sorts before announcements/, but the announcement is posted
+    first, so the same run resolves the link to it."""
+    manifest: dict = {}
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    (root / "activities").mkdir(parents=True)
+    (root / "announcements").mkdir()
+    (root / "announcements" / "welcome.md").write_text(
+        '---\ntitle: "Welcome"\npublished: true\n---\n\nHello.\n'
+    )
+    (root / "activities" / "a.md").write_text(
+        "---\ntitle: A\npublished: true\n---\n\n"
+        "See [the welcome](../announcements/welcome.md).\n"
+    )
+    topic = MagicMock()
+    topic.id = 77
+    mock_course.create_discussion_topic.return_value = topic
+    mock_course.create_page.return_value = _mock_page(501, "a")
+
+    make_current(root)
+    run_sync(_config(), root)
+
+    body = mock_course.create_page.call_args.kwargs["wiki_page"]["body"]
+    assert f'href="/courses/{COURSE_ID}/discussion_topics/77"' in body
+    assert "last_synced" in manifest["activities/a.md"]
+
+
 def test_published_announcement_is_posted_without_published_kwarg(mock_course, course_root, mocker) -> None:
     """published:true posts the announcement; `published` is not sent (Canvas posts by default)."""
     mocker.patch("markdown_to_canvas.manifest.flush")

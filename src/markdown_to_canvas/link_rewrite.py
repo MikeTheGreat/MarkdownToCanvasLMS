@@ -163,6 +163,13 @@ def _with_fragment(url: str, entry: dict[str, Any], href: str) -> str:
     return url + suffix[hash_at:]
 
 
+# Types create_stub cannot make: a Canvas announcement is posted the moment it
+# is created, so there is no unpublished placeholder to link to.
+_UNSTUBBABLE_TYPES = frozenset({"announcement"})
+# _resolve_entry's marker for a link to an unposted announcement.
+_DEFERRED: dict[str, Any] = {}
+
+
 def rewrite_links(
     html: str,
     source_file: Path,
@@ -171,17 +178,26 @@ def rewrite_links(
     course_id: int,
     stub_creator: Callable[[str, str], dict[str, Any]],
     errors: list[str] | None = None,
+    deferred: list[str] | None = None,
 ) -> str:
     """Rewrite local <img src> and <a href> references to Canvas URLs.
 
     `stub_creator(local_path, canvas_type)` is called when a referenced file
     exists locally but has no manifest entry yet. It must create a Canvas stub,
     update the manifest, flush to disk, and return the new manifest entry.
+
+    An announcement with no manifest entry is the exception: Canvas has no
+    draft state for announcements, so a stub would post an empty announcement
+    to students. The link is left unresolved instead (the ``<a>`` loses its
+    href and renders as plain text; an ``<img>`` is dropped), a warning is
+    printed, and the target's key is appended to ``deferred`` so the caller
+    can leave the source file stale and retry it once the announcement posts.
     """
 
     def _resolve_entry(attr_value: str) -> tuple[str | None, dict[str, Any] | None]:
-        """Return (local_key, entry), (target, None) for a broken ref, or
-        (None, None) for a non-local URL."""
+        """Return (local_key, entry), (target, None) for a broken ref,
+        (target, _DEFERRED) for an unposted announcement, or (None, None)
+        for a non-local URL."""
         local_key, problem = _classify_ref(attr_value, source_file, course_root)
         if local_key is None:
             return None, None
@@ -192,7 +208,16 @@ def rewrite_links(
                 errors.append(f"  {src}: {problem}, removing tag: {local_key}")
             return local_key, None  # signals removal
         if local_key not in manifest:
-            entry = stub_creator(local_key, infer_canvas_type(local_key))
+            canvas_type = infer_canvas_type(local_key)
+            if canvas_type in _UNSTUBBABLE_TYPES:
+                print(
+                    f"  WARNING: link to {local_key} left unresolved: that "
+                    "announcement has not been posted to Canvas yet"
+                )
+                if deferred is not None and local_key not in deferred:
+                    deferred.append(local_key)
+                return local_key, _DEFERRED
+            entry = stub_creator(local_key, canvas_type)
             manifest[local_key] = entry
         return local_key, manifest[local_key]
 
@@ -204,8 +229,8 @@ def rewrite_links(
         local_key, entry = _resolve_entry(src_m.group(1))
         if local_key is None:
             return tag  # external — unchanged
-        if entry is None:
-            return ""  # local file missing — remove tag
+        if entry is None or entry is _DEFERRED:
+            return ""  # local file missing or not on Canvas yet — remove tag
         new_url = _with_fragment(canvas_content_url(entry, course_id), entry, src_m.group(1))
         return tag[: src_m.start(1)] + new_url + tag[src_m.end(1) :]
 
@@ -219,6 +244,10 @@ def rewrite_links(
             return tag  # external/anchor — unchanged
         if entry is None:
             return ""  # local file missing — remove tag
+        if entry is _DEFERRED:
+            # Keep the <a> so its </a> still matches; without an href the
+            # link text renders as plain text.
+            return tag[: href_m.start(0)].rstrip() + tag[href_m.end(0) :]
         new_url = _with_fragment(canvas_content_url(entry, course_id), entry, href_m.group(1))
         return tag[: href_m.start(1)] + new_url + tag[href_m.end(1) :]
 

@@ -923,6 +923,27 @@ def _make_stub_creator(course, manifest, manifest_path, note: str, repo_root: Pa
     return stub_creator
 
 
+def _leave_stale_for_deferred_links(
+    manifest, manifest_path, local_key: str, deferred: list[str]
+) -> None:
+    """Drop ``last_synced`` from a file uploaded with unresolved announcement links.
+
+    rewrite_links() cannot stub an announcement (Canvas would post it), so a
+    link to one that has not been posted yet is uploaded without an href. The
+    entry keeps its canvas_id, so the next run updates the same Canvas item,
+    but stays stale so every update retries it until the link resolves. A
+    file whose upload never recorded an entry is already stale."""
+    if not deferred:
+        return
+    entry = manifest.get(local_key)
+    if entry is not None and entry.pop("last_synced", None) is not None:
+        manifest_lib.flush(manifest_path, manifest)
+    print(
+        f"  {local_key} will be retried on the next update, once the linked "
+        f"announcement is posted: {', '.join(deferred)}"
+    )
+
+
 def _effective_mtime(paths: Iterable[Path], snippets_dir: Path) -> datetime:
     """Latest mtime among the given files and every snippet they reference.
 
@@ -1235,8 +1256,10 @@ def sync_syllabus(ctx: SyncContext) -> None:
         ctx.course, manifest, ctx.manifest_path, "referenced from syllabus",
         repo_root=repo_path, api=ctx.api,
     )
+    deferred: list[str] = []
     html = rewrite_links(
-        html, syllabus_md, repo_path, manifest, course_id, stub_creator, errors
+        html, syllabus_md, repo_path, manifest, course_id, stub_creator, errors,
+        deferred=deferred,
     )
     if len(errors) > error_count_before:
         print(f"  Skipping upload due to errors: {local_key}")
@@ -1247,6 +1270,7 @@ def sync_syllabus(ctx: SyncContext) -> None:
         manifest, ctx.manifest_path, local_key, course_id, "syllabus",
         extra={"flags_used": flags_used} if flags_used else None,
     )
+    _leave_stale_for_deferred_links(manifest, ctx.manifest_path, local_key, deferred)
 
 
 # course_settings.toml keys with a section of their own for change detection.
@@ -1695,7 +1719,7 @@ def _phase_assets(ctx: SyncContext) -> None:
 
 
 def _phase_content(ctx: SyncContext) -> bool:
-    """Phase 2: Upload content (pages, assignments, discussions).
+    """Phase 2: Upload content (announcements first, then the other folders).
 
     Returns False if collision check passes; True if aborted due to collisions.
     """
@@ -1711,13 +1735,19 @@ def _phase_content(ctx: SyncContext) -> bool:
         "course_settings",
         "question_banks",
     }
+    # announcements/ goes first so an announcement being posted this run has a
+    # manifest entry before any page/assignment/discussion that links to it is
+    # rewritten; otherwise that link would be left unresolved for one more run.
     content_dirs = sorted(
-        d
-        for d in repo_path.iterdir()
-        if d.is_dir()
-        and not d.name.startswith(".")
-        and d.name not in skip
-        and not matcher.is_ignored(d, repo_path)
+        (
+            d
+            for d in repo_path.iterdir()
+            if d.is_dir()
+            and not d.name.startswith(".")
+            and d.name not in skip
+            and not matcher.is_ignored(d, repo_path)
+        ),
+        key=lambda d: (d.name != "announcements", d.name),
     )
     all_content_files: list[Path] = []
     for content_dir in content_dirs:
@@ -2768,8 +2798,10 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
     )
 
     error_count_before = len(errors) if errors is not None else 0
+    deferred: list[str] = []
     html = rewrite_links(
-        html, md_file, repo_root, manifest, course_id, stub_creator, errors
+        html, md_file, repo_root, manifest, course_id, stub_creator, errors,
+        deferred=deferred,
     )
     if errors is not None and len(errors) > error_count_before:
         print(f"  Skipping upload due to errors: {local_key}")
@@ -2789,6 +2821,7 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
         _upload_discussion(ctx, existing, frontmatter, html, title, published, local_key, flags_used)
     elif canvas_type == "announcement":
         _upload_announcement(ctx, existing, frontmatter, html, title, published, local_key, flags_used)
+    _leave_stale_for_deferred_links(manifest, manifest_path, local_key, deferred)
 
 
 # Manifest key prefix and canvas_type for a Canvas module that has no local
@@ -3234,6 +3267,7 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
     )
 
     error_count_before = len(errors) if errors is not None else 0
+    deferred: list[str] = []
 
     # §7: rewrite links in quiz description
     if desc_html:
@@ -3245,6 +3279,7 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
             config_course_id,
             _stub_creator,
             errors,
+            deferred=deferred,
         )
 
     questions: list[dict[str, Any]] = []
@@ -3269,6 +3304,7 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
                 config_course_id,
                 _stub_creator,
                 errors,
+                deferred=deferred,
             )
         q_data["rel_path"] = rel_path
         questions.append(q_data)
@@ -3326,6 +3362,7 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
         "quiz",
         extra=extra,
     )
+    _leave_stale_for_deferred_links(manifest, manifest_path, local_key, deferred)
     if synced_keys is not None:
         synced_keys.add(local_key)
 

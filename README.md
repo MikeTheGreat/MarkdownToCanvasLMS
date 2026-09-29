@@ -1330,7 +1330,7 @@ entries do not — they match content by title, not by path.
   not a reason to delete it.
 * **`modules/` and `course_settings/`.** These are the roots — nothing in a repo
   ever links *to* a module file or the syllabus, so listing them would be noise.
-* **Quizzes and announcements.** Nothing links to an announcement, and a quiz is
+* **Quizzes and announcements.** Announcements are rarely linked to, and a quiz is
   usually reached from a module or taken directly in Canvas, so "unreferenced"
   is not a deletion signal for either. Their contents still count: an asset
   used only inside a quiz or announcement is not reported.
@@ -2342,6 +2342,13 @@ whether the announcement is sent to Canvas *at all*:
 
 To release a staged announcement, change its `published` to `true` and run
 `update`. Announcements cannot be graded, so grading/due-date fields do not apply.
+
+Other content can link to an announcement. If the announcement hasn't been posted
+yet, the link has nothing on Canvas to point to, so `update` uploads the linking
+file with the link text left as plain text and prints a warning. That file is
+retried on every `update` until the announcement is posted, and the retry after it
+posts turns the text back into a working link. A targeted `-s`/`-t` run of only
+the announcement does not retry the linking files; the next full `update` does.
 
 ```markdown
 ---
