@@ -1259,7 +1259,7 @@ def sync_syllabus(ctx: SyncContext) -> None:
     deferred: list[str] = []
     html = rewrite_links(
         html, syllabus_md, repo_path, manifest, course_id, stub_creator, errors,
-        deferred=deferred,
+        deferred=deferred, matcher=ctx.matcher,
     )
     if len(errors) > error_count_before:
         print(f"  Skipping upload due to errors: {local_key}")
@@ -2801,7 +2801,7 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
     deferred: list[str] = []
     html = rewrite_links(
         html, md_file, repo_root, manifest, course_id, stub_creator, errors,
-        deferred=deferred,
+        deferred=deferred, matcher=ctx.matcher,
     )
     if errors is not None and len(errors) > error_count_before:
         print(f"  Skipping upload due to errors: {local_key}")
@@ -3280,6 +3280,7 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
             _stub_creator,
             errors,
             deferred=deferred,
+            matcher=ctx.matcher,
         )
 
     questions: list[dict[str, Any]] = []
@@ -3305,6 +3306,7 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
                 _stub_creator,
                 errors,
                 deferred=deferred,
+                matcher=ctx.matcher,
             )
         q_data["rel_path"] = rel_path
         questions.append(q_data)
@@ -3577,6 +3579,7 @@ def run_targeted_sync(
     due_dates = filter_due_dates_by_flags(load_due_dates(repo_path), course_flags)
     pinned = load_pinned_resources(repo_path)
     group_categories = load_group_categories(repo_path)
+    matcher = load_ignore_matcher(repo_path)
 
     ctx = SyncContext(
         course=course,
@@ -3593,6 +3596,7 @@ def run_targeted_sync(
         due_dates=due_dates,
         flags=course_flags,
         pinned=pinned,
+        matcher=matcher,
         assignment_group_ids=assignment_group_ids,
         rubric_ids=rubric_ids,
         unpublishable_items=unpublishable_items,
@@ -3691,6 +3695,23 @@ def run_targeted_sync(
     def _warn_missing(target: str) -> None:
         print(f"  WARNING: target not found or outside repo: {target}")
 
+    def _is_ignored(local_key: str, named: bool) -> bool:
+        """True if .canvasignore excludes local_key, as a full update would.
+
+        course_settings/ is exempt: a full update applies it without walking
+        it. A target named on the command line is reported; a file reached by
+        following a link is reported only with --verbose, like a full update.
+        """
+        if local_key.split("/")[0] == "course_settings":
+            return False
+        if not matcher.is_excluded(repo_path / local_key, repo_path):
+            return False
+        if named:
+            print(f"  Skipping (matched by .canvasignore): {local_key}")
+        elif verbose:
+            print(f"Ignoring: {local_key}")
+        return True
+
     # -t first: BFS over all transitively referenced local files.
     # Modules are deferred until after all content in the BFS is processed,
     # because modules require their referenced content to already have manifest entries.
@@ -3699,6 +3720,8 @@ def run_targeted_sync(
         local_key = _resolve_target(target, repo_path)
         if local_key is None or not (repo_path / local_key).exists():
             _warn_missing(target)
+            continue
+        if _is_ignored(local_key, named=True):
             continue
         if local_key not in visited:
             queue.append(local_key)
@@ -3719,7 +3742,7 @@ def run_targeted_sync(
         else:
             _process(local_key)
         for ref in refs:
-            if ref not in visited:
+            if ref not in visited and not _is_ignored(ref, named=False):
                 queue.append(ref)
 
     for local_key in deferred_modules:
@@ -3731,6 +3754,8 @@ def run_targeted_sync(
         local_key = _resolve_target(target, repo_path)
         if local_key is None or not (repo_path / local_key).exists():
             _warn_missing(target)
+            continue
+        if _is_ignored(local_key, named=True):
             continue
         _process(local_key)
 
@@ -3752,9 +3777,9 @@ def run_targeted_sync(
             )
 
     if due_dates:
-        _check_due_dates_coverage(due_dates, repo_path, flags=course_flags)
+        _check_due_dates_coverage(due_dates, repo_path, matcher, course_flags)
 
-    check_course_flags_coverage(course_flags, repo_path)
+    check_course_flags_coverage(course_flags, repo_path, matcher)
     check_pinned_resources_coverage(pinned, repo_path)
 
     _print_newer_on_canvas_summary(newer_on_canvas)

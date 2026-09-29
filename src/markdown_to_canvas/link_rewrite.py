@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 from urllib.parse import unquote
 
 from .links import has_url_scheme, is_relative_path_url, split_suffix
+
+if TYPE_CHECKING:
+    from .ignore import IgnoreMatcher
 
 ManifestDict = dict[str, dict[str, Any]]
 
@@ -179,6 +182,7 @@ def rewrite_links(
     stub_creator: Callable[[str, str], dict[str, Any]],
     errors: list[str] | None = None,
     deferred: list[str] | None = None,
+    matcher: IgnoreMatcher | None = None,
 ) -> str:
     """Rewrite local <img src> and <a href> references to Canvas URLs.
 
@@ -192,6 +196,12 @@ def rewrite_links(
     href and renders as plain text; an ``<img>`` is dropped), a warning is
     printed, and the target's key is appended to ``deferred`` so the caller
     can leave the source file stale and retry it once the announcement posts.
+
+    A link to a file that ``matcher`` excludes (.canvasignore) is an error,
+    whether or not the file is already on Canvas: nothing is stub-created, and
+    the error lands in ``errors`` so the caller skips the upload and leaves the
+    source file stale. The error repeats on every update until the link is
+    removed or the target is no longer ignored.
     """
 
     def _resolve_entry(attr_value: str) -> tuple[str | None, dict[str, Any] | None]:
@@ -207,6 +217,19 @@ def rewrite_links(
                 src = _source_desc(source_file, course_root)
                 errors.append(f"  {src}: {problem}, removing tag: {local_key}")
             return local_key, None  # signals removal
+        if matcher is not None and matcher.is_excluded(
+            course_root / local_key, course_root
+        ):
+            src = _source_desc(source_file, course_root)
+            msg = (
+                f"{src}: links to {local_key}, which .canvasignore excludes; "
+                f"{src} will not be uploaded until the link is removed or the "
+                "file is no longer ignored"
+            )
+            print(f"  ERROR: {msg}")
+            if errors is not None:
+                errors.append(f"  {msg}")
+            return local_key, None
         if local_key not in manifest:
             canvas_type = infer_canvas_type(local_key)
             if canvas_type in _UNSTUBBABLE_TYPES:

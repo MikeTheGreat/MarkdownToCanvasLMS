@@ -4214,6 +4214,127 @@ def test_ignored_content_file_not_synced(mock_course, course_root, mocker) -> No
     mock_course.create_page.assert_called_once()
 
 
+def test_single_target_ignored_file_not_synced(
+    mock_course, course_root, mocker, capsys
+) -> None:
+    """-s on a file matched by .canvasignore skips it, as a full update would."""
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    drafts = course_root / "assignments" / "not_uploaded_to_canvas"
+    drafts.mkdir()
+    draft = drafts / "draft.md"
+    draft.write_text("---\ntitle: Draft\n---\n\nBody.\n")
+    (course_root / ".canvasignore").write_text("**/not_uploaded_to_canvas/**\n")
+
+    make_current(course_root)
+    run_targeted_sync(_config(), course_root, [], [str(draft)])
+
+    mock_course.create_assignment.assert_not_called()
+    out = capsys.readouterr().out
+    assert "Skipping (matched by .canvasignore): assignments/not_uploaded_to_canvas/draft.md" in out
+
+
+def test_recursive_target_does_not_follow_ignored_refs(
+    mock_course, course_root, mocker
+) -> None:
+    """-t does not sync a file it reaches through a link when .canvasignore
+    matches that file's directory."""
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    (course_root / ".canvasignore").write_text("discussions/\n")
+
+    make_current(course_root)
+    run_targeted_sync(
+        _config(), course_root,
+        recursive_targets=[str(course_root / "modules" / "week-1.md")],
+        single_targets=[],
+    )
+
+    mock_course.create_discussion_topic.assert_not_called()
+    # The module's other, unignored items are still followed.
+    mock_course.upload.assert_called_once()
+
+
+def test_targeted_due_dates_coverage_skips_ignored_files(
+    mock_course, course_root, mocker, capsys
+) -> None:
+    """The due_dates coverage check at the end of a targeted run skips files
+    matched by .canvasignore, the same as after a full update."""
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    mocker.patch(
+        "markdown_to_canvas.sync.load_due_dates",
+        return_value=[{"name": "Week 1 Problem Set", "due_at": "2099-12-31T23:59:00"}],
+    )
+    mock_course.create_page.return_value = _mock_page(99999, "syllabus")
+    drafts = course_root / "assignments" / "not_uploaded_to_canvas"
+    drafts.mkdir()
+    (drafts / "draft.md").write_text("---\ntitle: Draft Log\n---\n\nBody.\n")
+    (course_root / "assignments" / "kept.md").write_text(
+        "---\ntitle: Kept Log\n---\n\nBody.\n"
+    )
+    (course_root / ".canvasignore").write_text("**/not_uploaded_to_canvas/**\n")
+
+    make_current(course_root)
+    run_targeted_sync(
+        _config(), course_root, [], [str(course_root / "pages" / "syllabus.md")]
+    )
+
+    out = capsys.readouterr().out
+    assert "assignment: Kept Log" in out
+    assert "Draft Log" not in out
+
+
+def _write_page_linking_ignored_page(root: Path) -> None:
+    (root / "pages" / "drafts").mkdir(parents=True)
+    (root / "pages" / "drafts" / "plan.md").write_text(
+        "---\ntitle: Plan\npublished: true\n---\n\nDraft.\n"
+    )
+    (root / "pages" / "p.md").write_text(
+        "---\ntitle: P\npublished: true\n---\n\nSee [the plan](drafts/plan.md).\n"
+    )
+    (root / ".canvasignore").write_text("drafts/\n")
+
+
+def test_link_to_ignored_file_blocks_upload_and_stays_stale(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    """A page linking to a .canvasignore'd file is not uploaded, the ignored
+    file is not stub-created, and the error repeats on the next update."""
+    manifest: dict = {}
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    _write_page_linking_ignored_page(root)
+
+    make_current(root)
+    assert run_sync(_config(), root)
+    mock_course.create_page.assert_not_called()
+    assert "pages/p.md" not in manifest
+    assert "pages/drafts/plan.md" not in manifest
+    assert "which .canvasignore excludes" in capsys.readouterr().out
+
+    assert run_sync(_config(), root)
+    mock_course.create_page.assert_not_called()
+    assert "which .canvasignore excludes" in capsys.readouterr().out
+
+
+def test_single_target_link_to_ignored_file_blocks_upload(
+    mock_course, mocker, tmp_path, capsys
+) -> None:
+    manifest: dict = {}
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    _write_page_linking_ignored_page(root)
+
+    make_current(root)
+    assert run_targeted_sync(_config(), root, [], [str(root / "pages" / "p.md")])
+    mock_course.create_page.assert_not_called()
+    assert "pages/p.md" not in manifest
+    out = capsys.readouterr().out
+    assert "which .canvasignore excludes" in out
+    assert "Skipping upload due to errors: pages/p.md" in out
+
+
 # ---------------------------------------------------------------------------
 # Rubric sync: _build_criteria_dict
 # ---------------------------------------------------------------------------

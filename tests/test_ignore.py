@@ -89,3 +89,26 @@ def test_negation_reincludes(tmp_path: Path) -> None:
     kept.touch()
     assert matcher.is_ignored(dropped, tmp_path) is True
     assert matcher.is_ignored(kept, tmp_path) is False
+
+
+def test_is_excluded_checks_parent_directories(tmp_path: Path) -> None:
+    """A file inside an ignored directory is excluded even when a `!` pattern
+    re-includes the file itself. pathspec matches the file on its own, but git
+    cannot re-include a file whose parent directory is excluded, and a
+    directory walk never reaches it."""
+    _write(tmp_path / ".canvasignore", "drafts/\n!keep.md\n")
+    matcher = load_ignore_matcher(tmp_path)
+    f = tmp_path / "drafts" / "keep.md"
+    f.parent.mkdir(parents=True)
+    f.touch()
+    assert matcher.is_ignored(f, tmp_path) is False
+    assert matcher.is_excluded(f, tmp_path) is True
+
+
+def test_is_excluded_false_for_unignored_file(tmp_path: Path) -> None:
+    _write(tmp_path / ".canvasignore", "drafts/\n")
+    matcher = load_ignore_matcher(tmp_path)
+    f = tmp_path / "pages" / "syllabus.md"
+    f.parent.mkdir(parents=True)
+    f.touch()
+    assert matcher.is_excluded(f, tmp_path) is False

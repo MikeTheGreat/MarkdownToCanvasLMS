@@ -169,16 +169,7 @@ class _Planner:
     # -- selection ------------------------------------------------------
 
     def _ignored(self, rel: str) -> bool:
-        path = self.src / rel
-        if self.matcher.is_ignored(path, self.src):
-            return True
-        # A file inside an ignored directory: check each parent directory.
-        parent = path.parent
-        while parent != self.src and parent.is_relative_to(self.src):
-            if self.matcher.is_ignored(parent, self.src):
-                return True
-            parent = parent.parent
-        return False
+        return self.matcher.is_excluded(self.src / rel, self.src)
 
     def _select(self, rel: str, explicit: bool) -> None:
         if not (self.src / rel).is_file():

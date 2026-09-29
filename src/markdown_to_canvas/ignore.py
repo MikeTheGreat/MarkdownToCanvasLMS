@@ -38,6 +38,22 @@ class IgnoreMatcher:
             rel += "/"
         return self._spec.match_file(rel)
 
+    def is_excluded(self, path: Path, repo_root: Path) -> bool:
+        """Return True if `path` or any directory above it is ignored.
+
+        Use this for a single path reached without walking the tree (a named
+        target, a followed link): a directory walk skips ignored directories
+        before reaching their files, and this gives the same answer.
+        """
+        if self.is_ignored(path, repo_root):
+            return True
+        parent = path.parent
+        while parent != repo_root and parent.is_relative_to(repo_root):
+            if self.is_ignored(parent, repo_root):
+                return True
+            parent = parent.parent
+        return False
+
 
 def load_ignore_matcher(repo_root: Path) -> IgnoreMatcher:
     """Build an IgnoreMatcher from `.canvasignore` at the repo root.

@@ -381,6 +381,42 @@ def test_link_to_posted_announcement_rewritten(tmp_path: Path) -> None:
     assert deferred == []
 
 
+def test_link_to_canvasignored_file_is_an_error(tmp_path: Path, capsys) -> None:
+    """No stub is made for an ignored target; the link is an error."""
+    from markdown_to_canvas.ignore import load_ignore_matcher
+
+    course_root, source_file = _setup(tmp_path)
+    (course_root / "pages" / "drafts").mkdir()
+    (course_root / "pages" / "drafts" / "plan.md").touch()
+    (course_root / ".canvasignore").write_text("drafts/\n")
+    errors: list[str] = []
+    rewrite_links(
+        '<a href="drafts/plan.md">Plan</a>', source_file, course_root, {},
+        COURSE_ID, _no_stub, errors, matcher=load_ignore_matcher(course_root),
+    )
+    assert len(errors) == 1
+    assert "pages/drafts/plan.md, which .canvasignore excludes" in errors[0]
+    assert "ERROR:" in capsys.readouterr().out
+
+
+def test_link_to_canvasignored_file_already_on_canvas_is_an_error(
+    tmp_path: Path,
+) -> None:
+    """A manifest entry (uploaded before it was ignored) does not make the link OK."""
+    from markdown_to_canvas.ignore import load_ignore_matcher
+
+    course_root, source_file = _setup(tmp_path)
+    (course_root / "pages" / "old.md").touch()
+    (course_root / ".canvasignore").write_text("old.md\n")
+    manifest = {"pages/old.md": {"canvas_type": "page", "canvas_id": 5, "canvas_url": "old"}}
+    errors: list[str] = []
+    rewrite_links(
+        '<a href="old.md">Old</a>', source_file, course_root, manifest,
+        COURSE_ID, _no_stub, errors, matcher=load_ignore_matcher(course_root),
+    )
+    assert len(errors) == 1
+
+
 # ---------------------------------------------------------------------------
 # rewrite_links — mixed content
 # ---------------------------------------------------------------------------
