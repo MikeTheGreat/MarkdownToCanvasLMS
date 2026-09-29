@@ -2335,8 +2335,9 @@ The key difference from other content: **Canvas has no "draft" state for
 announcements** — creating one posts it immediately. So `published` controls
 whether the announcement is sent to Canvas *at all*:
 
-* `published: false` → **not posted.** `update` skips the file (with a warning)
-  and it stays staged in your repo. This lets you keep a set of announcements
+* `published: false` → **not posted.** `update` skips the file and it stays
+  staged in your repo. Its `Processing:` line in the output ends with
+  `(skipped because published: false)`. This lets you keep a set of announcements
   ready and release each one when the time is right (e.g. the midterm reminder).
 * `published: true` → **posted now** (or scheduled, if you set `delayed_post_at`).
 

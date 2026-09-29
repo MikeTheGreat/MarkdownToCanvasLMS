@@ -387,7 +387,24 @@ def test_unpublished_announcement_skip_message_quiet_by_default(
     run_sync(_config(), course_root)
 
     assert _announcement_create_call(mock_course) is None
-    assert "Skipping (unpublished announcement" not in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Skipping (unpublished announcement" not in out
+    assert "Processing: announcements/midterm-reminder.md (skipped because published: false)" in out
+
+
+def test_published_announcement_processing_line_has_no_skip_note(
+    mock_course, course_root, mocker, capsys
+) -> None:
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    _write_announcement(course_root, published=True)
+
+    make_current(course_root)
+    run_sync(_config(), course_root)
+
+    out = capsys.readouterr().out
+    assert "Processing: announcements/midterm-reminder.md\n" in out
+    assert "skipped because" not in out
 
 
 def test_unpublished_announcement_skipped_before_link_rewriting(

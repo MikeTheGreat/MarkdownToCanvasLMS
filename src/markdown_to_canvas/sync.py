@@ -2690,6 +2690,25 @@ def _upload_announcement(
         synced_keys.add(local_key)
 
 
+def _unposted_announcement_note(md_file: Path, canvas_type: str) -> str:
+    """Suffix for the "Processing:" line of an announcement that will be skipped.
+
+    Announcements with a literal ``published: false`` (or no ``published`` key)
+    are never sent to Canvas (see _sync_content_file). Peeks at the frontmatter
+    quietly; anything unparseable or using ``published_if`` gets no note, since
+    the normal path reports those problems itself.
+    """
+    if canvas_type != "announcement":
+        return ""
+    try:
+        frontmatter, _ = parse_frontmatter(md_file.read_text())
+    except yaml.YAMLError:
+        return ""
+    if "published_if" in frontmatter or frontmatter.get("published", False):
+        return ""
+    return " (skipped because published: false)"
+
+
 def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
     course = ctx.course
     repo_root = ctx.repo_path
@@ -2723,9 +2742,8 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
         ):
             return
 
-    print(f"Processing: {local_key}")
-
     canvas_type = infer_canvas_type(local_key)
+    print(f"Processing: {local_key}{_unposted_announcement_note(md_file, canvas_type)}")
 
     parsed = _parse_frontmatter_or_warn(md_file, local_key, errors)
     if parsed is None:
