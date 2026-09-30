@@ -1282,6 +1282,9 @@ def create_or_update_quiz(
 def _do_quiz(
     course, canvas_id: int | None, title: str, description: str, **kwargs
 ) -> dict[str, Any]:
+    # omit_from_final_grade is an assignment field, not a quiz field: apply it
+    # to the quiz's underlying assignment after the quiz itself is saved.
+    omit = kwargs.pop("omit_from_final_grade", None)
     params = {"title": title, "description": description, **kwargs}
     if canvas_id is not None:
         try:
@@ -1292,6 +1295,11 @@ def _do_quiz(
             quiz = course.create_quiz(quiz=params)
     else:
         quiz = course.create_quiz(quiz=params)
+    assignment_id = getattr(quiz, "assignment_id", None)
+    if omit is not None and assignment_id:
+        course.get_assignment(assignment_id).edit(
+            assignment={"omit_from_final_grade": omit}
+        )
     return {"canvas_type": "quiz", "canvas_id": quiz.id, "html_url": quiz.html_url}
 
 

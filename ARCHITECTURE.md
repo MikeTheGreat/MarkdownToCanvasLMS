@@ -1507,6 +1507,9 @@ due_at: "2025-02-01T23:59:00-05:00"
 lock_at: "2025-02-08T23:59:00-05:00"
 unlock_at: "2025-01-27T00:00:00-05:00"
 grading_type: "points"       # points | percent | letter_grade | gpa_scale | pass_fail
+omit_from_final_grade: true  # optional; "Do not count towards the final grade".
+                             #   Also valid on graded discussions (nested under
+                             #   `assignment`) and quizzes (see below)
 submission_types: [online_upload]
 published: true
 ---
@@ -2141,3 +2144,5 @@ Structured, per-key evaluation of a flag condition — deliberately narrower tha
 **Due-dates coverage interaction:** `_check_due_dates_coverage()` gained a `flags` param; for each gradeable content file with a `published_if` key it quietly resolves it, and an item resolving to *not published* (this offering doesn't include it) is treated as expected-to-have-no-`due_dates`-entry — excluded from the "no due_dates entry" warning list. This is orthogonal to `only_if`: an entry dropped by `only_if` still leaves its content file subject to the normal "no entry" warning unless that file is itself `published_if`-excluded.
 
 **Why not a general `#if` in frontmatter/TOML instead:** considered and rejected (2026-07-06) in favor of the narrower structured-key approach above. A full "process `#if` everywhere" design would need conditional YAML to stay valid under *every* flag combination (nothing checks unselected combinations — breakage surfaces a quarter later), would touch dozens of `parse_frontmatter` call sites beyond the handful `apply_conditionals` hits today (title-collision check, due-dates coverage, `list-titles`, `mv`, …) risking silent `update`/`publish` drift if one site is missed, and `<!-- #if flag -->` is invalid YAML/TOML syntax (unlike in a Markdown body), so VSCode would flag conditional frontmatter as broken. `published_if`/`only_if` sidestep all three by computing exactly one value per key, post-parse, from the same settings dict already loaded — no flags-file migration, no per-site drift risk, no invalid-syntax problem.
+
+**`omit_from_final_grade`:** an assignment field in Canvas. Assignments and graded discussions send it in the assignment params (discussions nest it under `assignment`). Quizzes have no such quiz field, so `_do_quiz` pops it from the quiz params and, after the quiz is saved, edits `course.get_assignment(quiz.assignment_id)` with it; ungraded quiz types have no `assignment_id`, so it is silently a no-op there. This quiz path has only been tested against mocks, not live Canvas. `import` reads `<omit_from_final_grade>` from assignment settings, the discussion's nested `<assignment>` and `assessment_meta.xml`, and writes the key only when true.

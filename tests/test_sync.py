@@ -2277,6 +2277,66 @@ def test_quiz_assignment_group_id_by_name_resolved_to_canvas_id(
     assert call_params["assignment_group_id"] == 42
 
 
+def test_omit_from_final_grade_passed_for_assignment(
+    mock_course, course_root, mocker
+) -> None:
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    (course_root / "assignments" / "week1.md").write_text(
+        "---\ntitle: \"Week 1\"\npublished: true\nomit_from_final_grade: true\n---\n\nBody.\n"
+    )
+
+    make_current(course_root)
+    run_sync(_config(), course_root)
+
+    assert mock_course.create_assignment.call_args[1]["assignment"]["omit_from_final_grade"] is True
+
+
+def test_omit_from_final_grade_passed_for_discussion(
+    mock_course, course_root, mocker
+) -> None:
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    (course_root / "discussions" / "week1-intro.md").write_text(
+        "---\ntitle: \"Intro\"\npoints_possible: 10\npublished: true\n"
+        "omit_from_final_grade: true\n---\n\nHi.\n"
+    )
+
+    make_current(course_root)
+    run_sync(_config(), course_root)
+
+    assignment_params = mock_course.create_discussion_topic.call_args[1]["assignment"]
+    assert assignment_params["omit_from_final_grade"] is True
+
+
+def test_omit_from_final_grade_applied_to_quiz_assignment(
+    mock_course, mocker, tmp_path
+) -> None:
+    """The flag is not a quiz field: it is sent to the quiz's underlying assignment."""
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    root = _quiz_course_root(tmp_path)
+    (root / "quizzes" / "a-quiz" / "a-quiz.md").write_text(
+        "---\ntitle: A Quiz\nquiz_type: assignment\npublished: true\n"
+        "omit_from_final_grade: true\n---\n\n"
+        "1. [What is 2+2?](questions/what-is-2-plus-2.md)\n"
+        "2. [Explain something](questions/explain-something.md)\n"
+    )
+    quiz = _mock_quiz(12345)
+    quiz.assignment_id = 777
+    mock_course.create_quiz.return_value = quiz
+    mock_course.get_quiz.return_value = quiz
+    quiz.create_question.side_effect = [_mock_quiz_question(i) for i in [101, 102]]
+
+    make_current(root)
+    run_sync(_config(), root)
+
+    assert "omit_from_final_grade" not in mock_course.create_quiz.call_args[1]["quiz"]
+    mock_course.get_assignment.assert_called_with(777)
+    mock_course.get_assignment.return_value.edit.assert_called_with(
+        assignment={"omit_from_final_grade": True}
+    )
+
+
 def test_quiz_assignment_group_id_unknown_name_skipped(
     mock_course, mocker, tmp_path, capsys
 ) -> None:

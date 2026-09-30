@@ -1062,7 +1062,7 @@ def parse_assignment_settings(xml_path: Path) -> dict[str, Any]:
         group_cat = _text("group_category")
         if group_cat:
             result["group_category_id"] = group_cat
-    for bool_tag in ("grade_group_students_individually",):
+    for bool_tag in ("grade_group_students_individually", "omit_from_final_grade"):
         val = _bool(bool_tag)
         if val:
             result[bool_tag] = val
@@ -1230,6 +1230,8 @@ def parse_topic_meta(xml_path: Path) -> dict[str, Any]:
         result["due_at"] = _el_text(assignment_el, "due_at", ns) or None
         result["lock_at"] = _el_text(assignment_el, "lock_at", ns) or None
         result["unlock_at"] = _el_text(assignment_el, "unlock_at", ns) or None
+        if _el_text(assignment_el, "omit_from_final_grade", ns).lower() == "true":
+            result["omit_from_final_grade"] = True
         group_ref = _el_text(assignment_el, "assignment_group_identifierref", ns) or None
         if group_ref:
             result["assignment_group_identifierref"] = group_ref
@@ -1444,6 +1446,8 @@ def parse_quiz_meta(meta_path: Path) -> tuple[dict[str, Any], str]:
             result["shuffle_answers"] = shuffle_raw.lower() == "true"
         if show_correct_raw:
             result["show_correct_answers"] = show_correct_raw.lower() == "true"
+        if _el_text(root, "omit_from_final_grade", ns).lower() == "true":
+            result["omit_from_final_grade"] = True
         group_ref = _el_text(root, "assignment_group_identifierref", ns) or None
         if group_ref:
             result["assignment_group_identifierref"] = group_ref

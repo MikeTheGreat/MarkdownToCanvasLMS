@@ -2481,6 +2481,7 @@ def _upload_assignment(
         "allowed_extensions",
         "allowed_attempts",
         "grading_type",
+        "omit_from_final_grade",
         # Assignment group (grading category)
         "assignment_group_id",
         # Group assignment
@@ -2577,6 +2578,7 @@ def _upload_discussion(
         "due_at",
         "lock_at",
         "unlock_at",
+        "omit_from_final_grade",
         # Assignment group (grading category)
         "assignment_group_id",
     )
@@ -3266,6 +3268,8 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
         "due_at",
         "lock_at",
         "unlock_at",
+        # Lives on the quiz's underlying assignment; see capi._do_quiz
+        "omit_from_final_grade",
         # Assignment group (grading category)
         "assignment_group_id",
     ):

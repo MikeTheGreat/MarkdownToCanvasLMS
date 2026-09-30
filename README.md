@@ -2206,6 +2206,8 @@ assignment_group_id: "Labs"              # name of an assignment group defined i
                                          #   course_settings.toml, or a numeric
                                          #   Canvas ID; controls which grade bucket
                                          #   this assignment falls under
+omit_from_final_grade: true              # true = "Do not count this assignment
+                                         #   towards the final grade"
 
 # ── Rubric ────────────────────────────────────────────────────────────────
 rubric: "Essay Rubric"                   # title of a rubric defined in
@@ -2306,6 +2308,7 @@ unlock_at: "2025-01-27T00:00:00-05:00"
 lock_at:   "2025-02-08T23:59:00-05:00"
 assignment_group_id: "Labs"  # name of an assignment group defined in
                              #   course_settings.toml, or a numeric Canvas ID
+omit_from_final_grade: true  # true = do not count towards the final grade
 
 # Group discussion — include this to give each student group its own copy:
 group_category_id: "Project Groups"  # a group set/group category listed in
@@ -2598,6 +2601,8 @@ assignment_group_id: "Labs"  # name of an assignment group defined in
                              #   course_settings.toml, or a numeric Canvas ID;
                              #   only affects grading for graded quiz_type values
                              #   (assignment, graded_survey) — see note below
+omit_from_final_grade: true  # true = do not count towards the final grade
+                             #   (graded quiz_type values only)
 ---
 
 Read each question carefully.   <!-- optional description; everything that isn't a
