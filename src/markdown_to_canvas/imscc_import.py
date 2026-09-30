@@ -2728,6 +2728,7 @@ _RELATIVE_DUE_DATES_HELP = """\
 #     type = "assignment",                              # optional: assignment, discussion or quiz
 #     relative_to = { type = "START_OF_QUARTER" },      # or FIRST_CLASS_OF_QUARTER, NO_DUE_DATE,
 #                                                       # or { type = "ASSIGNMENT", assignment_name = "Other item" }
+#                                                       # or { type = "ABSOLUTE_DATE", date = "2026-09-28" }
 #     offsets = ["+1 CLASS_DAY", "23:59 ABS_TIME"],
 #     unlock_offset = "NONE",                           # optional: an offset, a list, or "NONE"
 #     lock_offset = "+7 CALENDAR_DAY" }                 # optional
@@ -2740,6 +2741,8 @@ _RELATIVE_DUE_DATES_HELP = """\
 #       the due date of another item in the same table (that item must have a
 #       due date). Counting starts from its date; the time of day resets to
 #       default_due_time.
+#   { type = "ABSOLUTE_DATE", date = "2026-09-28" }
+#       a fixed date, at default_due_time; offsets then count from it.
 #
 # offsets is a list, applied in order to the date from relative_to (at default_due_time):
 #   "+N CALENDAR_DAY", "-N CALENDAR_DAY"  move N calendar days

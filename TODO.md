@@ -502,8 +502,6 @@ course. Things to look at once it has been used for a term or two:
 - `generate-due-dates` for repos that drive several Canvas sections on
   different term lengths: `due_dates` is one array shared by all sections, so a
   run yields one set of dates.
-- Warn when a computed due date falls outside the term file's `first_day` to
-  `last_day` (`last_day` is validated but otherwise unused).
 
 ## Announcements: possible follow-ups
 

@@ -311,6 +311,62 @@ def test_no_due_date_anchor():
     assert dates.due_at == "NONE"
 
 
+def _absolute(name, day, offsets=(), **extra) -> dict:
+    return {
+        "name": name,
+        "relative_to": {"type": "ABSOLUTE_DATE", "date": day},
+        "offsets": list(offsets),
+        **extra,
+    }
+
+
+def test_absolute_date_anchor_uses_the_date_at_default_time():
+    assert _calc([_absolute("A", "2026-11-04")])["A"].due_at == "2026-11-04T23:59:00-08:00"
+
+
+def test_absolute_date_anchor_accepts_a_toml_date_and_applies_offsets():
+    dates = _calc(
+        [
+            _absolute("A", date(2026, 9, 28), ["+1 CLASS_DAY", "17:00 ABS_TIME"], lock_offset="+7 CALENDAR_DAY"),
+            _item("B", "ASSIGNMENT", ["+1 CALENDAR_DAY"], "A"),
+        ]
+    )
+    assert dates["A"].due_at == "2026-09-30T17:00:00-07:00"
+    assert dates["A"].lock_at == "2026-10-07T17:00:00-07:00"
+    assert dates["B"].due_at == "2026-10-01T23:59:00-07:00"
+
+
+@pytest.mark.parametrize(
+    "row, message",
+    [
+        ({"name": "A", "relative_to": {"type": "ABSOLUTE_DATE"}}, "needs a date"),
+        ({"name": "A", "relative_to": {"type": "ABSOLUTE_DATE", "date": "soon"}}, "must be a date"),
+        ({"name": "A", "relative_to": {"type": "START_OF_QUARTER", "date": "2026-09-28"}}, "only used with"),
+    ],
+)
+def test_absolute_date_anchor_errors(row, message):
+    with pytest.raises(RelativeDueDatesError, match=message):
+        _calc([row])
+
+
+def test_due_date_outside_the_term_is_warned_about():
+    calc = rd.calculate(
+        _table(
+            [
+                _item("Early", offsets=["-1 CALENDAR_DAY"]),
+                _item("First", offsets=[]),
+                _absolute("Last", "2026-12-11"),
+                _absolute("Late", "2026-12-12"),
+                _item("None", "NO_DUE_DATE"),
+            ]
+        ),
+        _term(last_day=date(2026, 12, 11)),
+    )
+    assert len(calc.warnings) == 2
+    assert "'Early'" in calc.warnings[0] and "2026-09-30" in calc.warnings[0]
+    assert "'Late'" in calc.warnings[1] and "outside the term" in calc.warnings[1]
+
+
 def test_anchored_to_another_item_counts_from_its_date_not_its_time():
     dates = _calc(
         [

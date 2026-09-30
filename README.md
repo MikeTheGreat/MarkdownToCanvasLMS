@@ -3562,6 +3562,7 @@ items = [
     { name = "Week 1 Problem Set", relative_to = { type = "START_OF_QUARTER" }, offsets = ["+2 CLASS_DAY"] },
     { name = "Week 1 Discussion", type = "discussion", relative_to = { type = "ASSIGNMENT", assignment_name = "Week 1 Problem Set" }, offsets = ["-1 CALENDAR_DAY"], unlock_offset = "NONE" },
     { name = "Midterm Quiz", type = "quiz", relative_to = { type = "NO_DUE_DATE" } },
+    { name = "Final Project", relative_to = { type = "ABSOLUTE_DATE", date = "2026-12-04" } },
 ]
 
 [relative_due_dates.tables.summer8]        # e.g. a shorter summer term
@@ -3575,7 +3576,7 @@ Each item has:
 | --- | --- |
 | `name` | The title of an assignment, discussion or quiz, matched the way `due_dates` entries are. |
 | `type` | Optional: `assignment`, `discussion` or `quiz`. Needed only when two items share a title. |
-| `relative_to` | Where counting starts: `{ type = "START_OF_QUARTER" }` (the term's `first_day`), `{ type = "FIRST_CLASS_OF_QUARTER" }` (the first class day on or after it), `{ type = "NO_DUE_DATE" }` (the item gets `due_at = "NONE"`), or `{ type = "ASSIGNMENT", assignment_name = "Other item" }` (the other item's due *date*; the time of day starts again at `default_due_time`). An item can be relative only to another item of the same table that has a due date. |
+| `relative_to` | Where counting starts: `{ type = "START_OF_QUARTER" }` (the term's `first_day`), `{ type = "FIRST_CLASS_OF_QUARTER" }` (the first class day on or after it), `{ type = "NO_DUE_DATE" }` (the item gets `due_at = "NONE"`), or `{ type = "ASSIGNMENT", assignment_name = "Other item" }` (the other item's due *date*; the time of day starts again at `default_due_time`), or `{ type = "ABSOLUTE_DATE", date = "2026-09-28" }` (a fixed date, at `default_due_time`; offsets count from it, and other items may be relative to it). An item can be relative only to another item of the same table that has a due date. |
 | `offsets` | A list of offsets applied in order (below). May be empty. |
 | `unlock_offset`, `lock_offset` | Optional. How far from the item's own due date it unlocks or locks. |
 
@@ -3655,6 +3656,9 @@ It prints warnings, each naming the table or tables responsible:
   table, and in `due_dates` too if it has an entry there).
 * An assignment, discussion or quiz that is in neither the relative table nor
   `due_dates`, or that has a `due_dates` entry but no item in the table.
+* An item whose computed due date falls before the term file's `first_day` or
+  after its `last_day`. Only `due_at` is checked; lock and unlock dates often
+  fall outside the term on purpose. The dates are still written.
 * A notice listing `due_dates` entries the table did not produce (for example
   left from another table), which stay as they are.
 

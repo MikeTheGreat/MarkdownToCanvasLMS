@@ -34,7 +34,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 SECTION_KEY = "relative_due_dates"
 
 #: The relative_to types an item may use.
-ANCHOR_TYPES = ("START_OF_QUARTER", "FIRST_CLASS_OF_QUARTER", "NO_DUE_DATE", "ASSIGNMENT")
+ANCHOR_TYPES = (
+    "START_OF_QUARTER",
+    "FIRST_CLASS_OF_QUARTER",
+    "NO_DUE_DATE",
+    "ASSIGNMENT",
+    "ABSOLUTE_DATE",
+)
 
 CONTENT_TYPES = ("assignment", "discussion", "quiz")
 
@@ -169,6 +175,8 @@ class RelativeItem:
     #: None means "no rule of its own": the table / section default applies.
     unlock_offset: tuple[str, ...] | None
     lock_offset: tuple[str, ...] | None
+    #: The fixed date of an ABSOLUTE_DATE anchor; None for every other anchor.
+    anchor_date: date | None = None
 
 
 @dataclass(frozen=True)
@@ -220,7 +228,7 @@ def _load_item(raw: Any, table: str, index: int) -> RelativeItem:
             f"{where}: relative_to must be a table with a type, e.g. "
             f"{{ type = \"START_OF_QUARTER\" }}"
         )
-    _check_keys(relative_to, ("type", "assignment_name"), f"{where} relative_to")
+    _check_keys(relative_to, ("type", "assignment_name", "date"), f"{where} relative_to")
     anchor = relative_to["type"]
     if anchor not in ANCHOR_TYPES:
         raise RelativeDueDatesError(
@@ -234,6 +242,19 @@ def _load_item(raw: Any, table: str, index: int) -> RelativeItem:
     if anchor != "ASSIGNMENT" and anchor_name is not None:
         raise RelativeDueDatesError(
             f"{where}: assignment_name is only used with relative_to type ASSIGNMENT"
+        )
+
+    anchor_date = None
+    if anchor == "ABSOLUTE_DATE":
+        if "date" not in relative_to:
+            raise RelativeDueDatesError(
+                f"{where}: relative_to type ABSOLUTE_DATE needs a date, e.g. "
+                f"{{ type = \"ABSOLUTE_DATE\", date = \"2026-09-28\" }}"
+            )
+        anchor_date = _parse_date(relative_to["date"], f"{where}: relative_to date")
+    elif "date" in relative_to:
+        raise RelativeDueDatesError(
+            f"{where}: date is only used with relative_to type ABSOLUTE_DATE"
         )
 
     offsets = _offset_list(raw.get("offsets"), f"{where} offsets")
@@ -253,6 +274,7 @@ def _load_item(raw: Any, table: str, index: int) -> RelativeItem:
         offsets=tuple(offsets),
         unlock_offset=lock_rule("unlock_offset"),
         lock_offset=lock_rule("lock_offset"),
+        anchor_date=anchor_date,
     )
 
 
@@ -545,6 +567,9 @@ class _Calculator:
             day = self.term.first_day
             if item.anchor == "FIRST_CLASS_OF_QUARTER":
                 offsets = ("-1 CALENDAR_DAY", "+1 CLASS_DAY", *offsets)
+        elif item.anchor == "ABSOLUTE_DATE":
+            assert item.anchor_date is not None  # guaranteed by _load_item
+            day = item.anchor_date
         else:
             base = self.by_name.get(item.anchor_name or "")
             if base is None:
@@ -595,6 +620,11 @@ class _Calculator:
         result = Calculation()
         for item in self.table.items:
             due = self.due(item)
+            if due is not None and not self.term.first_day <= due.date() <= self.term.last_day:
+                self.warnings.append(
+                    f"item {item.name!r} is due {due.date().isoformat()}, outside the term "
+                    f"({self.term.first_day.isoformat()} to {self.term.last_day.isoformat()})"
+                )
             result.dates.append(
                 ComputedDates(
                     name=item.name,
