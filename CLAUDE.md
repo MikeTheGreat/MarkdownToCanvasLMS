@@ -52,11 +52,25 @@ the old version to `repo_format.MIGRATIONS`, with tests. Additive changes that
 older files already satisfy (for example a new optional key) do not need a
 bump. Nothing enforces this mechanically.
 
-## When asked to update documentation, you should normally consider four main files
-- README.md is for notes that humans using the tool will read
-- ARCHTECTURE.md is for notes, mostly for yourself, about the internals of the tool work
-- TODO.md is a list of possible future features.  After changing the code "updating the docs" should include checking to see if anything in TODO.md should be removed or updated.
-- BUGS.md is a list of known bugs that have not been fixed yet. When a bug is fixed, remove its entry. Before working on code, check it for bugs in the area you are changing.
+## Documentation files and what each one is for
+
+- README.md: user documentation for people running the tool.
+- ARCHITECTURE.md: the internal technical reference: how the code works,
+  the sync algorithm, file and manifest formats, Canvas API behavior, and
+  design decisions. It must describe the tool as it currently is.
+- openspec/specs/ and openspec/changes/archive/: a record of what each
+  change was required to do when it was made. They are not the reference
+  for current behavior and are not kept up to date as later changes land.
+  If a spec disagrees with ARCHITECTURE.md or the code, trust the code,
+  fix ARCHITECTURE.md if needed, and leave the spec alone.
+- TODO.md: possible future work only. After a code change, check whether
+  any TODO.md item should be removed or updated.
+- BUGS.md: known bugs not yet fixed. Remove an entry when its bug is fixed.
+  Before working on code, check it for bugs in the area you are changing.
+
+Anything learned while implementing an OpenSpec change that someone
+maintaining the code would need (internals, Canvas quirks, format details)
+goes into ARCHITECTURE.md, even if it is also in the change's design.md.
 
 ## User often uses a shell alias of 'gg' which expands to markdown-to-canvas
 

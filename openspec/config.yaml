@@ -11,7 +11,9 @@ context: |
 
   Read before writing any artifact:
   - README.md: user-facing CLI, options, file formats.
-  - ARCHITECTURE.md: internals, sync algorithm, manifest format, per-subcommand notes.
+  - ARCHITECTURE.md: the authoritative internal reference (internals, sync
+    algorithm, manifest format, per-subcommand notes). openspec/specs are
+    historical records of each change, not a description of current behavior.
   - TESTING.md: test layers and what to assert on.
   - TODO.md: future work only; may already describe the requested feature.
   - todo/RUBRIC_ISSUES.md: required reading for anything rubric-related.
