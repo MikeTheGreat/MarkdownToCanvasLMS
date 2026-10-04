@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from markdown_to_canvas.convert import COURSE_REFERENCE_COMMENT
 from markdown_to_canvas.imscc_import import (
     open_imscc,
     parse_imsmanifest,
@@ -1049,11 +1050,23 @@ def test_question_bank_mcq_has_correct_field(imported_dir: Path) -> None:
 BASE_URL = "https://test.instructure.com/courses/12345"
 
 
+def _imported_course_id(imported_dir: Path) -> int:
+    """course_id from the canvas.toml import wrote, as update would read it."""
+    from markdown_to_canvas.config import load
+
+    return load(
+        imported_dir / "course_settings" / "canvas.toml", require_token=False
+    ).course_id
+
+
 def test_write_canvas_course_reference_snippet_creates_file(tmp_path: Path) -> None:
     _write_canvas_course_reference_snippet(BASE_URL, tmp_path)
     snippet = tmp_path / "snippets" / "inline" / "CANVAS_COURSE_REFERENCE.md"
     assert snippet.exists()
-    assert snippet.read_text() == BASE_URL
+    # The course ID is left off; the comment explains that it is appended.
+    assert snippet.read_text() == (
+        "https://test.instructure.com/courses/\n" + COURSE_REFERENCE_COMMENT
+    )
 
 
 def test_replace_canvas_course_url_in_md(tmp_path: Path) -> None:
@@ -1133,7 +1146,9 @@ def test_replace_canvas_course_url_skips_file_without_match(tmp_path: Path) -> N
 def test_run_import_creates_canvas_course_reference_snippet(imported_dir: Path) -> None:
     snippet = imported_dir / "snippets" / "inline" / "CANVAS_COURSE_REFERENCE.md"
     assert snippet.exists()
-    assert snippet.read_text() == "https://test.instructure.com/courses/12345"
+    assert snippet.read_text() == (
+        "https://test.instructure.com/courses/\n" + COURSE_REFERENCE_COMMENT
+    )
 
 
 def test_run_import_replaces_course_url_in_page(imported_dir: Path) -> None:
@@ -1156,7 +1171,9 @@ def test_run_import_snippet_roundtrip(imported_dir: Path) -> None:
 
     page = imported_dir / "pages" / "my-page.md"
     snippets_dir = imported_dir / "snippets"
-    result = preprocess_snippets(page.read_text(), page, snippets_dir)
+    result = preprocess_snippets(
+        page.read_text(), page, snippets_dir, course_id=_imported_course_id(imported_dir)
+    )
 
     assert "https://test.instructure.com/courses/12345" in result
     assert "$../snippets" not in result
@@ -1227,7 +1244,9 @@ def test_run_import_canvas_course_id_snippet_roundtrip(imported_dir: Path) -> No
 
     page = imported_dir / "pages" / "my-page.md"
     snippets_dir = imported_dir / "snippets"
-    result = preprocess_snippets(page.read_text(), page, snippets_dir)
+    result = preprocess_snippets(
+        page.read_text(), page, snippets_dir, course_id=_imported_course_id(imported_dir)
+    )
 
     # Both the /modules and the /grades (from $CANVAS_COURSE_ID$) links expand
     assert "https://test.instructure.com/courses/12345/modules" in result
@@ -1285,7 +1304,9 @@ def test_run_import_canvas_course_reference_snippet_roundtrip(imported_dir: Path
 
     page = imported_dir / "pages" / "my-page.md"
     snippets_dir = imported_dir / "snippets"
-    result = preprocess_snippets(page.read_text(), page, snippets_dir)
+    result = preprocess_snippets(
+        page.read_text(), page, snippets_dir, course_id=_imported_course_id(imported_dir)
+    )
 
     assert "https://test.instructure.com/courses/12345/assignments/syllabus" in result
 
@@ -1350,7 +1371,11 @@ def test_course_settings_has_an_empty_default_relative_table(imported_dir: Path)
 
     text = (imported_dir / "course_settings" / "course_settings.toml").read_text()
     data = tomllib.loads(text)
-    assert data["relative_due_dates"] == {"tables": {"default": {"items": []}}}
+    assert data["relative_due_dates"] == {
+        "default_unlock_time": "00:00",
+        "default_lock_time": "23:59",
+        "tables": {"default": {"items": []}},
+    }
     # the section comes last, so it captured none of the top-level keys
     if "[late_policy]" in text:
         assert text.rindex("[relative_due_dates]") > text.rindex("[late_policy]")
@@ -1384,6 +1409,28 @@ def test_relative_due_dates_settings_are_commented_and_work_when_uncommented(
     assert settings.days_of_week == ("Mon", "Wed")
     assert settings.lock_relative_default == ("+7 CALENDAR_DAY",)
     assert settings.unlock_relative_default == ("NONE",)
+
+
+def test_reschedule_cutoff_is_written_commented_out(imported_dir: Path) -> None:
+    import tomllib
+
+    text = (imported_dir / "course_settings" / "course_settings.toml").read_text()
+    section = text[text.index("[relative_due_dates]"):]
+    assert '\n# dont_reschedule_dates_before = "YYYY-MM-DD"\n' in section
+    assert "dont_reschedule_dates_before" not in tomllib.loads(text)["relative_due_dates"]
+
+
+def test_default_unlock_and_lock_times_are_written(imported_dir: Path) -> None:
+    import tomllib
+
+    from markdown_to_canvas import relative_dates as rd
+
+    data = tomllib.loads((imported_dir / "course_settings" / "course_settings.toml").read_text())
+    section = data["relative_due_dates"]
+    assert section["default_unlock_time"] == "00:00"
+    assert section["default_lock_time"] == "23:59"
+    settings = rd.load_tables(data)["default"].settings
+    assert (settings.default_unlock_time.hour, settings.default_lock_time.hour) == (0, 23)
 
 
 def test_example_term_file_is_all_comments_and_works_when_uncommented(

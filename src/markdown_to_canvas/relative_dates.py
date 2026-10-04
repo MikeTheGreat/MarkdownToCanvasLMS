@@ -54,9 +54,13 @@ _SETTING_KEYS = (
     "class_on_noninstructional_days",
     "unlock_relative_default",
     "lock_relative_default",
+    "default_unlock_time",
+    "default_lock_time",
 )
 _TABLE_KEYS = _SETTING_KEYS + ("items", "ignore")
-_SECTION_KEYS = _SETTING_KEYS + ("tables",)
+#: Section-wide only: a table may not set it (it describes the term, not a schedule).
+CUTOFF_KEY = "dont_reschedule_dates_before"
+_SECTION_KEYS = _SETTING_KEYS + ("tables", CUTOFF_KEY)
 _ITEM_KEYS = ("name", "type", "relative_to", "offsets", "unlock_offset", "lock_offset")
 _TERM_KEYS = (
     "first_day",
@@ -139,6 +143,11 @@ def _parse_time(value: Any, where: str) -> time:
     raise RelativeDueDatesError(f"{where} must be a time like 23:59, not {value!r}")
 
 
+def _has_abs_time(offsets: tuple[str, ...]) -> bool:
+    """True when one of ``offsets`` (already validated) sets the time of day."""
+    return any(o != NONE and parse_offset(o, "").kind == "ABS_TIME" for o in offsets)
+
+
 def _offset_list(value: Any, where: str) -> list[str]:
     """A string or list of strings as a list; validates each offset (or ``NONE``)."""
     if value is None:
@@ -178,6 +187,11 @@ class RelativeItem:
     #: The fixed date of an ABSOLUTE_DATE anchor; None for every other anchor.
     anchor_date: date | None = None
 
+    @property
+    def due_time_is_explicit(self) -> bool:
+        """True when the item's own offsets set its due time (an ABS_TIME offset)."""
+        return _has_abs_time(self.offsets)
+
 
 @dataclass(frozen=True)
 class TableSettings:
@@ -188,6 +202,9 @@ class TableSettings:
     #: None (or an empty tuple) means no default rule, so ``KEEP``.
     unlock_relative_default: tuple[str, ...] | None
     lock_relative_default: tuple[str, ...] | None
+    #: Time of day for unlock / lock dates when nothing sets one explicitly.
+    default_unlock_time: time | None = None
+    default_lock_time: time | None = None
 
 
 @dataclass(frozen=True)
@@ -301,7 +318,12 @@ def _load_settings(raw: dict[str, Any], base: TableSettings | None, where: str) 
     lock = base.lock_relative_default if base else None
     if "lock_relative_default" in raw:
         lock = tuple(_offset_list(raw["lock_relative_default"], f"{where} lock_relative_default"))
-    return TableSettings(days, on_holidays, unlock, lock)
+    times = {}
+    for key in ("default_unlock_time", "default_lock_time"):
+        times[key] = getattr(base, key) if base else None
+        if key in raw:
+            times[key] = _parse_time(raw[key], f"{where} {key}")
+    return TableSettings(days, on_holidays, unlock, lock, **times)
 
 
 def load_tables(settings: dict[str, Any]) -> dict[str, RelativeTable]:
@@ -452,6 +474,94 @@ def load_term(path: Path) -> Term:
 
 
 # ---------------------------------------------------------------------------
+# Rescheduling cutoff
+# ---------------------------------------------------------------------------
+
+#: The commented-out cutoff that `import` writes and migration 8 -> 9 adds.
+CUTOFF_HELP = f"""\
+# Dates already in due_dates on or before this cutoff are not rescheduled by
+# `generate-due-dates`. "YYYY-MM-DD" means the end of that day; "YYYY-MM-DD HH:MM"
+# also works. Read in the term file's time zone; it must fall inside the term.
+# Empty ("") or absent: no cutoff. Only here, not in a table.
+# {CUTOFF_KEY} = "YYYY-MM-DD"
+"""
+
+#: The default times `import` writes and migration 8 -> 9 adds, as real keys.
+DEFAULT_TIMES = {"default_unlock_time": "00:00", "default_lock_time": "23:59"}
+
+#: The comment written above them.
+DEFAULT_TIMES_HELP = """\
+# Time of day for computed unlock and lock dates. Not used for an item whose
+# offsets set its due time (e.g. "17:00 ABS_TIME"): its unlock and lock dates
+# keep that time. An ABS_TIME in the unlock or lock rule itself also wins.
+"""
+
+_CUTOFF_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?: (\d{2}):(\d{2}))?$")
+
+#: The cutoff for a date given without a time, and the end of the term's last day.
+_END_OF_DAY = time(23, 59, 59)
+
+
+def load_cutoff(settings: dict[str, Any], term: Term, term_path: Path) -> datetime | None:
+    """The ``dont_reschedule_dates_before`` cutoff as an aware datetime, or None.
+
+    ``"YYYY-MM-DD"`` means 23:59:59 that day; ``"YYYY-MM-DD HH:MM"`` that time.
+    Both are read in the term's time zone. An absent key or ``""`` means no
+    cutoff. Raises RelativeDueDatesError for any other value, and for a cutoff
+    outside the term (00:00 on first_day through 23:59:59 on last_day): a cutoff
+    left over from an earlier term would otherwise freeze the new term's dates.
+    """
+    section = settings.get(SECTION_KEY)
+    if not isinstance(section, dict) or CUTOFF_KEY not in section:
+        return None
+    value = section[CUTOFF_KEY]
+    where = f"[{SECTION_KEY}] {CUTOFF_KEY}"
+    forms = '"YYYY-MM-DD" (the end of that day) or "YYYY-MM-DD HH:MM"'
+    if isinstance(value, str) and value == "":
+        return None
+    match = _CUTOFF_RE.match(value) if isinstance(value, str) else None
+    if match is None:
+        raise RelativeDueDatesError(
+            f"{where} = {value!r} is not a cutoff the tool can read. Use {forms} as a "
+            f'quoted string, in the term file\'s time zone, or "" for no cutoff'
+        )
+    try:
+        day = date.fromisoformat(match.group(1))
+        at = _END_OF_DAY if match.group(2) is None else time(int(match.group(2)), int(match.group(3)))
+    except ValueError:
+        raise RelativeDueDatesError(
+            f"{where} = {value!r} is not a real date and time. Use {forms}"
+        ) from None
+    cutoff = datetime.combine(day, at, tzinfo=term.time_zone)
+    start = datetime.combine(term.first_day, time(0, 0), tzinfo=term.time_zone)
+    end = datetime.combine(term.last_day, _END_OF_DAY, tzinfo=term.time_zone)
+    if not start <= cutoff <= end:
+        raise RelativeDueDatesError(
+            f"{where} = {value!r} is outside the term in {term_path} (first_day "
+            f"{term.first_day.isoformat()}, last_day {term.last_day.isoformat()}). It is "
+            f"probably left over from an earlier term: set it to a date in this term, or "
+            f'to "" for no cutoff. Nothing was written.'
+        )
+    return cutoff
+
+
+def cutoff_as_written(cutoff: datetime) -> str:
+    """The cutoff in the form the setting takes: ``2026-10-01`` or ``2026-10-01 08:30``."""
+    if cutoff.time() == _END_OF_DAY:
+        return cutoff.date().isoformat()
+    return cutoff.strftime("%Y-%m-%d %H:%M")
+
+
+def format_cutoff(cutoff: datetime) -> str:
+    """``Thu Oct 1, 2026 11:59 PM PDT``: the cutoff as the output shows it."""
+    hour = cutoff.strftime("%I").lstrip("0")
+    return (
+        f"{cutoff.strftime('%a %b')} {cutoff.day}, {cutoff.year} "
+        f"{hour}:{cutoff.strftime('%M %p %Z')}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Calculation
 # ---------------------------------------------------------------------------
 
@@ -596,10 +706,13 @@ class _Calculator:
         return own if own is not None else (default or ())
 
     def _lock_field(self, item: RelativeItem, which: str, due: datetime | None) -> str:
+        settings = self.table.settings
         if which == "unlock_at":
-            rule = self._rule(item.unlock_offset, self.table.settings.unlock_relative_default)
+            rule = self._rule(item.unlock_offset, settings.unlock_relative_default)
+            default_time = settings.default_unlock_time
         else:
-            rule = self._rule(item.lock_offset, self.table.settings.lock_relative_default)
+            rule = self._rule(item.lock_offset, settings.lock_relative_default)
+            default_time = settings.default_lock_time
         if not rule:
             return KEEP
         if rule == (NONE,):
@@ -611,20 +724,51 @@ class _Calculator:
             )
             return KEEP
         where = f"[{SECTION_KEY}.tables.{self.table.name}] item {item.name!r} {which}"
-        return self._format(self._apply(due, rule, where))
+        result = self._apply(due, rule, where)
+        # The default time is only for dates whose time nothing chose: an
+        # explicit due time carries over, and the rule's own ABS_TIME wins.
+        if default_time is not None and not item.due_time_is_explicit and not _has_abs_time(rule):
+            result = datetime.combine(result.date(), default_time)
+        return self._format(result)
 
     def _format(self, local: datetime) -> str:
         return local.replace(tzinfo=self.term.time_zone).isoformat(timespec="seconds")
 
+    def _absolute_root(self, item: RelativeItem) -> RelativeItem | None:
+        """The ABSOLUTE_DATE item that ``item``'s due date counts from, if any."""
+        seen: set[str] = set()
+        while item.anchor == "ASSIGNMENT" and item.name not in seen:
+            seen.add(item.name)
+            base = self.by_name.get(item.anchor_name or "")
+            if base is None:
+                return None
+            item = base
+        return item if item.anchor == "ABSOLUTE_DATE" else None
+
+    def _outside_term(self, item: RelativeItem, due: datetime) -> str:
+        """The error line for an item whose due date falls outside the term."""
+        line = f"item {item.name!r} is due {due.date().isoformat()}."
+        root = self._absolute_root(item)
+        if root is not None:
+            assert root.anchor_date is not None
+            fixed = f"ABSOLUTE_DATE {root.anchor_date.isoformat()}"
+            if root is item:
+                line += f" Its relative_to is {fixed}."
+            else:
+                line += f" It counts from {root.name!r}, whose relative_to is {fixed}."
+            line += (
+                " That date is probably left from an earlier term; if you left a note "
+                "beside the item about where it belongs, put that back."
+            )
+        return line
+
     def compute(self) -> Calculation:
         result = Calculation()
+        outside: list[str] = []
         for item in self.table.items:
             due = self.due(item)
             if due is not None and not self.term.first_day <= due.date() <= self.term.last_day:
-                self.warnings.append(
-                    f"item {item.name!r} is due {due.date().isoformat()}, outside the term "
-                    f"({self.term.first_day.isoformat()} to {self.term.last_day.isoformat()})"
-                )
+                outside.append(self._outside_term(item, due))
             result.dates.append(
                 ComputedDates(
                     name=item.name,
@@ -633,6 +777,16 @@ class _Calculator:
                     unlock_at=self._lock_field(item, "unlock_at", due),
                     lock_at=self._lock_field(item, "lock_at", due),
                 )
+            )
+        if outside:
+            count = len(outside)
+            raise RelativeDueDatesError(
+                f"{count} item{' is' if count == 1 else 's are'} due outside the term "
+                f"({self.term.first_day.isoformat()} to {self.term.last_day.isoformat()}) "
+                f"in [{SECTION_KEY}.tables.{self.table.name}]. Nothing was written.\n"
+                + "\n".join(f"  {line}" for line in outside)
+                + "\nFix the items (or the term file's first_day / last_day) and run "
+                "generate-due-dates again."
             )
         result.warnings = self.warnings
         return result
@@ -657,7 +811,9 @@ def _nearest_weekday(day: date, weekday: int) -> date:
 def calculate(table: RelativeTable, term: Term) -> Calculation:
     """Resolve every item of ``table`` to its three date fields.
 
-    Raises RelativeDueDatesError for an anchor naming a missing item, a cycle, or
-    a CLASS_DAY offset with no days_of_week.
+    Raises RelativeDueDatesError for an anchor naming a missing item, a cycle, a
+    CLASS_DAY offset with no days_of_week, or any due date outside the term
+    (first_day .. last_day; unlock and lock dates are not checked). The
+    out-of-term error lists every such item.
     """
     return _Calculator(table, term).compute()

@@ -444,8 +444,8 @@ def _flags_config(repo: Path, config: Path | None) -> Config | None:
     default=None,
     type=_CONFIG_PARAM,
     help=(
-        "Path to canvas.toml, read only for its [course_flags] table "
-        "(default: <COURSE_DIR>/course_settings/canvas.toml, if present)."
+        "Path to canvas.toml, read only for its [course_flags] table and "
+        "course_id (default: <COURSE_DIR>/course_settings/canvas.toml, if present)."
     ),
 )
 def publish(
@@ -456,7 +456,8 @@ def publish(
     COURSE_DIR is the course content directory: a path or a registered course
     key. If omitted, the enclosing course is found by walking up from the
     current directory. --config selects which section's course flags the site
-    is built with; Canvas is never contacted.
+    is built with, and whose course_id completes the CANVAS_COURSE_REFERENCE
+    snippet; Canvas is never contacted.
     """
     course_dir, config = _resolve_course(course_dir, config)
     cfg = _flags_config(course_dir, config)
@@ -1057,9 +1058,16 @@ def _stdin_is_terminal() -> bool:
 @click.option("--yes", "-y", "assume_yes", is_flag=True, default=False, help=(
     "Write the changes without asking. Needed when there is no terminal to ask."
 ))
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    default=False,
+    help="List each item whose dates were kept by dont_reschedule_dates_before.",
+)
 def generate_due_dates_cmd(
     course_dir: str | None, term_file: str | None, table_name: str | None, noop: bool,
-    assume_yes: bool,
+    assume_yes: bool, verbose: bool,
 ) -> None:
     """Fill the due_dates table from the relative due dates in course_settings.toml.
 
@@ -1073,6 +1081,17 @@ def generate_due_dates_cmd(
     [relative_due_dates] is turned into absolute unlock_at / due_at / lock_at
     values and written into the matching due_dates entry, or a new one. Other
     keys of an entry, such as only_if, are kept.
+
+    When [relative_due_dates] sets dont_reschedule_dates_before ("YYYY-MM-DD",
+    meaning the end of that day, or "YYYY-MM-DD HH:MM", in the term file's time
+    zone), each date already in due_dates on or before it is left as it is. An
+    entry that this would leave out of order (for example unlocking after it is
+    due) is not changed at all, is reported as an error, and makes the command
+    exit with status 1. --verbose lists the items whose dates were kept.
+
+    A computed due date before the term's first day or after its last day is an
+    error: the command lists every such item and writes nothing. Unlock and lock
+    dates are not checked.
 
     The changes are shown first (real changes in yellow) and nothing is written
     until you confirm; --noop shows them and stops. The command never contacts
@@ -1098,13 +1117,29 @@ def generate_due_dates_cmd(
     except (RepoFormatError, RelativeDueDatesError) as e:
         die(str(e))
 
-    for line, is_change in render_plan(plan):
+    for line, is_change in render_plan(plan, verbose=verbose):
         click.secho(line, fg="yellow" if is_change else None)
+    for error in plan.errors:
+        click.secho(f"  {error}", fg="red")
     for warning in plan.warnings:
         click.echo(f"  {warning}")
 
+    _write_generated_dates(plan, noop, assume_yes)
+    if plan.errors:
+        count = len(plan.errors)
+        die(
+            f"{count} due_dates entr{'y was' if count == 1 else 'ies were'} left "
+            f"unchanged because of the error{'' if count == 1 else 's'} above."
+        )
+
+
+def _write_generated_dates(plan, noop: bool, assume_yes: bool) -> None:
+    """Confirm and write a generate-due-dates plan (the part after printing it)."""
     if not plan.has_changes:
-        click.echo("Nothing to change: every date already matches.")
+        click.echo(
+            "Nothing to change: every date already matches"
+            + (" or was kept." if plan.not_rescheduled else ".")
+        )
         return
     if noop:
         click.echo("--noop: no file was written.")

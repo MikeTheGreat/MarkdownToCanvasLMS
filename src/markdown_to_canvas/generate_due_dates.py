@@ -7,6 +7,11 @@ per-entry diff and the warnings. apply_plan() writes the plan's changes into the
 comments and layout. The command itself (cli.py) prints the plan, confirms, and
 calls apply_plan().
 
+When ``[relative_due_dates]`` sets ``dont_reschedule_dates_before``, a field whose
+current value is a date at or before that cutoff is kept as it is (per field, not
+per entry), and an entry left inconsistent by keeping some fields and changing
+others is skipped with an error (see plan_generation).
+
 The command never applies ``only_if`` or contacts Canvas; `update` sends the dates
 to Canvas as it does for hand-written entries.
 """
@@ -38,13 +43,20 @@ class EntryChange:
 
     name: str
     type: str | None
-    kind: str  # "added", "changed" or "unchanged"
+    kind: str  # "added", "changed", "unchanged" or "skipped" (inconsistent; nothing written)
     #: field -> (old value or None if absent, new value); only fields that change
     fields: dict[str, tuple[str | None, str]] = field(default_factory=dict)
     #: index of the existing entry in ``due_dates`` (None for an added one)
     index: int | None = None
     #: every computed value, for adding a new entry
     values: dict[str, str] = field(default_factory=dict)
+    #: field -> (current value, computed value) for fields that would have changed
+    #: but were kept because the current value is at or before the cutoff
+    kept: dict[str, tuple[str, str]] = field(default_factory=dict)
+
+    @property
+    def label(self) -> str:
+        return self.name + (f" ({self.type})" if self.type else "")
 
 
 @dataclass
@@ -56,10 +68,19 @@ class GenerationPlan:
     settings_path: Path
     #: the text of course_settings.toml the plan was made from
     source_text: str
+    #: dont_reschedule_dates_before, or None when no cutoff is set
+    cutoff: datetime | None = None
+    #: one message per skipped (inconsistent) entry; the command exits non-zero
+    errors: list[str] = field(default_factory=list)
 
     @property
     def has_changes(self) -> bool:
-        return any(c.kind != "unchanged" for c in self.changes)
+        return any(c.kind in ("added", "changed") for c in self.changes)
+
+    @property
+    def not_rescheduled(self) -> list[EntryChange]:
+        """Entries with at least one field kept by the cutoff (skipped ones included)."""
+        return [c for c in self.changes if c.kept]
 
 
 # ---------------------------------------------------------------------------
@@ -101,6 +122,42 @@ def _find_entry(due_dates: list[Any], name: str, item_type: str | None) -> int |
     for i, entry in enumerate(due_dates):
         if isinstance(entry, dict) and _matches_entry(entry, name, item_type):
             return i
+    return None
+
+
+def _as_datetime(value: Any, zone: ZoneInfo) -> datetime | None:
+    """``value`` as an aware datetime (naive ones read in ``zone``), or None if not a date."""
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.strip())
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=zone)
+
+
+#: (earlier, later) pairs Canvas requires to be in order.
+_DATE_ORDER = (("unlock_at", "due_at"), ("due_at", "lock_at"), ("unlock_at", "lock_at"))
+
+
+def _inconsistency(change: EntryChange, existing: dict[str, Any], zone: ZoneInfo) -> str | None:
+    """What is out of order in the entry's resulting dates, or None when they are in order.
+
+    The result is the kept fields' current values plus the changed fields' new
+    values (other fields already equal their computed value).
+    """
+    def source(key: str) -> tuple[Any, str]:
+        if key in change.kept:
+            return change.kept[key][0], "kept"
+        if key in change.fields:
+            return change.fields[key][1], "computed"
+        return existing.get(key), "current"
+
+    for early, late in _DATE_ORDER:
+        (a, a_src), (b, b_src) = source(early), source(late)
+        a_dt, b_dt = _as_datetime(a, zone), _as_datetime(b, zone)
+        if a_dt is not None and b_dt is not None and a_dt > b_dt:
+            return f"{early} ({a_src}, {a}) after {late} ({b_src}, {b})"
     return None
 
 
@@ -227,11 +284,14 @@ def plan_generation(repo: Path, term_path: Path, table_name: str | None = None) 
     settings = tomllib.loads(source_text)
 
     term = rd.load_term(term_path)
+    # Before calculating: a cutoff from an earlier term stops the run here.
+    cutoff = rd.load_cutoff(settings, term, term_path)
     table = rd.select_table(rd.load_tables(settings), table_name)
     calculation = rd.calculate(table, term)
 
     due_dates = settings.get("due_dates", [])
     changes: list[EntryChange] = []
+    errors: list[str] = []
     for computed in calculation.dates:
         values = {"unlock_at": computed.unlock_at, "due_at": computed.due_at, "lock_at": computed.lock_at}
         index = _find_entry(due_dates, computed.name, computed.type)
@@ -245,12 +305,27 @@ def plan_generation(repo: Path, term_path: Path, table_name: str | None = None) 
         differing = {
             k: (existing.get(k), v) for k, v in values.items() if not _same_value(existing.get(k), v)
         }
-        changes.append(
-            EntryChange(
-                computed.name, computed.type, "changed" if differing else "unchanged",
-                differing, index, values,
-            )
+        kept: dict[str, tuple[str, str]] = {}
+        if cutoff is not None:
+            for key in list(differing):
+                current = _as_datetime(existing.get(key), term.time_zone)
+                if current is not None and current <= cutoff:
+                    kept[key] = differing.pop(key)
+        change = EntryChange(
+            computed.name, computed.type, "changed" if differing else "unchanged",
+            differing, index, values, kept,
         )
+        if kept and differing:
+            problem = _inconsistency(change, existing, term.time_zone)
+            if problem is not None:
+                errors.append(
+                    f"ERROR: {change.label}: keeping the dates on or before "
+                    f"{rd.cutoff_as_written(cutoff)} puts {problem}. None of its dates were "
+                    f"changed; fix the entry by hand."
+                )
+                change.kind = "skipped"
+                change.fields = {}
+        changes.append(change)
 
     warnings, notices = title_warnings(table, due_dates, _content_titles(repo))
     return GenerationPlan(
@@ -260,6 +335,8 @@ def plan_generation(repo: Path, term_path: Path, table_name: str | None = None) 
         notices=notices,
         settings_path=settings_path,
         source_text=source_text,
+        cutoff=cutoff,
+        errors=errors,
     )
 
 
@@ -268,15 +345,32 @@ def plan_generation(repo: Path, term_path: Path, table_name: str | None = None) 
 # ---------------------------------------------------------------------------
 
 
-def render_plan(plan: GenerationPlan) -> list[tuple[str, bool]]:
-    """Lines describing the plan, each with True when it describes a real change."""
-    lines: list[tuple[str, bool]] = [(f"Relative table: {plan.table_name}", False)]
+def render_plan(plan: GenerationPlan, verbose: bool = False) -> list[tuple[str, bool]]:
+    """Lines describing the plan, each with True when it describes a real change.
+
+    The first line states the cutoff. Skipped entries are not listed here; their
+    errors are in ``plan.errors``. With ``verbose``, the resources kept by the
+    cutoff are listed under the line that counts them.
+    """
+    if plan.cutoff is None:
+        cutoff_line = f"Not rescheduling dates: no cutoff ({rd.CUTOFF_KEY} is not set)"
+    else:
+        cutoff_line = (
+            f"Not rescheduling dates on or before: {rd.format_cutoff(plan.cutoff)} "
+            f"({rd.CUTOFF_KEY})"
+        )
+    lines: list[tuple[str, bool]] = [
+        (cutoff_line, False),
+        (f"Relative table: {plan.table_name}", False),
+    ]
     unchanged = 0
     for change in plan.changes:
         if change.kind == "unchanged":
             unchanged += 1
             continue
-        label = change.name + (f" ({change.type})" if change.type else "")
+        if change.kind == "skipped":
+            continue
+        label = change.label
         if change.kind == "added":
             lines.append((f"{label} (new entry):", True))
             for key in sorted(DATE_KEYS):
@@ -292,6 +386,18 @@ def render_plan(plan: GenerationPlan) -> list[tuple[str, bool]]:
                 lines.append((f"\t{'-> '.rjust(len(prefix))}{new}", True))
             else:
                 lines.append((f"\t{prefix}{'(absent)' if old is None else old} -> {new}", True))
+    kept = plan.not_rescheduled
+    if kept and plan.cutoff is not None:
+        noun = "resource was" if len(kept) == 1 else "resources were"
+        lines.append((
+            f"{len(kept)} {noun} not rescheduled because of {rd.CUTOFF_KEY} date of "
+            f"{rd.format_cutoff(plan.cutoff)}",
+            False,
+        ))
+        if verbose:
+            for change in kept:
+                fields = ", ".join(k for k in DATE_KEYS if k in change.kept)
+                lines.append((f"\t{change.label}: {fields}", False))
     if unchanged:
         lines.append((f"{unchanged} unchanged entr{'y' if unchanged == 1 else 'ies'}", False))
     lines.extend((n, False) for n in plan.notices)

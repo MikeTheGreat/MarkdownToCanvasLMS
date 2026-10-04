@@ -92,6 +92,7 @@ A tool for managing Canvas LMS course content through Markdown files stored in a
 - **[TODO.md](TODO.md)** — planned and possible future features
 - **[BUGS.md](BUGS.md)** — known bugs not yet fixed
 - **[todo/RUBRIC_ISSUES.md](todo/RUBRIC_ISSUES.md)** — measured Canvas rubric behaviour (soft-deletion, copy-on-edit forking, association rules) and the open rubric issues. Read this before changing anything rubric-related; it exists so the live-Canvas experiments don't have to be repeated
+- **[CLAUDE_NOTES/CLAUDE-IN-CHROME.md](CLAUDE_NOTES/CLAUDE-IN-CHROME.md)** — checking the tool's output in a real Canvas course with Claude in Chrome: the sandbox test course (the only course Claude may change), starting a `--chrome` session, and the extension's site-access list. Read it before using the browser tools
 
 ## Key Design Decisions
 

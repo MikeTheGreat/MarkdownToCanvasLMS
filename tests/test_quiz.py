@@ -517,7 +517,7 @@ def test_parse_quiz_file_expands_inline_snippets(tmp_path):
     snippets_inline = tmp_path / "snippets" / "inline"
     snippets_inline.mkdir(parents=True)
     (snippets_inline / "CANVAS_COURSE_REFERENCE.md").write_text(
-        "https://school.instructure.com/courses/999\n"
+        "https://school.instructure.com/courses/\n<!-- everything after line 1 is ignored -->\n"
     )
     quiz_dir = tmp_path / "quizzes" / "q1"
     (quiz_dir / "questions").mkdir(parents=True)
@@ -530,7 +530,7 @@ def test_parse_quiz_file_expands_inline_snippets(tmp_path):
         "See your [Grades]($../../snippets/inline/CANVAS_COURSE_REFERENCE.md$/grades) in Canvas.\n\n"
         "1. [Q](questions/q.md)\n"
     )
-    _, desc_html, _ = parse_quiz_file(quiz_md, tmp_path / "snippets")
+    _, desc_html, _ = parse_quiz_file(quiz_md, tmp_path / "snippets", course_id=999)
     assert "https://school.instructure.com/courses/999/grades" in desc_html
 
 
@@ -539,7 +539,7 @@ def test_parse_question_file_expands_inline_snippets(tmp_path):
     snippets_inline = tmp_path / "snippets" / "inline"
     snippets_inline.mkdir(parents=True)
     (snippets_inline / "CANVAS_COURSE_REFERENCE.md").write_text(
-        "https://school.instructure.com/courses/999\n"
+        "https://school.instructure.com/courses/\n<!-- everything after line 1 is ignored -->\n"
     )
     q_dir = tmp_path / "quizzes" / "q1" / "questions"
     q_dir.mkdir(parents=True)
@@ -548,7 +548,7 @@ def test_parse_question_file_expands_inline_snippets(tmp_path):
         "---\ntitle: Q\nquestion_type: essay_question\npoints_possible: 1\n---\n\n"
         "Review your [Grades]($../../../snippets/inline/CANVAS_COURSE_REFERENCE.md$/grades) and answer.\n"
     )
-    q = parse_question_file(q_md, tmp_path / "snippets")
+    q = parse_question_file(q_md, tmp_path / "snippets", course_id=999)
     assert "https://school.instructure.com/courses/999/grades" in q["question_text"]
 
 

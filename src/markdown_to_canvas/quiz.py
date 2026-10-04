@@ -32,6 +32,7 @@ def parse_quiz_file(
     flags: dict[str, bool] | None = None,
     source_desc: str | None = None,
     errors: list[str] | None = None,
+    course_id: int | None = None,
 ) -> tuple[dict[str, Any], str, list[Path]]:
     """Parse a quiz-level .md file.
 
@@ -55,7 +56,9 @@ def parse_quiz_file(
         )
         body = "" if filtered is None else filtered
     if snippets_dir is not None:
-        body = preprocess_snippets(body, quiz_md, snippets_dir, errors, flags=flags)
+        body = preprocess_snippets(
+            body, quiz_md, snippets_dir, errors, flags=flags, course_id=course_id
+        )
 
     description_md, question_files = split_quiz_body(body, quiz_md)
     desc_html = markdown_to_html(description_md) if description_md else ""
@@ -251,6 +254,7 @@ def parse_question_file(
     flags: dict[str, bool] | None = None,
     source_desc: str | None = None,
     errors: list[str] | None = None,
+    course_id: int | None = None,
 ) -> dict[str, Any]:
     """Parse a quiz question .md file.
 
@@ -273,7 +277,9 @@ def parse_question_file(
         filtered = apply_conditionals(body, flags, source_desc or q_path.name, errors)
         body = "" if filtered is None else filtered
     if snippets_dir is not None:
-        body = preprocess_snippets(body, q_path, snippets_dir, errors, flags=flags)
+        body = preprocess_snippets(
+            body, q_path, snippets_dir, errors, flags=flags, course_id=course_id
+        )
 
     question_type = frontmatter.get("question_type", "essay_question")
     points = frontmatter.get("points_possible", 0)

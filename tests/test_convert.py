@@ -910,3 +910,73 @@ def test_unevaluated_inline_snippet_inside_block_snippet_is_not_a_path(
     assert errors == []
     assert capsys.readouterr().out == ""
     assert result.startswith("[G](<!-- #if a -->\nhttps://x.edu/1\n")
+
+
+# ---------------------------------------------------------------------------
+# CANVAS_COURSE_REFERENCE: first line + course_id, rest ignored (format 8)
+# ---------------------------------------------------------------------------
+
+def _course_reference_repo(tmp_path: Path, text: str) -> tuple[Path, Path]:
+    ref = tmp_path / "snippets" / "inline" / "CANVAS_COURSE_REFERENCE.md"
+    ref.parent.mkdir(parents=True)
+    ref.write_text(text)
+    source = tmp_path / "pages" / "p.md"
+    source.parent.mkdir()
+    return source, tmp_path / "snippets"
+
+
+_GRADES = "[Grades]($../snippets/inline/CANVAS_COURSE_REFERENCE.md$/grades)"
+
+
+def test_course_reference_appends_course_id_and_ignores_the_rest(tmp_path: Path) -> None:
+    from markdown_to_canvas.convert import COURSE_REFERENCE_COMMENT
+
+    source, snippets = _course_reference_repo(
+        tmp_path,
+        "https://school.instructure.com/courses/\n" + COURSE_REFERENCE_COMMENT + "more text\n",
+    )
+    result = preprocess_snippets(_GRADES, source, snippets, course_id=4242)
+    assert result == "[Grades](https://school.instructure.com/courses/4242/grades)"
+
+
+def test_course_reference_block_form_also_uses_the_first_line(tmp_path: Path) -> None:
+    source, snippets = _course_reference_repo(
+        tmp_path, "https://school.instructure.com/courses/\n<!-- note -->\n"
+    )
+    text = "[x](../snippets/inline/CANVAS_COURSE_REFERENCE.md)"
+    assert preprocess_snippets(text, source, snippets, course_id=7) == (
+        "https://school.instructure.com/courses/7"
+    )
+
+
+def test_course_reference_adds_a_missing_slash_and_warns_once(tmp_path: Path, capsys) -> None:
+    source, snippets = _course_reference_repo(
+        tmp_path, "https://school.instructure.com/courses\n"
+    )
+    result = preprocess_snippets(_GRADES + " " + _GRADES, source, snippets, course_id=5)
+    assert result.count("https://school.instructure.com/courses/5/grades") == 2
+    out = capsys.readouterr().out
+    assert out.count("does not end with '/'") == 1
+    assert "snippets/inline/CANVAS_COURSE_REFERENCE.md" in out
+
+
+def test_course_reference_without_course_id_is_the_first_line(tmp_path: Path) -> None:
+    source, snippets = _course_reference_repo(
+        tmp_path, "https://school.instructure.com/courses/\n<!-- note -->\n"
+    )
+    assert preprocess_snippets(_GRADES, source, snippets) == (
+        "[Grades](https://school.instructure.com/courses//grades)"
+    )
+
+
+def test_same_name_elsewhere_is_an_ordinary_snippet(tmp_path: Path) -> None:
+    """Only snippets/inline/CANVAS_COURSE_REFERENCE.md is special."""
+    other = tmp_path / "snippets" / "CANVAS_COURSE_REFERENCE.md"
+    other.parent.mkdir(parents=True)
+    other.write_text("line one\nline two\n")
+    source = tmp_path / "pages" / "p.md"
+    source.parent.mkdir()
+    text = "$../snippets/CANVAS_COURSE_REFERENCE.md$"
+    assert preprocess_snippets(text, source, tmp_path / "snippets", course_id=5) == (
+        "line one\nline two"
+    )

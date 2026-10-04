@@ -16,8 +16,9 @@ import pypandoc
 import tomlkit
 
 from . import toml_write
+from .relative_dates import CUTOFF_HELP, DEFAULT_TIMES, DEFAULT_TIMES_HELP
 from .canvas_api import NUMERIC_TAB_IDS, TOOL_TAB_PREFIX
-from .convert import apply_outside_fences
+from .convert import COURSE_REFERENCE_COMMENT, apply_outside_fences
 from .markdown_cleanup import filter_pandoc_attrs, keep_id_and_style, repair_prose
 from .repo_format import FORMAT_VERSION, tool_version
 
@@ -2716,11 +2717,14 @@ _RELATIVE_DUE_DATES_HELP = """\
 # term; after that you edit due_dates by hand. course_settings/term_dates.toml
 # shows the term file. Items are matched to content by title, like due_dates.
 #
-# Settings shared by every table (a table may set its own to override them):
+# Settings shared by every table (a table may set its own to override them;
+# default_unlock_time and default_lock_time are set below the help):
 # days_of_week = ["Mon", "Wed"]            # any of Mon Tue Wed Thu Fri Sat Sun
 # class_on_noninstructional_days = false   # true or false
 # unlock_relative_default = "NONE"         # an offset, a list of offsets, or "NONE"
 # lock_relative_default = "+7 CALENDAR_DAY"
+#
+""" + CUTOFF_HELP + """\
 #
 # Offsets: "+N CALENDAR_DAY", "-N CALENDAR_DAY", "+N CLASS_DAY", "-N CLASS_DAY",
 #   "Fri NEAREST_CALENDAR_DAY" (any weekday), "23:59 ABS_TIME" (any HH:MM).
@@ -2763,6 +2767,10 @@ def _relative_due_dates_section() -> tomlkit.items.Table:
     """The ``[relative_due_dates]`` scaffolding: help comments and an empty default table."""
     section = tomlkit.table()
     toml_write.add_comment_text(section, _RELATIVE_DUE_DATES_HELP)
+    section.add(tomlkit.nl())
+    toml_write.add_comment_text(section, DEFAULT_TIMES_HELP)
+    for key, value in DEFAULT_TIMES.items():
+        section.add(key, value)
     tables = tomlkit.table(is_super_table=True)
     default = tomlkit.table()
     default.add("items", tomlkit.array())
@@ -3121,13 +3129,19 @@ def create_course_settings(
 # ---------------------------------------------------------------------------
 
 def _write_canvas_course_reference_snippet(base_url: str, output_dir: Path) -> None:
-    """Write snippets/inline/CANVAS_COURSE_REFERENCE.md containing the full course base URL.
+    """Write snippets/inline/CANVAS_COURSE_REFERENCE.md: the course base URL
+    without its course ID, then a comment explaining the file.
 
-    The base URL is ``https://<canvas_domain>/courses/<course_id>``.
+    The base URL is ``https://<canvas_domain>/courses/<course_id>``; the
+    snippet's first line is ``https://<canvas_domain>/courses/``, and the
+    course_id from canvas.toml is appended when it is expanded (format 8).
     """
     snippet_dir = output_dir / "snippets" / "inline"
     snippet_dir.mkdir(parents=True, exist_ok=True)
-    (snippet_dir / "CANVAS_COURSE_REFERENCE.md").write_text(base_url, encoding="utf-8")
+    prefix = re.sub(r"\d+$", "", base_url)
+    (snippet_dir / "CANVAS_COURSE_REFERENCE.md").write_text(
+        f"{prefix}\n{COURSE_REFERENCE_COMMENT}", encoding="utf-8"
+    )
     print("Writing: snippets/inline/CANVAS_COURSE_REFERENCE.md")
 
 

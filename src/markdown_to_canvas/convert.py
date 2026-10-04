@@ -126,6 +126,47 @@ def parse_frontmatter(text: str) -> tuple[dict[str, Any], str]:
 #: A snippet that (directly or indirectly) includes itself hits this limit.
 MAX_SNIPPET_DEPTH = 10
 
+#: The course-reference snippet, relative to the snippets directory. Unlike
+#: other snippets it expands to its first line with the config's course_id
+#: appended; the rest of the file is ignored (format 8).
+COURSE_REFERENCE_RELPATH = Path("inline") / "CANVAS_COURSE_REFERENCE.md"
+
+#: The explanation `import` and `upgrade` write below the URL line.
+COURSE_REFERENCE_COMMENT = """\
+<!--
+Only the first line of this file is used. When a file references this
+snippet, markdown-to-canvas replaces the reference with that first line
+followed by the course_id from course_settings/canvas.toml (or from the file
+given with --config), so links built on it point into whichever course is
+being updated. Everything after the first line, including this comment, is
+ignored.
+-->
+"""
+
+# Course-reference snippets already warned about a missing trailing slash, so
+# the warning prints once per run rather than once per reference.
+_warned_no_slash: set[Path] = set()
+
+
+def course_reference_url(snippet_path: Path, course_id: int | None) -> str:
+    """The expansion of the course-reference snippet at ``snippet_path``:
+    its first line with a trailing ``/`` ensured and ``course_id`` appended.
+
+    With no course_id (callers that only look for links, or `publish`
+    without a canvas.toml) the first line is returned without an ID.
+    """
+    lines = snippet_path.read_text(encoding="utf-8").splitlines()
+    url = lines[0].strip() if lines else ""
+    if not url.endswith("/"):
+        if snippet_path not in _warned_no_slash:
+            _warned_no_slash.add(snippet_path)
+            print(
+                f"  WARNING: the first line of snippets/{COURSE_REFERENCE_RELPATH.as_posix()} "
+                f"({url!r}) does not end with '/'; adding one before the course_id"
+            )
+        url += "/"
+    return f"{url}{course_id}" if course_id else url
+
 
 def preprocess_snippets(
     text: str,
@@ -133,6 +174,7 @@ def preprocess_snippets(
     snippets_dir: Path,
     errors: list[str] | None = None,
     flags: dict[str, bool] | None = None,
+    course_id: int | None = None,
 ) -> str:
     """Replace snippet references with the snippet file's contents.
 
@@ -158,6 +200,10 @@ def preprocess_snippets(
     conditionals (#if/#elif/#else/#endif) evaluated before insertion; a
     snippet whose directives error contributes an error and the reference is
     left unexpanded, matching the other snippet-error behaviors.
+
+    The course-reference snippet (``COURSE_REFERENCE_RELPATH``) is special:
+    it expands to its first line with ``course_id`` appended (see
+    course_reference_url), and the rest of the file is ignored.
     """
     # Local import: conditionals.py imports split_fenced_segments/warn from
     # this module, so a top-level import here would be circular.
@@ -165,6 +211,7 @@ def preprocess_snippets(
 
     resolved_snippets_dir = snippets_dir.resolve()
     repo_root = resolved_snippets_dir.parent
+    course_reference = resolved_snippets_dir / COURSE_REFERENCE_RELPATH
 
     try:
         rel_source = source_file.relative_to(snippets_dir.parent)
@@ -219,6 +266,8 @@ def preprocess_snippets(
                     f"snippet that includes itself"
                 )
                 return None
+            if target_path == course_reference:
+                return course_reference_url(target_path, course_id), target_path
             content = target_path.read_text()
             if flags is not None:
                 content = apply_conditionals(content, flags, _desc(target_path), errors)

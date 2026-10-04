@@ -118,6 +118,7 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
     - [The `[relative_due_dates]` section](#the-relative_due_dates-section)
     - [Offsets](#offsets)
     - [Running it](#running-it)
+    - [Not rescheduling past dates (`dont_reschedule_dates_before`)](#not-rescheduling-past-dates-dont_reschedule_dates_before)
   - [Resolving external-tool labels (`create-tool-aliases`)](#resolving-external-tool-labels-create-tool-aliases)
     - [Workflow](#workflow)
 
@@ -1689,6 +1690,10 @@ late_submission_minimum_percent         = 0.0    # floor: never deduct below thi
 [relative_due_dates]
 days_of_week = ["Mon", "Wed"]
 lock_relative_default = "+7 CALENDAR_DAY"
+default_unlock_time = "00:00"   # time of day for unlock/lock dates (an explicit
+default_lock_time = "23:59"     # due time or ABS_TIME wins)
+# Dates in due_dates on or before this are not rescheduled ("" = no cutoff):
+# dont_reschedule_dates_before = "YYYY-MM-DD"
 
 [relative_due_dates.tables.default]
 items = [
@@ -2456,32 +2461,25 @@ This sets the Canvas module item's published state — the item still appears in
 
 Unpublished items are also excluded from the `publish` subcommand's static website (including any assets reachable only through unpublished links).
 
-**Module-level `published` overrides its contents.** A module's own frontmatter
-(`published: true` / `published: false`) controls the module, and in Canvas the
-module's publish state **cascades to everything inside it**: unpublishing a
-module unpublishes every item *and the underlying content* (pages, assignments,
-discussions, quizzes). So if a content file's own frontmatter says
-`published: true` but it lives in a module whose frontmatter says
-`published: false`, the module wins — the content is left **unpublished** after
-sync (invisible to students), regardless of its own `published: true`.
+**Module-level `published` controls only the module.** A module's own
+frontmatter (`published: true` / `published: false`) publishes or unpublishes
+the module itself, the same as the Canvas web UI's "Publish module only" /
+"Unpublish module only". The items inside it keep their own published state:
+each page, assignment, discussion or quiz follows its own `published:`
+frontmatter, and each external link or other item follows its
+`<!-- published="..." -->` comment. So you can set a module to
+`published: false` while you work on it, and setting it back to
+`published: true` later shows students the module with its items as they were.
 
-Because this is easy to miss (the run still reports success), the tool now
-**warns** when it detects this conflict — inline as the module syncs, and again
-in an end-of-run summary listing each affected item:
+Students can't see an unpublished module, but they can still reach published
+content inside it by a direct link, or through the Pages or Assignments lists
+if those are in the course navigation. To hide a piece of content completely,
+set `published: false` on the content file itself.
 
-```text
-The following content asks to be published (published: true) but sits in a
-module that is unpublished (published: false).
-Canvas unpublishes a module's contents along with the module, so this content
-is NOT visible to students despite its own published: true.
-Publish the module (set published: true in its .md file), or move the item to a
-published module:
-  In module "Midterm Exam": "Midterm Exam Study Guide" (pages/exams/midterm/midterm-exam-study-guide.md)
-```
-
-To fix, either set `published: true` on the module, or move the item to a module
-that is published. (Assets/Files carry no `published:` frontmatter of their own,
-so they are not reported — an unpublished module simply hides them, as expected.)
+Courses synced with older versions of the tool: unpublishing a module used to
+unpublish everything in it, in Canvas. If you published such a module again
+and its content is still unpublished, run `update --force-uploads` once to
+re-apply each file's own `published:` setting.
 
 The `import` subcommand preserves per-item published state from the Canvas export — unpublished items in the original course get the `<!-- published="false" -->` comment automatically.
 
@@ -2946,7 +2944,7 @@ $path/to/snippet.md$
 
 The path is relative to the file that contains the reference. Before conversion the tool replaces the whole `$…$` token with the snippet's content (whitespace-stripped), making it safe to embed inside a Markdown link URL or anywhere else in text.
 
-The most common use is `snippets/inline/CANVAS_COURSE_REFERENCE.md`, which holds the full Canvas course base URL (protocol, institution hostname, and course ID). Links that point into your own course can reference it, keeping the institution name and course ID in one place:
+The most common use is `snippets/inline/CANVAS_COURSE_REFERENCE.md`, which builds the Canvas course base URL (protocol, institution hostname, and course ID). Links that point into your own course can reference it, keeping the institution name in one place and the course ID in `canvas.toml`:
 
 ```markdown
 <!-- in pages/overview.md -->
@@ -2955,20 +2953,25 @@ Go through the list of your [Grades]($../snippets/inline/CANVAS_COURSE_REFERENCE
 
 ```markdown
 <!-- snippets/inline/CANVAS_COURSE_REFERENCE.md -->
-https://cascadia.instructure.com/courses/2735320
+https://cascadia.instructure.com/courses/
+<!--
+Only the first line of this file is used. ...
+-->
 ```
 
-Before conversion, `$../snippets/inline/CANVAS_COURSE_REFERENCE.md$` is replaced with the snippet content, producing:
+This snippet is handled differently from every other snippet. Only its first line is used, and the tool appends the `course_id` from `course_settings/canvas.toml` (or from the file given with `--config`) to it. Everything after the first line is ignored, so the rest of the file can hold a comment explaining this. If the first line does not end with `/`, the tool adds one and prints a warning. With `course_id = 2735320` in `canvas.toml`, `$../snippets/inline/CANVAS_COURSE_REFERENCE.md$` is replaced before conversion, producing:
 
 ```markdown
 Go through the list of your [Grades](https://cascadia.instructure.com/courses/2735320/grades "Grades") here in Canvas.
 ```
 
+Because the course ID comes from the config, the same repo produces links into whichever course you are updating: `update --config course_settings/canvas-sandbox.toml` makes these links point into the sandbox course. Only the file at exactly `snippets/inline/CANVAS_COURSE_REFERENCE.md` gets this treatment; a file with the same name anywhere else is an ordinary snippet. `publish` uses the `course_id` of the `canvas.toml` it reads, and warns if there is none (the links then have no course ID).
+
 The snippet file name is written in ALL CAPS to make it visually distinct from regular (lowercase) snippet files.
 
 > **Note on `$` in links** — Inside a Markdown link URL, `$` has no special meaning and is valid in HTML `href` attributes (RFC 3986 sub-delimiter). The preprocessing step runs before Pandoc, so there is no conflict with Pandoc's `$…$` math syntax. The link will appear broken in a Markdown editor preview, but the Markdown structure itself is unaffected.
 
-**The `import` subcommand creates this snippet automatically.** When you import a `.imscc` file, the tool reads the institution hostname and course ID from the export metadata and writes `snippets/inline/CANVAS_COURSE_REFERENCE.md` with the full base URL. Every Markdown link whose URL starts with that base URL is rewritten to use the `$path$` snippet reference, with the link text added as a hover title.
+**The `import` subcommand creates this snippet automatically.** When you import a `.imscc` file, the tool reads the institution hostname and course ID from the export metadata and writes `snippets/inline/CANVAS_COURSE_REFERENCE.md` with the base URL up to and including `/courses/`, followed by the explanatory comment, and records the course ID in `canvas.toml`. Every Markdown link whose URL starts with that base URL is rewritten to use the `$path$` snippet reference, with the link text added as a hover title.
 
 #### Shared frontmatter via `PASTE_SNIPPET_INTO_FRONTMATTER`
 
@@ -3228,8 +3231,8 @@ anything on Canvas. If a version differs from the tool's, the command stops and
 changes nothing:
 
 ```text
-Error: This course repo is format version 0 but this tool (markdown-to-canvas 0.2.1) uses format version 7. Run `markdown-to-canvas upgrade` first.
-Error: course_settings/course_settings.toml is format version 8 but this tool (markdown-to-canvas 0.2.1) only understands format version 7. Update markdown-to-canvas.
+Error: This course repo is format version 0 but this tool (markdown-to-canvas 0.2.1) uses format version 9. Run `markdown-to-canvas upgrade` first.
+Error: course_settings/course_settings.toml is format version 10 but this tool (markdown-to-canvas 0.2.1) only understands format version 9. Update markdown-to-canvas.
 ```
 
 A manifest that is older than the repo is named in the message. This happens
@@ -3359,6 +3362,40 @@ changes: a numeric `group_category_id` keeps working. An older tool would
 silently drop a named `group_category_id` from a discussion, which is why the
 version changes.
 
+Migration 7 to 8 goes with the new handling of
+`snippets/inline/CANVAS_COURSE_REFERENCE.md` (see
+[Inline snippets and the `CANVAS_COURSE_REFERENCE` snippet](#inline-snippets-and-the-canvas_course_reference-snippet)),
+whose course ID now comes from `canvas.toml` or `--config`. A file holding a
+single URL ending in `/courses/<number>` is rewritten to the URL ending in
+`/courses/`, followed by the same explanatory comment `import` writes. If
+`course_settings/canvas.toml` names a different `course_id` than the one
+removed, a `NOTE:` says so, because links built on the snippet will now point
+to the `canvas.toml` course. A file whose first line already ends in
+`/courses/` is left as it is, and a repo without the file is unaffected. Any
+other content (for example `#if` course-flag conditionals choosing between
+URLs, or a URL that does not end in a course number) stops the upgrade with a
+message showing the file's content. Edit the file so its first line is the
+course URL ending in `/courses/`, then run `upgrade` again; the earlier
+migrations are not repeated. Every manifest records version 8.
+
+Migration 8 to 9 goes with the new `dont_reschedule_dates_before` setting (see
+[Not rescheduling past dates](#not-rescheduling-past-dates-dont_reschedule_dates_before))
+and with the default unlock and lock times (see "Unlock and lock times" under
+[Offsets](#offsets)). It
+adds, directly under the `[relative_due_dates]` header of
+`course_settings.toml`, the cutoff commented out with a short explanation, and
+`default_unlock_time = "00:00"` and `default_lock_time = "23:59"` as real
+settings. Each is left out (with a message) when the section already has it; a
+cutoff mentioned only in a comment counts. A repo whose section has only
+`[relative_due_dates.tables.…]` headers (as migration 1 to 2 wrote it) gets a
+`[relative_due_dates]` header with these lines under it, just before the first
+of them. A file with no `[relative_due_dates]` section at all gets a `NOTICE:`
+and no change. Every manifest records version 9. Because the default times are
+real values, the next `generate-due-dates` shows every unlock moving to 00:00
+(and locks computed from a due time other than 23:59 moving to 23:59); unlocks
+on or before `dont_reschedule_dates_before` are kept. An older tool would stop
+with "unknown key" on these settings, which is why the version changes.
+
 `upgrade` also checks that `tab_configuration` is a top-level key. The tool
 only reads it there, so when it is nested under a section
 (`[default_post_policy]`, for example) `upgrade` moves it to the top level,
@@ -3388,7 +3425,7 @@ This converts pages, assignments, discussions, announcements, quizzes, question 
 
 `import` does not write a manifest. If you will sync the imported repo back to the course it was exported from (or to a copy of it), run `fix-manifest --pair-canvas-with-local` before the first `update`. Otherwise `update` creates a duplicate of every item (see "Checking and repairing the manifest").
 
-`import` also writes an empty `[relative_due_dates.tables.default]` section at the end of `course_settings.toml` (with the shared settings commented out, and every allowed value listed) and, unless the file is already there, a fully commented-out `course_settings/term_dates.toml` that shows the [term file](#the-term-file) format. See [Generating due dates from offsets](#generating-due-dates-from-offsets-generate-due-dates).
+`import` also writes an empty `[relative_due_dates.tables.default]` section at the end of `course_settings.toml` (with the shared settings and `dont_reschedule_dates_before` commented out, every allowed value listed, and `default_unlock_time = "00:00"` and `default_lock_time = "23:59"` set) and, unless the file is already there, a fully commented-out `course_settings/term_dates.toml` that shows the [term file](#the-term-file) format. See [Generating due dates from offsets](#generating-due-dates-from-offsets-generate-due-dates).
 
 Every top-level folder the tool recognizes (`pages/`, `assignments/`, `discussions/`, `announcements/`, `quizzes/`, `question_banks/`, `modules/`, `snippets/`, `assets/`, `course_settings/`) is created even if the course has nothing to put in it, so the repo layout always matches [How it works](#how-it-works) and there's an obvious place to add new content later. A starter `.gitignore` and `.canvasignore` are also written — both cover common OS/editor/Office junk files, plus commented-out examples of course-specific patterns (per-term-only material, feedback drafts) you can uncomment or adapt as the course grows. `.canvasignore` also actively excludes `course_definition/**` — instructor reference material (scope-and-sequence docs, curriculum outcome guides) that should never be uploaded to Canvas — and `question_banks/**`, since Canvas's API cannot create or update question banks. If the export contains any question banks, `import` prints a warning saying they cannot be re-uploaded.
 
@@ -3559,6 +3596,10 @@ days_of_week = ["Mon", "Wed"]              # Mon Tue Wed Thu Fri Sat Sun, in any
 class_on_noninstructional_days = false     # default false
 unlock_relative_default = "NONE"           # see "Lock and unlock dates" below
 lock_relative_default = "+7 CALENDAR_DAY"
+default_unlock_time = "00:00"              # see "Lock and unlock dates" below
+default_lock_time = "23:59"
+# Section-wide only (a table may not set it); see "Not rescheduling past dates":
+dont_reschedule_dates_before = "2026-10-21"
 
 [relative_due_dates.tables.quarter11]      # one table per schedule
 ignore = ["Week 10 Problem Set"]           # optional: titles that don't exist in this schedule
@@ -3617,6 +3658,22 @@ ones; with none at all, the entry gets `"KEEP"` (leave the Canvas value alone).
 An item with no due date that has an offset rule for lock or unlock gets `"KEEP"`
 and a warning.
 
+**Unlock and lock times.** Counting from the due date keeps the due date's time
+of day, so an item due at 23:59 would also unlock at 23:59. `default_unlock_time`
+and `default_lock_time` (`"HH:MM"`; shared, and a table may set its own) give
+the time of day for unlock and lock dates instead. `import` writes
+`default_unlock_time = "00:00"` and `default_lock_time = "23:59"`. A time
+chosen explicitly wins over them:
+
+* An item whose own `offsets` set its due time (for example
+  `["+1 CLASS_DAY", "17:00 ABS_TIME"]`) unlocks and locks at that time: due at
+  17:00 with `"+7 CALENDAR_DAY"` locks at 17:00 a week later.
+* An `ABS_TIME` in the unlock or lock rule (the item's own or a default rule)
+  sets that date's time.
+
+Without the two settings, unlock and lock dates keep the due date's time.
+`NONE`, `KEEP` and items with no due date are not affected.
+
 ### Running it
 
 `generate-due-dates` calculates every date first and shows what would change,
@@ -3626,6 +3683,7 @@ columns, so you can see which part changed:
 
 ```text
 Course dir: /home/me/cs142
+Not rescheduling dates: no cutoff (dont_reschedule_dates_before is not set)
 Relative table: default
 Week 1 Problem Set:
 	due_at: 2026-01-01T00:00:00-08:00
@@ -3653,7 +3711,9 @@ computes every item and never looks at course flags: `update` applies `only_if`
 afterwards, as it does for hand-written entries. Because a run overwrites the
 three dates of every item in the table, hand edits made since the last run show
 up in the changes as `old -> new`; run it once at the start of a term rather
-than after you start editing.
+than after you start editing. To run it again during the term without moving
+dates that have already passed, set
+[`dont_reschedule_dates_before`](#not-rescheduling-past-dates-dont_reschedule_dates_before).
 
 It prints warnings, each naming the table or tables responsible:
 
@@ -3661,9 +3721,6 @@ It prints warnings, each naming the table or tables responsible:
   table, and in `due_dates` too if it has an entry there).
 * An assignment, discussion or quiz that is in neither the relative table nor
   `due_dates`, or that has a `due_dates` entry but no item in the table.
-* An item whose computed due date falls before the term file's `first_day` or
-  after its `last_day`. Only `due_at` is checked; lock and unlock dates often
-  fall outside the term on purpose. The dates are still written.
 * A notice listing `due_dates` entries the table did not produce (for example
   left from another table), which stay as they are.
 
@@ -3671,6 +3728,31 @@ Titles in the table's `ignore` list are not reported. A problem in the settings,
 such as an unknown key, an unreadable offset, an item relative to a missing
 item, or a circular chain, stops the run with an error naming it before anything
 is written.
+
+An item whose computed due date falls before the term file's `first_day` or
+after its `last_day` is also an error. The run stops before showing any changes,
+nothing is written (with `--yes` or `--noop` too), and the error lists every
+such item. Only `due_at` is checked; lock and unlock dates often fall outside
+the term on purpose. When the item's date comes from an `ABSOLUTE_DATE` anchor,
+the error names that date, and for an item counted from another item's
+`ABSOLUTE_DATE` it names that item too.
+
+This makes `ABSOLUTE_DATE` safe for a one-term exception. To give one item a
+different date this term without losing its usual schedule, change its
+`relative_to` to `ABSOLUTE_DATE` and keep the usual line in a comment beside it:
+
+```toml
+items = [
+    # Usual schedule; put this back next term:
+    # { name = "Lab 3", relative_to = { type = "START_OF_QUARTER" }, offsets = ["+5 CLASS_DAY"] },
+    { name = "Lab 3", relative_to = { type = "ABSOLUTE_DATE", date = "2026-10-20" } },
+]
+```
+
+Next term that date is before the new `first_day`, so `generate-due-dates`
+stops with an error until you restore the commented line. Items relative to
+`Lab 3` follow the absolute date this term, and are named in the same error
+next term.
 
 The arithmetic is a port of the calculation in MikesGradingTool, with these
 differences. Counting across a daylight-saving change
@@ -3686,6 +3768,81 @@ holidays) to save as `course_settings/term_dates.toml`. The script needs only
 [`uv`](https://docs.astral.sh/uv/) (it declares its one dependency inline), so
 you can copy it anywhere on your `PATH`, run `chmod +x` on it, and run it by
 name.
+
+### Not rescheduling past dates (`dont_reschedule_dates_before`)
+
+Partway through a term you may need to regenerate the schedule, for example
+after adding a closure to the term file or changing an offset, without moving
+dates that students have already passed. Set a cutoff in `[relative_due_dates]`:
+
+```toml
+[relative_due_dates]
+dont_reschedule_dates_before = "2026-10-21"         # the end of Oct 21: 23:59:59
+# dont_reschedule_dates_before = "2026-10-21 08:00" # or an exact time
+# dont_reschedule_dates_before = ""                 # no cutoff
+```
+
+The value is `"YYYY-MM-DD"`, meaning the end of that day, or
+`"YYYY-MM-DD HH:MM"`, read in the term file's `time_zone`. `""` or leaving the
+key out means no cutoff. Any other form, including a UTC offset, a `T`
+separator or an unquoted TOML date, is an error. The key applies to every table
+and cannot be set on one. `import` writes it commented out.
+
+`generate-due-dates` still computes every date, then decides each of
+`unlock_at`, `due_at` and `lock_at` separately for each existing `due_dates`
+entry:
+
+* A field whose **current** value in `due_dates` is a date on or before the
+  cutoff is left as it is. A current date without a UTC offset is read in the
+  term's time zone.
+* Any other field is written as computed, even when the new date falls before
+  the cutoff. `NONE`, `KEEP`, `CREATE_NONE_THEN_KEEP`, an empty value and a
+  missing field have no date to protect, so they are written as computed.
+* An item with no `due_dates` entry gets a new entry with all three dates.
+
+So an assignment that is open (unlocked, not yet due) keeps its `unlock_at` and
+gets its new `due_at` and `lock_at`.
+
+The cutoff must fall inside the term: from 00:00 on the term file's `first_day`
+through the end of its `last_day`. Otherwise the command stops with an error,
+before computing or writing anything. This catches a cutoff left over from last
+term: `due_dates` still holds last term's dates at that point, so an old cutoff
+would freeze most or all of them. At the start of each term, set the key to
+`""` or to a date in the new term.
+
+Keeping some dates and changing others can leave an entry out of order:
+`unlock_at` after `due_at`, `due_at` after `lock_at`, or `unlock_at` after
+`lock_at`. Canvas would reject those dates. Such an entry is reported as an
+error and none of its dates change. The other entries are written as usual, and
+the command exits with status 1, also with `--noop` or when you answer no. Fix
+that entry by hand.
+
+The first line after the course directory always states the cutoff. When any
+item had a date kept that would otherwise have changed, a line counts them,
+even when nothing else changes. `--verbose` (`-v`) lists them, with the fields
+that were kept:
+
+```text
+Course dir: /home/me/cs142
+Not rescheduling dates on or before: Wed Oct 21, 2026 11:59 PM PDT (dont_reschedule_dates_before)
+Relative table: default
+Week 6 Problem Set:
+	due_at: 2026-11-02T23:59:00-08:00
+	     -> 2026-11-04T23:59:00-08:00
+  ERROR: Week 4 Lab: keeping the dates on or before 2026-10-21 puts unlock_at (kept, 2026-10-20T23:59:00-07:00) after due_at (computed, 2026-10-19T23:59:00-07:00). None of its dates were changed; fix the entry by hand.
+12 resources were not rescheduled because of dont_reschedule_dates_before date of Wed Oct 21, 2026 11:59 PM PDT
+	Week 1 Problem Set: unlock_at, due_at, lock_at
+	Week 4 Discussion (discussion): unlock_at
+	...
+30 unchanged entries
+Write these dates into due_dates? [y/N]:
+```
+
+Only `generate-due-dates` reads the key; `update` sends `due_dates` as it
+always does. An entry whose dates did not change makes no Canvas call. When
+some of an entry's dates change, `update` sends all of that entry's dates,
+kept ones included. A date you changed by hand in Canvas (not in `due_dates`)
+is then set back to the `due_dates` value, as with any edited entry.
 
 One `due_dates` array is shared by every section of a repo that drives several
 Canvas courses, so a run produces one set of dates. Sections that need different

@@ -1,0 +1,8 @@
+first_day = 2026-09-21
+last_day = 2026-12-11
+time_zone = "America/Los_Angeles"
+default_due_time = "23:59"
+noninstructional_days = [
+  { title = "Closure", date = 2026-09-30 },
+  { title = "Veterans Day", date = 2026-11-11 },
+]

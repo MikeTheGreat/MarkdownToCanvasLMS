@@ -51,7 +51,7 @@ class SyncContext:
     The public entry points (`run_sync`, `run_targeted_sync`) build one of these
     and pass it down instead of the previous 10-to-16 positional parameters. The
     mutable accumulators (`newer_on_canvas`, `errors`, `synced_keys`,
-    `unpublishable_items`, `publish_conflicts`, `ignored_fields`) live here as
+    `unpublishable_items`, `ignored_fields`) live here as
     plain lists/sets; the entry points read them back after the run to print the
     summaries.
     """
@@ -92,12 +92,6 @@ class SyncContext:
     recreated_rubrics: set[str] = field(default_factory=set)
     synced_keys: set[str] = field(default_factory=set)
     unpublishable_items: list[tuple[str, str]] = field(default_factory=list)
-    # (module_title, item_title, item_local_key) for content whose own
-    # frontmatter asks to be published but that sits in a module whose
-    # frontmatter says published: false. Canvas's module-level unpublish
-    # cascades to the underlying content, so the module silently overrides the
-    # item's published: true (see _warn_module_publish_conflicts).
-    publish_conflicts: list[tuple[str, str, str]] = field(default_factory=list)
     # (local_key, field_name) for announcement frontmatter fields that were
     # dropped because Canvas has no matching announcement setting.
     ignored_fields: list[tuple[str, str]] = field(default_factory=list)
@@ -1105,47 +1099,6 @@ def _content_default_published(
     )
 
 
-def _warn_module_publish_conflicts(
-    ctx: SyncContext, module_title: str, items: list[dict[str, Any]]
-) -> None:
-    """Warn about published content sitting in an unpublished module.
-
-    Called only when the module's own frontmatter says ``published: false``.
-    Canvas's module publish state cascades to its contents: editing a module to
-    unpublished unpublishes every item in it *and the underlying content* —
-    pages, assignments, discussions, quizzes alike. So a content file whose own
-    frontmatter says ``published: true`` is silently flipped back to unpublished
-    the moment its module syncs (the module always wins). Rather than let the run
-    report success with the content left invisible to students, surface the
-    conflict inline and accumulate it for the end-of-run summary.
-
-    Only ``.md`` content items are checked — they carry a ``published:`` intent
-    to conflict with. Assets (Files) have no such frontmatter (their historical
-    default is "published", but there is no stated intent for the module to
-    override), and ExternalUrl/SubHeader items have no underlying content, so
-    neither can produce this conflict.
-    """
-    for item in items:
-        if item.get("type") != "content":
-            continue
-        local_path = item.get("local_path", "")
-        if not local_path.endswith(".md"):
-            continue
-        # published is already resolved to a bool for content items by the caller
-        # (explicit {published:...} override, else the file's own frontmatter).
-        if item.get("published") is not True:
-            continue
-        item_title = item.get("title", local_path)
-        print(
-            f"  WARNING: \"{item_title}\" ({local_path}) has published: true, but"
-            f" its module \"{module_title}\" has published: false. Canvas"
-            f" unpublishes a module's contents along with the module, so this"
-            f" content will be UNPUBLISHED after sync. Publish the module, or move"
-            f" this item to a published module, to keep it visible to students."
-        )
-        ctx.publish_conflicts.append((module_title, item_title, local_path))
-
-
 def check_title_collisions(
     md_files: list[Path],
     repo_root: Path,
@@ -1246,7 +1199,9 @@ def sync_syllabus(ctx: SyncContext) -> None:
     if body is None:
         print(f"  Skipping upload due to errors: {local_key}")
         return
-    body = preprocess_snippets(body, syllabus_md, ctx.snippets_dir, errors, flags=ctx.flags)
+    body = preprocess_snippets(
+        body, syllabus_md, ctx.snippets_dir, errors, flags=ctx.flags, course_id=ctx.course_id
+    )
     html = markdown_to_html(body.strip()) if body.strip() else ""
     error_count_before = len(errors)
     # A real stub creator, not a no-op: the syllabus syncs before the content
@@ -2049,7 +2004,6 @@ def run_sync(
     _print_newer_on_canvas_summary(newer_on_canvas)
     _print_pinned_summary(ctx.pinned_skips)
     _print_unpublishable_summary(unpublishable_items)
-    _print_publish_conflicts_summary(ctx.publish_conflicts)
     _print_ignored_fields_summary(ignored_fields)
     _print_errors_summary(errors)
     return bool(errors)
@@ -2775,7 +2729,9 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
         print(f"  Skipping upload due to errors: {local_key}")
         return
     error_count_before_snippets = len(errors) if errors is not None else 0
-    body = preprocess_snippets(body, md_file, snippets_dir, errors, flags=ctx.flags)
+    body = preprocess_snippets(
+        body, md_file, snippets_dir, errors, flags=ctx.flags, course_id=ctx.course_id
+    )
     if errors is not None and len(errors) > error_count_before_snippets:
         print(f"  Skipping upload due to errors: {local_key}")
         return
@@ -3073,7 +3029,9 @@ def _sync_module(
     if body is None:
         print(f"  Skipping upload due to errors: {local_key}")
         return False
-    body = preprocess_snippets(body, md_file, snippets_dir, flags=ctx.flags)
+    body = preprocess_snippets(
+        body, md_file, snippets_dir, flags=ctx.flags, course_id=ctx.course_id
+    )
     items = parse_module_body(body, md_file, repo_root)
     for item in items:
         if item.get("type") == "content" and item.get("published") is None:
@@ -3112,9 +3070,6 @@ def _sync_module(
             print(f"  ERROR: {msg}")
             errors.append(msg)
             return False
-
-    if frontmatter.get("published") is False:
-        _warn_module_publish_conflicts(ctx, title, items)
 
     module_kwargs: dict[str, Any] = {}
     for key in ("published", "unlock_at", "require_sequential_progress"):
@@ -3246,7 +3201,8 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
 
     error_count_before_parse = len(errors) if errors is not None else 0
     frontmatter, desc_html, question_paths = parse_quiz_file(
-        quiz_md, snippets_dir, flags=ctx.flags, source_desc=local_key, errors=errors
+        quiz_md, snippets_dir, flags=ctx.flags, source_desc=local_key, errors=errors,
+        course_id=ctx.course_id,
     )
     if errors is not None and len(errors) > error_count_before_parse:
         print(f"  Skipping upload due to errors: {local_key}")
@@ -3316,6 +3272,7 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
             flags=ctx.flags,
             source_desc=f"{local_key.rsplit('/', 1)[0]}/{rel_path}",
             errors=errors,
+            course_id=ctx.course_id,
         )
         # §7: rewrite links in question text
         if q_data.get("question_text"):
@@ -3433,6 +3390,7 @@ def _sync_question_banks(ctx: SyncContext) -> None:
                     flags=ctx.flags,
                     source_desc=q_path.relative_to(repo_root).as_posix(),
                     errors=ctx.errors,
+                    course_id=ctx.course_id,
                 )
                 q_data["rel_path"] = q_path.relative_to(bank_folder).as_posix()
                 questions.append(q_data)
@@ -3532,21 +3490,6 @@ def _print_unpublishable_summary(items: list[tuple[str, str]]) -> None:
     )
     for module_title, item_title in items:
         print(f"  In module \"{module_title}\": \"{item_title}\"")
-
-
-def _print_publish_conflicts_summary(items: list[tuple[str, str, str]]) -> None:
-    if not items:
-        return
-    print(
-        "\nThe following content asks to be published (published: true) but sits"
-        " in a module that is unpublished (published: false).\nCanvas unpublishes"
-        " a module's contents along with the module, so this content is NOT"
-        " visible to students despite its own published: true.\nPublish the module"
-        " (set published: true in its .md file), or move the item to a published"
-        " module:"
-    )
-    for module_title, item_title, local_path in items:
-        print(f"  In module \"{module_title}\": \"{item_title}\" ({local_path})")
 
 
 def _print_ignored_fields_summary(items: list[tuple[str, str]]) -> None:
@@ -3807,7 +3750,6 @@ def run_targeted_sync(
     _print_newer_on_canvas_summary(newer_on_canvas)
     _print_pinned_summary(ctx.pinned_skips)
     _print_unpublishable_summary(unpublishable_items)
-    _print_publish_conflicts_summary(ctx.publish_conflicts)
     _print_ignored_fields_summary(ignored_fields)
     _print_errors_summary(errors)
     return bool(errors)

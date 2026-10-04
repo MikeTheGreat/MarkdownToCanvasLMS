@@ -898,16 +898,11 @@ def test_module_sync_item_order(mock_course, course_root, mocker) -> None:
     assert item_calls[4][1]["module_item"]["indent"] == 1
 
 
-def test_published_content_in_unpublished_module_warns(
+def test_unpublished_module_leaves_items_alone(
     mock_course, course_root, mocker, capsys
 ) -> None:
-    """Published .md items inside a published: false module are flagged.
-
-    Canvas's module-level unpublish cascades to the underlying content, so a
-    page/assignment/discussion whose own frontmatter says published: true is
-    silently unpublished when the module syncs. All three content types are
-    reported; the asset (no published: frontmatter) is not.
-    """
+    """A published: false module is unpublished on its own (skip_content_tags),
+    so published content inside it stays published and nothing warns."""
     mocker.patch("markdown_to_canvas.manifest.flush")
     module_md = course_root / "modules" / "week-1.md"
     module_md.write_text(
@@ -918,37 +913,11 @@ def test_published_content_in_unpublished_module_warns(
     make_current(course_root)
     run_sync(_config(), course_root)
 
+    module_kwargs = mock_course.create_module.call_args[1]["module"]
+    assert "published" not in module_kwargs
+    assert "skip_content_tags" not in module_kwargs
     out = capsys.readouterr().out
-    # Inline warning, emitted as the module syncs.
-    assert "has published: true, but" in out
-    assert 'module "Week 1: Introduction" has published: false' in out
-    assert "will be UNPUBLISHED after sync" in out
-    # End-of-run summary lists every conflicting content type — and only those
-    # three: the asset (fig.png) carries no published: intent to override.
-    summary_lines = [
-        line for line in out.splitlines()
-        if line.strip().startswith('In module "Week 1: Introduction":')
-    ]
-    assert len(summary_lines) == 3
-    joined = "\n".join(summary_lines)
-    assert "(pages/syllabus.md)" in joined
-    assert "(assignments/week1.md)" in joined
-    assert "(discussions/week1-intro.md)" in joined
-    assert "fig.png" not in joined
-
-
-def test_published_content_in_published_module_no_warning(
-    mock_course, course_root, mocker, capsys
-) -> None:
-    """The fixture module is published: true, so no publish-conflict warning."""
-    mocker.patch("markdown_to_canvas.manifest.flush")
-    _setup_first_sync_mocks(mock_course)
-
-    make_current(course_root)
-    run_sync(_config(), course_root)
-
-    out = capsys.readouterr().out
-    assert "will be UNPUBLISHED after sync" not in out
+    assert "UNPUBLISHED" not in out
     assert "asks to be published" not in out
 
 
@@ -2031,14 +2000,16 @@ def test_module_inline_snippet_becomes_external_url(tmp_path: Path) -> None:
     snippets_inline = course_root / "snippets" / "inline"
     snippets_inline.mkdir(parents=True)
     (snippets_inline / "CANVAS_COURSE_REFERENCE.md").write_text(
-        "https://school.instructure.com/courses/999\n"
+        "https://school.instructure.com/courses/\n<!-- everything after line 1 is ignored -->\n"
     )
     module_file = course_root / "modules" / "m.md"
     body = '- [Syllabus]($../snippets/inline/CANVAS_COURSE_REFERENCE.md$/assignments/syllabus "Syllabus")\n'
 
     from markdown_to_canvas.convert import preprocess_snippets
 
-    expanded = preprocess_snippets(body, module_file, course_root / "snippets")
+    expanded = preprocess_snippets(
+        body, module_file, course_root / "snippets", course_id=COURSE_ID
+    )
     items = parse_module_body(expanded, module_file, course_root)
 
     assert len(items) == 1
@@ -2054,7 +2025,7 @@ def test_module_inline_snippet_mixed_with_local_content(tmp_path: Path) -> None:
     snippets_inline = course_root / "snippets" / "inline"
     snippets_inline.mkdir(parents=True)
     (snippets_inline / "CANVAS_COURSE_REFERENCE.md").write_text(
-        "https://school.instructure.com/courses/999\n"
+        "https://school.instructure.com/courses/\n<!-- everything after line 1 is ignored -->\n"
     )
     module_file = course_root / "modules" / "m.md"
     body = (
@@ -2064,7 +2035,9 @@ def test_module_inline_snippet_mixed_with_local_content(tmp_path: Path) -> None:
 
     from markdown_to_canvas.convert import preprocess_snippets
 
-    expanded = preprocess_snippets(body, module_file, course_root / "snippets")
+    expanded = preprocess_snippets(
+        body, module_file, course_root / "snippets", course_id=COURSE_ID
+    )
     items = parse_module_body(expanded, module_file, course_root)
 
     assert len(items) == 2
@@ -2500,7 +2473,7 @@ def test_syllabus_expands_inline_snippets(mock_course, mocker, tmp_path) -> None
     snippets_inline = root / "snippets" / "inline"
     snippets_inline.mkdir(parents=True)
     (snippets_inline / "CANVAS_COURSE_REFERENCE.md").write_text(
-        "https://school.instructure.com/courses/999\n"
+        "https://school.instructure.com/courses/\n<!-- everything after line 1 is ignored -->\n"
     )
     (cs_dir / "syllabus.md").write_text(
         "---\ntitle: Syllabus\n---\n\n"
@@ -2894,7 +2867,7 @@ def test_tab_configuration_misplaced_under_section_is_left_alone(
     (root / "course_settings").mkdir(parents=True)
     settings = root / "course_settings" / "course_settings.toml"
     settings.write_text(
-        'format_version = 7\ntitle = "Intro to CS"\n\n[late_policy]\n'
+        'format_version = 9\ntitle = "Intro to CS"\n\n[late_policy]\n'
         "missing_submission_deduction_enabled = false\n\n"
         'tab_configuration = [\n    { id = "modules" },\n]\n'
     )
@@ -3248,6 +3221,36 @@ def test_module_external_url_item_created(mock_course, mocker, tmp_path) -> None
     assert item_call["type"] == "ExternalUrl"
     assert item_call["external_url"] == "https://example.com"
     assert item_call["new_tab"] is True
+
+
+@pytest.mark.parametrize("comment, expected", [("", True), (' <!-- published="false" -->', False)])
+def test_module_external_url_item_gets_publish_put(
+    mock_course, mocker, tmp_path, comment, expected
+) -> None:
+    """Canvas creates ExternalUrl items unpublished regardless of the create
+    call's `published`, so every ExternalUrl gets a follow-up PUT setting its
+    state — published as well as unpublished."""
+    import requests
+
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    (root / "modules").mkdir(parents=True)
+    (root / "modules" / "m.md").write_text(
+        "---\ntitle: Module\npublished: true\n---\n\n"
+        f"- [External Resource](https://example.com){comment}\n"
+    )
+    module = _mock_module(66666)
+    module._requester.base_url = "https://canvas.example/api/v1/"
+    module.course_id = 1
+    mock_course.create_module.return_value = module
+    module.create_module_item.return_value = _mock_item(201)
+
+    make_current(root)
+    run_sync(_config(), root)
+
+    requests.put.assert_called_once()
+    assert requests.put.call_args[1]["json"] == {"module_item": {"published": expected}}
+    assert requests.put.call_args[0][0].endswith("/modules/66666/items/201")
 
 
 # ---------------------------------------------------------------------------
@@ -6357,7 +6360,9 @@ def test_new_published_module_is_published_by_follow_up_edit() -> None:
     course.create_module.assert_called_once_with(
         module={"name": "Mod", "require_sequential_progress": False}
     )
-    created.edit.assert_called_once_with(module={"published": True})
+    created.edit.assert_called_once_with(
+        module={"published": True, "skip_content_tags": True}
+    )
     assert result is created
 
 
@@ -6378,4 +6383,28 @@ def test_existing_module_sets_published_in_its_edit() -> None:
     _capi.create_or_update_module(course, 42, "Mod", published=True)
 
     course.create_module.assert_not_called()
-    existing.edit.assert_called_once_with(module={"name": "Mod", "published": True})
+    existing.edit.assert_called_once_with(
+        module={"name": "Mod", "published": True, "skip_content_tags": True}
+    )
+
+
+def test_existing_module_unpublish_is_module_only() -> None:
+    """Without skip_content_tags Canvas cascades a module unpublish to every
+    item and its content; with it only the module changes."""
+    course = MagicMock()
+    existing = course.get_module.return_value
+
+    _capi.create_or_update_module(course, 42, "Mod", published=False)
+
+    existing.edit.assert_called_once_with(
+        module={"name": "Mod", "published": False, "skip_content_tags": True}
+    )
+
+
+def test_module_edit_without_published_sends_no_skip_content_tags() -> None:
+    course = MagicMock()
+    existing = course.get_module.return_value
+
+    _capi.create_or_update_module(course, 42, "Mod", position=3)
+
+    existing.edit.assert_called_once_with(module={"name": "Mod", "position": 3})

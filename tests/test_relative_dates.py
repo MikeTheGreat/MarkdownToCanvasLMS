@@ -1,7 +1,7 @@
 """Tests for relative_dates: loading, table selection, and the date arithmetic."""
 from __future__ import annotations
 
-from datetime import date, time
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -349,22 +349,62 @@ def test_absolute_date_anchor_errors(row, message):
         _calc([row])
 
 
-def test_due_date_outside_the_term_is_warned_about():
-    calc = rd.calculate(
-        _table(
-            [
-                _item("Early", offsets=["-1 CALENDAR_DAY"]),
-                _item("First", offsets=[]),
-                _absolute("Last", "2026-12-11"),
-                _absolute("Late", "2026-12-12"),
-                _item("None", "NO_DUE_DATE"),
-            ]
-        ),
-        _term(last_day=date(2026, 12, 11)),
+def test_due_date_outside_the_term_is_an_error_listing_every_such_item():
+    table = _table(
+        [
+            _item("Early", offsets=["-1 CALENDAR_DAY"]),
+            _item("First", offsets=[]),
+            _absolute("Last", "2026-12-11"),
+            _absolute("Late", "2026-12-12"),
+            _item("None", "NO_DUE_DATE"),
+        ]
     )
-    assert len(calc.warnings) == 2
-    assert "'Early'" in calc.warnings[0] and "2026-09-30" in calc.warnings[0]
-    assert "'Late'" in calc.warnings[1] and "outside the term" in calc.warnings[1]
+    with pytest.raises(RelativeDueDatesError) as excinfo:
+        rd.calculate(table, _term(last_day=date(2026, 12, 11)))
+    message = str(excinfo.value)
+    assert message.startswith(
+        "2 items are due outside the term (2026-09-30 to 2026-12-11) in "
+        "[relative_due_dates.tables.default]. Nothing was written.\n"
+    )
+    assert "  item 'Early' is due 2026-09-29.\n" in message
+    assert "  item 'Late' is due 2026-12-12. Its relative_to is ABSOLUTE_DATE 2026-12-12." in message
+    assert "'First'" not in message and "'Last'" not in message and "'None'" not in message
+    assert message.endswith(
+        "Fix the items (or the term file's first_day / last_day) and run generate-due-dates again."
+    )
+
+
+def test_out_of_term_error_names_the_absolute_date_an_item_counts_from():
+    table = _table(
+        [
+            _absolute("Lab 3", "2026-05-04"),
+            _item("Lab 3 Review", "ASSIGNMENT", ["+3 CALENDAR_DAY"], anchor_name="Lab 3"),
+            _item("Lab 3 Retro", "ASSIGNMENT", ["+1 CALENDAR_DAY"], anchor_name="Lab 3 Review"),
+        ]
+    )
+    with pytest.raises(RelativeDueDatesError) as excinfo:
+        rd.calculate(table, _term())
+    message = str(excinfo.value)
+    assert message.startswith("3 items are due outside the term")
+    assert "item 'Lab 3' is due 2026-05-04. Its relative_to is ABSOLUTE_DATE 2026-05-04." in message
+    assert (
+        "item 'Lab 3 Retro' is due 2026-05-08. It counts from 'Lab 3', whose relative_to "
+        "is ABSOLUTE_DATE 2026-05-04." in message
+    )
+    assert "probably left from an earlier term" in message
+
+
+def test_one_out_of_term_item_is_singular():
+    with pytest.raises(RelativeDueDatesError, match=r"^1 item is due outside the term"):
+        rd.calculate(_table([_absolute("A", "2027-01-04")]), _term())
+
+
+def test_unlock_and_lock_dates_outside_the_term_are_not_checked():
+    dates = _calc(
+        [_absolute("A", "2026-12-18", unlock_offset="-90 CALENDAR_DAY", lock_offset="+7 CALENDAR_DAY")]
+    )["A"]
+    assert dates.unlock_at.startswith("2026-09-19")
+    assert dates.lock_at.startswith("2026-12-25")
 
 
 def test_anchored_to_another_item_counts_from_its_date_not_its_time():
@@ -444,7 +484,7 @@ def test_memoization_and_offsets_are_not_mutated():
 
 def test_calendar_day_offsets_forward_and_back():
     assert _due(_item("A", offsets=["+7 CALENDAR_DAY"])) == "2026-10-07T23:59:00-07:00"
-    assert _due(_item("A", offsets=["-2 CALENDAR_DAY"])) == "2026-09-28T23:59:00-07:00"
+    assert _due(_absolute("A", "2026-10-07", ["-2 CALENDAR_DAY"])) == "2026-10-05T23:59:00-07:00"
     assert _due(_item("A", offsets=["+7 CALENDAR_DAY", "-1 CALENDAR_DAY"])) == (
         "2026-10-06T23:59:00-07:00"
     )
@@ -488,15 +528,16 @@ def test_class_on_noninstructional_days_keeps_the_holiday():
 
 
 def test_negative_class_day_offset_goes_to_the_previous_class_day():
-    # Wed 09-30 -> Mon 09-28 with Mon/Wed; and with Mon/Wed/Fri, still the previous class day.
-    assert _due(_item("A", offsets=["-1 CLASS_DAY"])) == "2026-09-28T23:59:00-07:00"
+    # Wed 10-14 -> Mon 10-12 with Mon/Wed; and with Mon/Wed/Fri, still the previous class day.
+    # (Counted from a mid-term date: a due date before first_day is an error.)
+    assert _due(_absolute("A", "2026-10-14", ["-1 CLASS_DAY"])) == "2026-10-12T23:59:00-07:00"
     assert (
-        _due(_item("A", offsets=["-1 CLASS_DAY"]), days_of_week=["Mon", "Wed", "Fri"])
-        == "2026-09-28T23:59:00-07:00"
+        _due(_absolute("A", "2026-10-14", ["-1 CLASS_DAY"]), days_of_week=["Mon", "Wed", "Fri"])
+        == "2026-10-12T23:59:00-07:00"
     )
     assert (
-        _due(_item("A", offsets=["-2 CLASS_DAY"]), days_of_week=["Mon", "Wed", "Fri"])
-        == "2026-09-25T23:59:00-07:00"
+        _due(_absolute("A", "2026-10-14", ["-2 CLASS_DAY"]), days_of_week=["Mon", "Wed", "Fri"])
+        == "2026-10-09T23:59:00-07:00"
     )
 
 
@@ -633,3 +674,194 @@ def test_none_rules_need_no_due_date_and_do_not_warn():
 def test_type_is_carried_through():
     dates = rd.calculate(_table([_item("Q", type="quiz"), _item("P")]), _term()).dates
     assert [d.type for d in dates] == ["quiz", None]
+
+
+# ---------------------------------------------------------------------------
+# dont_reschedule_dates_before
+# ---------------------------------------------------------------------------
+
+TERM_PATH = Path("course_settings/term_dates.toml")
+
+
+def _cutoff(value):
+    return rd.load_cutoff({"relative_due_dates": {rd.CUTOFF_KEY: value}}, _term(), TERM_PATH)
+
+
+def test_cutoff_key_is_allowed_in_the_section():
+    rd.load_tables({"relative_due_dates": {rd.CUTOFF_KEY: "2026-10-01", "tables": {}}})
+
+
+def test_cutoff_key_on_a_table_is_an_unknown_key():
+    section = {"tables": {"summer8": {"items": [], rd.CUTOFF_KEY: "2026-10-01"}}}
+    with pytest.raises(RelativeDueDatesError, match=r"summer8.*unknown key 'dont_reschedule_dates_before'"):
+        rd.load_tables({"relative_due_dates": section})
+
+
+def test_date_only_cutoff_is_the_end_of_that_day():
+    cutoff = _cutoff("2026-10-01")
+    assert cutoff == datetime(2026, 10, 1, 23, 59, 59, tzinfo=ZoneInfo("America/Los_Angeles"))
+    assert cutoff.utcoffset() == timedelta(hours=-7)
+
+
+def test_cutoff_with_a_time():
+    assert _cutoff("2026-10-01 08:30") == datetime(
+        2026, 10, 1, 8, 30, tzinfo=ZoneInfo("America/Los_Angeles")
+    )
+
+
+def test_cutoff_takes_the_offset_in_force_on_its_date():
+    assert _cutoff("2026-11-02").utcoffset() == timedelta(hours=-8)
+
+
+@pytest.mark.parametrize("settings", [
+    {},
+    {"relative_due_dates": {}},
+    {"relative_due_dates": {rd.CUTOFF_KEY: ""}},
+])
+def test_no_cutoff(settings):
+    assert rd.load_cutoff(settings, _term(), TERM_PATH) is None
+
+
+@pytest.mark.parametrize("value", [
+    "2026-10-01T00:00-07:00",
+    "2026-10-01T00:00",
+    "2026-10-01 00:00:00",
+    "2026-10-01 00:00-07:00",
+    "10/01/2026",
+    " ",
+    date(2026, 10, 1),
+    datetime(2026, 10, 1, 0, 0),
+    20261001,
+])
+def test_unreadable_cutoffs_are_errors(value):
+    with pytest.raises(RelativeDueDatesError) as exc:
+        _cutoff(value)
+    message = str(exc.value)
+    assert rd.CUTOFF_KEY in message and repr(value) in message
+    assert '"YYYY-MM-DD"' in message and '"YYYY-MM-DD HH:MM"' in message
+
+
+@pytest.mark.parametrize("value", ["2026-02-30", "2026-10-01 24:00", "2026-10-01 12:60"])
+def test_impossible_dates_and_times_are_errors(value):
+    with pytest.raises(RelativeDueDatesError, match="not a real date and time"):
+        _cutoff(value)
+
+
+def test_cutoff_from_an_earlier_term_is_an_error():
+    term = _term(first_day=date(2027, 1, 5), last_day=date(2027, 3, 20))
+    with pytest.raises(RelativeDueDatesError) as exc:
+        rd.load_cutoff({"relative_due_dates": {rd.CUTOFF_KEY: "2026-12-18"}}, term, TERM_PATH)
+    message = str(exc.value)
+    assert "'2026-12-18'" in message and str(TERM_PATH) in message
+    assert "2027-01-05" in message and "2027-03-20" in message
+
+
+def test_cutoff_after_the_term_is_an_error():
+    with pytest.raises(RelativeDueDatesError, match="outside the term"):
+        _cutoff("2026-12-19 00:00")
+
+
+@pytest.mark.parametrize("value", ["2026-09-30 00:00", "2026-12-18", "2026-12-18 23:59"])
+def test_cutoffs_at_the_ends_of_the_term_are_accepted(value):
+    assert _cutoff(value) is not None
+
+
+def test_cutoff_just_before_the_term_is_an_error():
+    with pytest.raises(RelativeDueDatesError, match="outside the term"):
+        _cutoff("2026-09-29 23:59")
+
+
+def test_cutoff_as_written():
+    assert rd.cutoff_as_written(_cutoff("2026-10-01")) == "2026-10-01"
+    assert rd.cutoff_as_written(_cutoff("2026-10-01 08:05")) == "2026-10-01 08:05"
+    assert rd.cutoff_as_written(_cutoff("2026-10-01 23:59")) == "2026-10-01 23:59"
+
+
+def test_format_cutoff():
+    assert rd.format_cutoff(_cutoff("2026-10-01")) == "Thu Oct 1, 2026 11:59 PM PDT"
+    assert rd.format_cutoff(_cutoff("2026-11-02 08:05")) == "Mon Nov 2, 2026 8:05 AM PST"
+
+
+# ---------------------------------------------------------------------------
+# default_unlock_time / default_lock_time
+# ---------------------------------------------------------------------------
+
+DUE_MON = ["+1 CLASS_DAY"]  # Monday 2026-10-05 at the default due time
+TIMES = {"default_unlock_time": "00:00", "default_lock_time": "23:59"}
+
+
+def test_default_times_are_loaded_and_a_table_overrides_them():
+    section = {
+        "default_unlock_time": "00:00",
+        "default_lock_time": "23:59",
+        "tables": {
+            "default": {"items": []},
+            "summer8": {"items": [], "default_unlock_time": "08:00"},
+        },
+    }
+    tables = rd.load_tables({"relative_due_dates": section})
+    assert tables["default"].settings.default_unlock_time == time(0, 0)
+    assert tables["summer8"].settings.default_unlock_time == time(8, 0)
+    assert tables["summer8"].settings.default_lock_time == time(23, 59)
+
+
+def test_unreadable_default_time_is_an_error():
+    with pytest.raises(RelativeDueDatesError, match=r"default_lock_time.*'25:00'"):
+        rd.load_tables({"relative_due_dates": {"default_lock_time": "25:00", "tables": {}}})
+
+
+def test_unlock_at_the_start_of_the_day():
+    dates = _calc([_item("A", offsets=DUE_MON, unlock_offset="-7 CALENDAR_DAY")], **TIMES)["A"]
+    assert dates.due_at == "2026-10-05T23:59:00-07:00"
+    assert dates.unlock_at == "2026-09-28T00:00:00-07:00"
+
+
+def test_lock_at_the_end_of_the_day_with_a_different_due_time():
+    term = _term(default_due_time=time(17, 0))
+    dates = _calc([_item("A", offsets=DUE_MON)], term, lock_relative_default="+7 CALENDAR_DAY", **TIMES)["A"]
+    assert dates.due_at == "2026-10-05T17:00:00-07:00"
+    assert dates.lock_at == "2026-10-12T23:59:00-07:00"
+
+
+def test_explicit_due_time_is_kept_for_lock_and_unlock():
+    item = _item("A", offsets=["+1 CLASS_DAY", "17:00 ABS_TIME"], unlock_offset="-7 CALENDAR_DAY")
+    dates = _calc([item], lock_relative_default="+7 CALENDAR_DAY", **TIMES)["A"]
+    assert dates.due_at == "2026-10-05T17:00:00-07:00"
+    assert dates.lock_at == "2026-10-12T17:00:00-07:00"
+    assert dates.unlock_at == "2026-09-28T17:00:00-07:00"
+
+
+def test_the_rules_own_time_wins():
+    item = _item("A", offsets=DUE_MON, lock_offset=["+7 CALENDAR_DAY", "08:00 ABS_TIME"])
+    assert _calc([item], **TIMES)["A"].lock_at == "2026-10-12T08:00:00-07:00"
+    default_rule = {"lock_relative_default": ["+7 CALENDAR_DAY", "08:00 ABS_TIME"]}
+    assert _calc([_item("B", offsets=DUE_MON)], **default_rule, **TIMES)["B"].lock_at == (
+        "2026-10-12T08:00:00-07:00"
+    )
+
+
+def test_without_default_times_nothing_changes():
+    items = [_item("A", offsets=DUE_MON, unlock_offset="-7 CALENDAR_DAY", lock_offset="+7 CALENDAR_DAY")]
+    dates = _calc(items)["A"]
+    assert (dates.unlock_at, dates.lock_at) == (
+        "2026-09-28T23:59:00-07:00", "2026-10-12T23:59:00-07:00",
+    )
+
+
+def test_none_keep_and_no_due_date_are_unaffected():
+    items = [
+        _item("A", offsets=DUE_MON, unlock_offset="NONE"),
+        _item("B", offsets=DUE_MON),
+        _item("C", "NO_DUE_DATE", lock_offset="+7 CALENDAR_DAY"),
+    ]
+    dates = _calc(items, **TIMES)
+    assert dates["A"].unlock_at == "NONE"
+    assert (dates["B"].unlock_at, dates["B"].lock_at) == ("KEEP", "KEEP")
+    assert dates["C"].lock_at == "KEEP"
+
+
+def test_default_time_keeps_the_offset_in_force_on_that_date():
+    # 2026-11-02 is after the end of daylight-saving time
+    item = _item("A", offsets=["+10 CLASS_DAY"], lock_offset="+7 CALENDAR_DAY")
+    dates = _calc([item], **TIMES)["A"]
+    assert dates.lock_at.endswith("T23:59:00-08:00")

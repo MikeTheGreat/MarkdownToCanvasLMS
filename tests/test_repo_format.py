@@ -266,7 +266,11 @@ def test_upgrade_creates_missing_settings(tmp_path):
     data = tomllib.loads((tmp_path / "course_settings/course_settings.toml").read_text())
     assert data["format_version"] == FORMAT_VERSION
     assert len(data["upgraded_by"]) == 1
-    assert data["relative_due_dates"] == {"tables": {"default": {"items": []}}}
+    assert data["relative_due_dates"] == {
+        "default_unlock_time": "00:00",
+        "default_lock_time": "23:59",
+        "tables": {"default": {"items": []}},
+    }
 
 
 def test_upgrade_noop_writes_nothing(tmp_path, capsys):
@@ -739,7 +743,7 @@ def test_migration_3_to_4_snippet_reading_already_works(tmp_path, capsys):
         "pages/unit1/b.md": "[x](../../snippets/policy.md)\n",
         "assets/x.png": "x",
     })
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=4)
     assert _snippet(tmp_path) == text
     assert "NOTICE" not in capsys.readouterr().out
 
@@ -887,7 +891,7 @@ def test_migration_3_to_4_working_includers_win_over_broken_ones(tmp_path, capsy
         "pages/week-1/home.md": "[x](../../snippets/block/front.md)\n",
         "pages/instructor_info/office-hours.md": "oh",
     })
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=4)
     assert _snippet(tmp_path, "snippets/block/front.md") == (
         "[oh](../../pages/instructor_info/office-hours.md)\n"
     )
@@ -1130,7 +1134,7 @@ def test_migration_5_to_6_user_layout_without_question_section(tmp_path, capsys)
     _v5_repo(tmp_path, {
         q: "---\ntitle: Q1\n---\n\n## What days work?\n\nCheck all.\n\n## Answers\n\n1. a\n",
     })
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=6)
     assert (tmp_path / q).read_text() == (
         "---\ntitle: Q1\n---\n\n## What days work?\n\nCheck all.\n\n# Answers\n\n1. a\n"
     )
@@ -1264,7 +1268,7 @@ def test_migration_6_to_7_noop_reports_and_writes_nothing(tmp_path, capsys):
 def test_migration_6_to_7_skips_settings_already_at_7(tmp_path):
     path = _settings(tmp_path, "format_version = 7\nx = 1\n")
     manifest = _manifest(tmp_path, version=6)
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=7)  # this step only
     assert "group_categories" not in path.read_text()
     assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 7}
 
@@ -1275,3 +1279,250 @@ def test_upgrade_from_scratch_gets_group_categories(tmp_path):
     data = tomllib.loads(text)
     assert data["group_categories"] == []
     assert text.index("group_categories") < text.index("[relative_due_dates")
+
+
+# --- migration 7 -> 8 ------------------------------------------------------
+
+_REF = "snippets/inline/CANVAS_COURSE_REFERENCE.md"
+
+
+def _course_reference(repo, text):
+    path = repo / _REF
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _canvas_toml(repo, course_id):
+    path = repo / "course_settings" / "canvas.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f'base_url = "https://school.instructure.com"\ncourse_id = {course_id}\n')
+
+
+def test_migration_7_to_8_removes_the_course_id_and_adds_the_comment(tmp_path, capsys):
+    from markdown_to_canvas.convert import COURSE_REFERENCE_COMMENT
+
+    _settings(tmp_path, "format_version = 7\n")
+    manifest = _manifest(tmp_path, version=7)
+    _canvas_toml(tmp_path, 2735320)
+    ref = _course_reference(tmp_path, "https://cascadia.instructure.com/courses/2735320\n")
+    rf.run_upgrade(tmp_path, target_version=8)
+    assert ref.read_text() == (
+        "https://cascadia.instructure.com/courses/\n" + COURSE_REFERENCE_COMMENT
+    )
+    assert rf.read_repo_version(tmp_path) == 8
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 8}
+    out = capsys.readouterr().out
+    assert "Remove course ID 2735320" in out
+    assert "NOTE" not in out  # canvas.toml names the same course
+
+
+def test_migration_7_to_8_accepts_no_trailing_newline_or_a_trailing_slash(tmp_path):
+    _settings(tmp_path, "format_version = 7\n")
+    ref = _course_reference(tmp_path, "https://x.instructure.com/courses/12/")
+    rf.run_upgrade(tmp_path)
+    assert ref.read_text().splitlines()[0] == "https://x.instructure.com/courses/"
+
+
+def test_migration_7_to_8_notes_a_course_id_that_differs_from_canvas_toml(tmp_path, capsys):
+    _settings(tmp_path, "format_version = 7\n")
+    _canvas_toml(tmp_path, 999)
+    _course_reference(tmp_path, "https://x.instructure.com/courses/12\n")
+    rf.run_upgrade(tmp_path)
+    out = capsys.readouterr().out
+    assert "NOTE" in out
+    assert "course_id = 999" in out
+    assert "point to course 999" in out
+
+
+def test_migration_7_to_8_leaves_a_file_already_in_the_new_form(tmp_path, capsys):
+    _settings(tmp_path, "format_version = 7\n")
+    text = "https://x.instructure.com/courses/\n<!-- my own note -->\n"
+    ref = _course_reference(tmp_path, text)
+    rf.run_upgrade(tmp_path, target_version=8)
+    assert ref.read_text() == text
+    assert "already ends in /courses/" in capsys.readouterr().out
+    assert rf.read_repo_version(tmp_path) == 8
+
+
+def test_migration_7_to_8_without_the_snippet_changes_nothing_else(tmp_path):
+    _settings(tmp_path, "format_version = 7\n")
+    rf.run_upgrade(tmp_path, target_version=8)
+    assert not (tmp_path / _REF).exists()
+    assert rf.read_repo_version(tmp_path) == 8
+
+
+@pytest.mark.parametrize("text", [
+    "https://x.instructure.com/courses/12/grades\n",
+    "https://x.instructure.com/\n",
+    "https://x.instructure.com/courses/12\nsecond line\n",
+    "",
+])
+def test_migration_7_to_8_stops_on_an_unrecognized_snippet(tmp_path, text):
+    settings = _settings(tmp_path, "format_version = 7\n")
+    manifest = _manifest(tmp_path, version=7)
+    ref = _course_reference(tmp_path, text)
+    with pytest.raises(RepoFormatError) as exc:
+        rf.run_upgrade(tmp_path)
+    message = str(exc.value)
+    assert _REF in message
+    assert "ending in /courses/" in message
+    assert "run `markdown-to-canvas upgrade` again" in message
+    assert ref.read_text() == text
+    assert settings.read_text() == "format_version = 7\n"
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 7}
+
+
+def test_migration_7_to_8_noop_reports_and_writes_nothing(tmp_path, capsys):
+    _settings(tmp_path, "format_version = 7\n")
+    ref = _course_reference(tmp_path, "https://x.instructure.com/courses/12\n")
+    rf.run_upgrade(tmp_path, noop=True)
+    assert ref.read_text() == "https://x.instructure.com/courses/12\n"
+    out = capsys.readouterr().out
+    assert "Remove course ID 12" in out
+    assert "no files were written" in out
+
+
+def test_migration_7_to_8_skips_settings_already_at_8(tmp_path):
+    _settings(tmp_path, "format_version = 8\n")
+    manifest = _manifest(tmp_path, version=7)
+    text = "https://x.instructure.com/courses/12\n"
+    ref = _course_reference(tmp_path, text)
+    rf.run_upgrade(tmp_path, target_version=8)
+    assert ref.read_text() == text
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 8}
+
+
+# --- migration 8 -> 9 ------------------------------------------------------
+
+_V8_BODY = """\
+# my settings
+title = "Course"
+
+[relative_due_dates]
+# --- Relative due dates, used by `generate-due-dates` ---
+days_of_week = ["Mon", "Wed"]
+
+[relative_due_dates.tables.default]
+items = []
+"""
+
+_CUTOFF_LINE = '# dont_reschedule_dates_before = "YYYY-MM-DD"\n'
+
+
+def _without_upgraded_by(text):
+    return "".join(l for l in text.splitlines(keepends=True) if not l.startswith("upgraded_by"))
+
+
+def _added_block():
+    from markdown_to_canvas.relative_dates import CUTOFF_HELP, DEFAULT_TIMES_HELP
+
+    return (
+        CUTOFF_HELP + "\n" + DEFAULT_TIMES_HELP
+        + 'default_unlock_time = "00:00"\ndefault_lock_time = "23:59"\n\n'
+    )
+
+
+def test_migration_8_to_9_adds_the_cutoff_and_default_times(tmp_path, capsys):
+    path = _settings(tmp_path, "format_version = 8\n" + _V8_BODY)
+    manifest = _manifest(tmp_path, version=8)
+    before = tomllib.loads(path.read_text())
+    rf.run_upgrade(tmp_path)
+    text = path.read_text()
+    assert "[relative_due_dates]\n" + _added_block() + "# --- Relative due dates" in text
+    assert text.startswith("format_version = 9\n") and "\n# my settings\n" in text
+    after = tomllib.loads(text)
+    assert after.pop("format_version") == 9 and before.pop("format_version") == 8
+    after.pop("upgraded_by")
+    assert after["relative_due_dates"].pop("default_unlock_time") == "00:00"
+    assert after["relative_due_dates"].pop("default_lock_time") == "23:59"
+    assert after == before
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 9}
+    out = capsys.readouterr().out
+    assert "Add a commented-out dont_reschedule_dates_before line" in out
+    assert 'Add default_unlock_time = "00:00"' in out and 'Add default_lock_time = "23:59"' in out
+
+
+def test_migration_8_to_9_leaves_a_section_that_already_has_everything(tmp_path, capsys):
+    existing = (
+        'dont_reschedule_dates_before = "2026-10-01"\n'
+        'default_unlock_time = "08:00"\ndefault_lock_time = "17:00"\n'
+    )
+    body = _V8_BODY.replace('days_of_week = ["Mon", "Wed"]\n', 'days_of_week = ["Mon", "Wed"]\n' + existing)
+    path = _settings(tmp_path, "format_version = 8\n" + body)
+    rf.run_upgrade(tmp_path)
+    assert _without_upgraded_by(path.read_text()) == "format_version = 9\n" + body
+    out = capsys.readouterr().out
+    assert "already mentions dont_reschedule_dates_before" in out
+    assert "already sets default_unlock_time" in out and "already sets default_lock_time" in out
+
+
+def test_migration_8_to_9_commented_cutoff_counts_as_present(tmp_path):
+    body = _V8_BODY.replace('days_of_week = ["Mon", "Wed"]\n', 'days_of_week = ["Mon", "Wed"]\n' + _CUTOFF_LINE)
+    path = _settings(tmp_path, "format_version = 8\n" + body)
+    rf.run_upgrade(tmp_path)
+    assert path.read_text().count("dont_reschedule_dates_before") == 1
+    assert tomllib.loads(path.read_text())["relative_due_dates"]["default_unlock_time"] == "00:00"
+
+
+def test_migration_8_to_9_keeps_a_default_time_already_set(tmp_path, capsys):
+    from markdown_to_canvas.relative_dates import CUTOFF_HELP, DEFAULT_TIMES_HELP
+
+    body = _V8_BODY.replace('days_of_week = ["Mon", "Wed"]\n', 'days_of_week = ["Mon", "Wed"]\ndefault_lock_time = "17:00"\n')
+    path = _settings(tmp_path, "format_version = 8\n" + body)
+    rf.run_upgrade(tmp_path)
+    text = path.read_text()
+    assert "[relative_due_dates]\n" + CUTOFF_HELP + "\n" + DEFAULT_TIMES_HELP + 'default_unlock_time = "00:00"\n\n' in text
+    section = tomllib.loads(text)["relative_due_dates"]
+    assert (section["default_unlock_time"], section["default_lock_time"]) == ("00:00", "17:00")
+    assert "already sets default_lock_time" in capsys.readouterr().out
+
+
+def test_migration_8_to_9_adds_a_header_when_only_subtables_exist(tmp_path, capsys):
+    body = 'title = "Course"\n\n[relative_due_dates.tables.default]\nitems = []\n'
+    path = _settings(tmp_path, "format_version = 8\n" + body)
+    rf.run_upgrade(tmp_path)
+    assert _without_upgraded_by(path.read_text()) == (
+        'format_version = 9\ntitle = "Course"\n\n[relative_due_dates]\n' + _added_block()
+        + "[relative_due_dates.tables.default]\nitems = []\n"
+    )
+    assert "Add a [relative_due_dates] header" in capsys.readouterr().out
+
+
+def test_migration_8_to_9_without_a_relative_section(tmp_path, capsys):
+    path = _settings(tmp_path, 'format_version = 8\ntitle = "Course"\n')
+    rf.run_upgrade(tmp_path)
+    assert _without_upgraded_by(path.read_text()) == 'format_version = 9\ntitle = "Course"\n'
+    assert "NOTICE" in capsys.readouterr().out
+
+
+def test_migration_8_to_9_noop_reports_and_writes_nothing(tmp_path, capsys):
+    path = _settings(tmp_path, "format_version = 8\n" + _V8_BODY)
+    before = path.read_bytes()
+    rf.run_upgrade(tmp_path, noop=True)
+    assert path.read_bytes() == before
+    out = capsys.readouterr().out
+    assert "Add a commented-out dont_reschedule_dates_before line" in out
+    assert 'Add default_lock_time = "23:59"' in out
+    assert "no files were written" in out
+
+
+def test_migration_8_to_9_skips_settings_already_at_9(tmp_path):
+    path = _settings(tmp_path, "format_version = 9\n" + _V8_BODY)
+    manifest = _manifest(tmp_path, version=8)
+    rf.run_upgrade(tmp_path)
+    assert _CUTOFF_LINE not in path.read_text()
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 9}
+
+
+def test_version_8_tool_refuses_a_version_9_repo(tmp_path, monkeypatch):
+    _settings(tmp_path, "format_version = 9\n")
+    monkeypatch.setattr(rf, "FORMAT_VERSION", 8)
+    with pytest.raises(RepoFormatError, match="Update markdown-to-canvas"):
+        rf.check_repo_format(tmp_path)
+
+
+def test_upgrade_from_scratch_gets_the_commented_cutoff(tmp_path):
+    rf.run_upgrade(tmp_path)
+    text = (tmp_path / "course_settings/course_settings.toml").read_text()
+    assert _CUTOFF_LINE in text[text.index("[relative_due_dates]"):]

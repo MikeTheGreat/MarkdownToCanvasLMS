@@ -1,0 +1,121 @@
+[_repo_format]
+format_version = 9
+
+[_canvas_course]
+canvas_type = "course_identity"
+base_url = "https://cascadia.instructure.com"
+course_id = 2758791
+course_name = "TestGH2CCourse"
+recorded_at = "2026-10-03T17:48:06.042754+00:00"
+
+["course_settings/course_settings.toml"]
+canvas_id = 0
+canvas_type = "course_settings"
+last_synced = "2026-10-03T18:07:18.907343+00:00"
+
+["course_settings/course_settings.toml".section_hashes]
+grading_standards = "43d9bcb84acb9bbb"
+metadata = "44136fa355b3678a"
+dashboard_image = "43d9bcb84acb9bbb"
+assignment_groups = "43d9bcb84acb9bbb"
+late_policy = "43d9bcb84acb9bbb"
+default_post_policy = "43d9bcb84acb9bbb"
+tab_configuration = "43d9bcb84acb9bbb"
+front_page = "43d9bcb84acb9bbb"
+
+["assignments/lab-1.md"]
+canvas_id = 42323567
+canvas_type = "assignment"
+last_synced = "2026-10-03T17:48:07.859249+00:00"
+
+["assignments/lab-1.md".resolved_dates]
+unlock_at = "2026-10-01T23:59:00-07:00"
+due_at = "2026-10-06T23:59:00-07:00"
+lock_at = "2026-10-13T23:59:00-07:00"
+
+["assignments/problem-set-1.md"]
+canvas_id = 42323568
+canvas_type = "assignment"
+last_synced = "2026-10-03T17:48:08.453564+00:00"
+
+["assignments/problem-set-1.md".resolved_dates]
+unlock_at = "NONE"
+due_at = "2026-09-23T23:59:00-07:00"
+lock_at = "2026-09-30T23:59:00-07:00"
+
+["assignments/problem-set-2.md"]
+canvas_id = 42323569
+canvas_type = "assignment"
+last_synced = "2026-10-03T17:48:09.017201+00:00"
+
+["assignments/problem-set-2.md".resolved_dates]
+unlock_at = "NONE"
+due_at = "2026-09-30T23:59:00-07:00"
+lock_at = "2026-10-12T23:59:00-07:00"
+
+["assignments/problem-set-3.md"]
+canvas_id = 42323570
+canvas_type = "assignment"
+last_synced = "2026-10-03T17:48:09.794086+00:00"
+
+["assignments/problem-set-3.md".resolved_dates]
+unlock_at = "2026-09-28T23:59:00-07:00"
+due_at = "2026-10-07T23:59:00-07:00"
+lock_at = "2026-10-14T23:59:00-07:00"
+
+["assignments/problem-set-4.md"]
+canvas_id = 42323571
+canvas_type = "assignment"
+last_synced = "2026-10-03T17:48:10.396455+00:00"
+
+["assignments/problem-set-4.md".resolved_dates]
+unlock_at = "2026-10-07T00:00:00-07:00"
+due_at = "2026-10-14T23:59:00-07:00"
+lock_at = "2026-10-21T23:59:00-07:00"
+
+["discussions/week-1-discussion.md"]
+canvas_id = 21873380
+canvas_type = "discussion"
+last_synced = "2026-10-03T17:48:11.668638+00:00"
+
+["discussions/week-1-discussion.md".resolved_dates]
+unlock_at = "NONE"
+due_at = "2026-09-28T23:59:00-07:00"
+lock_at = "2026-10-05T23:59:00-07:00"
+
+["quizzes/quiz-1/quiz-1.md"]
+canvas_id = 11028866
+canvas_type = "quiz"
+last_synced = "2026-10-03T17:48:14.466301+00:00"
+
+["quizzes/quiz-1/quiz-1.md".canvas_question_ids]
+"questions/what-is-2-plus-2.md" = 207041643
+
+["quizzes/quiz-1/quiz-1.md".resolved_dates]
+unlock_at = "NONE"
+due_at = "2026-10-12T23:59:00-07:00"
+lock_at = "2026-10-19T23:59:00-07:00"
+
+["assignments/problem-set-5.md"]
+canvas_id = 42323590
+canvas_type = "assignment"
+last_synced = "2026-10-03T18:07:19.917683+00:00"
+
+["assignments/problem-set-5.md".resolved_dates]
+unlock_at = "2026-10-14T17:00:00-07:00"
+due_at = "2026-10-21T17:00:00-07:00"
+lock_at = "2026-10-28T17:00:00-07:00"
+
+["pages/week-1-homepage.md"]
+canvas_id = 42494571
+canvas_type = "page"
+last_synced = "2026-10-04T17:32:03.680481+00:00"
+canvas_url = "week-1-homepage"
+
+["modules/week-1.md"]
+canvas_id = 11724188
+canvas_type = "module"
+last_synced = "2026-10-04T17:32:07.001135+00:00"
+
+["modules/week-1.md".canvas_item_ids]
+"pages/week-1-homepage.md" = 109194372

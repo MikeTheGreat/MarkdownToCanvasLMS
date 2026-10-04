@@ -815,3 +815,34 @@ def test_stage_content_renders_a_group_discussion_like_any_other(tmp_path):
         '---\ntitle: Team\npublished: true\ngroup_category_id: "Project Groups"\n---\n\nPlan.\n'
     )
     assert publish.stage_content_markdown(discussion, tmp_path) == "# Team\n\nPlan.\n"
+
+
+# ---------------------------------------------------------------------------
+# CANVAS_COURSE_REFERENCE: the config's course_id completes the URL
+# ---------------------------------------------------------------------------
+
+def _course_reference_repo(tmp_path):
+    repo = _assignment_repo(
+        tmp_path, "[Grades]($../snippets/inline/CANVAS_COURSE_REFERENCE.md$/grades)"
+    )
+    ref = repo / "snippets" / "inline" / "CANVAS_COURSE_REFERENCE.md"
+    ref.parent.mkdir(parents=True)
+    ref.write_text("https://school.instructure.com/courses/\n<!-- note -->\n")
+    return repo
+
+
+def test_stage_appends_the_config_course_id(tmp_path, capsys):
+    from markdown_to_canvas.config import Config
+
+    repo = _course_reference_repo(tmp_path)
+    cfg = Config(base_url="", course_id=31337, api_token="")
+    publish.stage(repo, tmp_path / "staging", cfg)
+    staged = (tmp_path / "staging" / "docs" / "assignments" / "hw.md").read_text()
+    assert "https://school.instructure.com/courses/31337/grades" in staged
+    assert "no course_id" not in capsys.readouterr().out
+
+
+def test_stage_without_course_id_warns(tmp_path, capsys):
+    repo = _course_reference_repo(tmp_path)
+    publish.stage(repo, tmp_path / "staging")
+    assert "WARNING: no course_id" in capsys.readouterr().out

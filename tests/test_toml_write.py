@@ -125,7 +125,7 @@ def test_relative_due_dates_items_are_inline_rows_inside_nested_tables(size: str
 
 _WITH_TABLES = """\
 # Course settings
-format_version = 7
+format_version = 8
 title = "Course"
 
 [[assignment_groups]]
@@ -138,7 +138,7 @@ def test_insert_top_level_key_goes_above_the_first_table() -> None:
     w.insert_top_level_key(doc, "group_categories", w.scalar_array([]))
     text = tomlkit.dumps(doc)
     assert text == (
-        "# Course settings\nformat_version = 7\ntitle = \"Course\"\n"
+        "# Course settings\nformat_version = 8\ntitle = \"Course\"\n"
         "group_categories = []\n\n[[assignment_groups]]\ntitle = \"Labs\"\n"
     )
     assert tomllib.loads(text)["group_categories"] == []

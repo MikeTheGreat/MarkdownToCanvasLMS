@@ -1,5 +1,30 @@
 # Possible Future Features
 
+## Features I'm not sure I actually need
+
+Features that are already built but may not be worth keeping. If one turns out
+to be unused, consider removing it to reduce the amount of code and
+documentation to maintain.
+
+### `generate-due-dates`: `dont_reschedule_dates_before`
+
+Added 2026-10-03 (OpenSpec change
+`openspec/changes/archive/2026-10-03-dont-reschedule-past-assignments/`). An
+optional key in `[relative_due_dates]` of `course_settings.toml`. When
+`generate-due-dates` runs, any `unlock_at` / `due_at` / `lock_at` field whose
+current value in `due_dates` is at or before the cutoff is left unchanged, so a
+mid-term regeneration doesn't move dates that have already passed. It also
+added the inconsistent-entry check (an entry left unchanged and reported as an
+error when keeping some fields would put `unlock_at` after `due_at`, etc.), the
+kept-items summary line, and `generate-due-dates --verbose`.
+
+Removing it is a breaking change: the key arrived with format version 9
+(migration 8 -> 9 writes it commented out into existing repos, and `import`
+writes it too), so dropping it needs a format bump and a migration that removes
+the line, per the CLAUDE.md rule. The `default_unlock_time` /
+`default_lock_time` settings came in the same change and the same migration but
+are a separate feature; removing the cutoff doesn't mean removing those.
+
 ## Other places to look for TODO items
 
 - Look in the todo/ folder for more items!
@@ -441,6 +466,23 @@ When implemented, the suggested approach:
 - Use `canvasapi` directly in the test assertions to fetch each uploaded item and verify its content, metadata, and published state
 - Run this suite manually or in a separate CI job gated on `CANVAS_API_TOKEN` being present — not on every push
 
+A possible complement: have Claude check results in the Canvas web UI through
+Claude in Chrome (the browser extension), which shows what students actually
+see rather than what the API reports. This was tried on 2026-09-30 for a
+Gradescope autograder in `~/Dropbox/Work/Misc/2026-2027/Placement_Test/`; see
+the "Definition of done" section of its `CLAUDE.md`. What was learned there:
+
+- The session must be started with `claude --chrome` (or resumed with
+  `claude --chrome --resume <id>`). A background job started without it has
+  no browser tools, and `/resume` inside a `--chrome` session attaches to such
+  a job instead of loading the conversation into the `--chrome` process.
+- File uploads work with the `file_upload` tool, including into a hidden
+  Dropzone `<input type=file>` once it is given an `aria-label` so `find` can
+  locate it.
+- It is slow (roughly a minute per submission), screenshots sometimes time
+  out, and the extension disconnects when the laptop suspends. Use it as an
+  occasional spot check that the user approves each time, not a routine step.
+
 ## Angle-bracket URL syntax not handled in some Markdown parsers
 
 Markdown allows `[text](<url>)` to wrap a URL in angle brackets (typically used
@@ -499,9 +541,21 @@ course. Things to look at once it has been used for a term or two:
   `KEEP` and a warning today.
 - Whether a no-rule item should leave an existing `CREATE_NONE_THEN_KEEP` or
   hand-set lock date alone instead of overwriting it with `KEEP`.
+- The time of day of unlock and lock dates is now settable
+  (`default_unlock_time` / `default_lock_time`, added 2026-10-03); revisit
+  whether that is enough once it has been used for a term.
 - `generate-due-dates` for repos that drive several Canvas sections on
   different term lengths: `due_dates` is one array shared by all sections, so a
   run yields one set of dates.
+
+## `generate-due-dates`: command-line override for `dont_reschedule_dates_before`
+
+`dont_reschedule_dates_before` in `[relative_due_dates]` makes
+`generate-due-dates` leave dates in `due_dates` on or before the cutoff alone.
+It is read only from `course_settings.toml`. A flag such
+as `--dont-reschedule-before DATETIME` could override it for one run, and
+`--dont-reschedule-before none` could ignore it, without editing the file.
+Deferred until the key has been used for a term.
 
 ## Announcements: possible follow-ups
 

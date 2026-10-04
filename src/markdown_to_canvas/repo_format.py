@@ -26,11 +26,12 @@ from tomlkit.items import AoT, Array, InlineTable, Table
 
 from . import manifest as manifest_lib
 from . import toml_write
+from .relative_dates import CUTOFF_HELP, CUTOFF_KEY, DEFAULT_TIMES, DEFAULT_TIMES_HELP
 
 #: The format version this tool reads and writes. Increase it (and add a
 #: migration to MIGRATIONS) whenever a change makes the tool read an existing
 #: repo file differently. See CLAUDE.md.
-FORMAT_VERSION = 7
+FORMAT_VERSION = 9
 
 SETTINGS_RELPATH = Path("course_settings") / "course_settings.toml"
 
@@ -546,6 +547,180 @@ def _migrate_6_to_7(state: UpgradeState) -> list[str]:
     return lines
 
 
+#: The course-reference snippet (see convert.COURSE_REFERENCE_RELPATH).
+COURSE_REFERENCE_SNIPPET_RELPATH = Path("snippets") / "inline" / "CANVAS_COURSE_REFERENCE.md"
+
+_OLD_COURSE_REFERENCE_RE = re.compile(r"(https?://\S+/courses/)(\d+)/?")
+_NEW_COURSE_REFERENCE_RE = re.compile(r"https?://\S+/courses/")
+
+
+def _canvas_toml_course_id(repo: Path) -> int | None:
+    """course_id from course_settings/canvas.toml, or None when unavailable."""
+    path = repo / "course_settings" / "canvas.toml"
+    try:
+        with open(path, "rb") as f:
+            value = tomllib.load(f).get("course_id")
+        return int(value) if value is not None else None
+    except (OSError, tomllib.TOMLDecodeError, TypeError, ValueError):
+        return None
+
+
+def _migrate_7_to_8(state: UpgradeState) -> list[str]:
+    """The course-reference snippet loses its course ID; stamp the manifests.
+
+    Format 8 expands snippets/inline/CANVAS_COURSE_REFERENCE.md to its first
+    line with the config's course_id appended, and ignores the rest of the
+    file. ``https://host/courses/12345`` becomes ``https://host/courses/``
+    followed by the explanatory comment `import` writes. A file already in
+    the new form is left alone; any other content stops the upgrade, because
+    guessing would silently change every link built on it.
+    """
+    from .convert import COURSE_REFERENCE_COMMENT
+
+    lines: list[str] = []
+    path = state.repo / COURSE_REFERENCE_SNIPPET_RELPATH
+    rel = COURSE_REFERENCE_SNIPPET_RELPATH.as_posix()
+    if path.exists() and read_repo_version(state.repo) < 8:
+        text = path.read_text(encoding="utf-8")
+        first, _, rest = text.strip().partition("\n")
+        first = first.strip()
+        old = _OLD_COURSE_REFERENCE_RE.fullmatch(first)
+        if _NEW_COURSE_REFERENCE_RE.fullmatch(first):
+            lines.append(f"{rel} already ends in /courses/; left as it is")
+        elif old and not rest.strip():
+            prefix, old_id = old.group(1), int(old.group(2))
+            state.pending_writes[path] = f"{prefix}\n{COURSE_REFERENCE_COMMENT}"
+            lines.append(
+                f"Remove course ID {old_id} from {rel} (it is now taken from "
+                f"canvas.toml or --config) and add a comment explaining the file"
+            )
+            config_id = _canvas_toml_course_id(state.repo)
+            if config_id is not None and config_id != old_id:
+                lines.append(
+                    f"NOTE: {rel} named course {old_id}, but "
+                    f"course_settings/canvas.toml has course_id = {config_id}; "
+                    f"links built on the snippet will now point to course {config_id}"
+                )
+        else:
+            raise RepoFormatError(
+                f"{path}: format version 8 uses only the first line of this "
+                f"file, the course URL without its ID (for example "
+                f"https://yourschool.instructure.com/courses/), and appends the "
+                f"course_id from canvas.toml. upgrade expected the file to hold "
+                f"a single URL ending in /courses/<number>, but it contains:\n"
+                f"{text.rstrip()}\n"
+                f"Edit the file so its first line is the course URL ending in "
+                f"/courses/ (anything after the first line is ignored), then run "
+                f"`markdown-to-canvas upgrade` again."
+            )
+    for manifest_path in state.manifests:
+        lines.append(f"Record format version 8 in {manifest_path.name}")
+    return lines
+
+
+_RELATIVE_HEADER_RE = re.compile(
+    rf"^[ \t]*\[[ \t]*{RELATIVE_DUE_DATES_KEY}[ \t]*\][ \t]*(#.*)?$", re.MULTILINE
+)
+_ANY_HEADER_RE = re.compile(r"^[ \t]*\[", re.MULTILINE)
+#: A subtable header such as [relative_due_dates.tables.default].
+_RELATIVE_SUBTABLE_RE = re.compile(
+    rf"^[ \t]*\[\[?[ \t]*{RELATIVE_DUE_DATES_KEY}[ \t]*\.", re.MULTILINE
+)
+
+
+def _with_new_settings(text: str) -> tuple[str | None, list[str], list[str]]:
+    """``text`` with format 9's settings added to [relative_due_dates].
+
+    Returns (new text or None when nothing is added, messages, keys added). The
+    commented-out cutoff is added unless a line of the section mentions it, and
+    each default time unless the section sets that key. A section that exists
+    only through its subtables (migration 1 -> 2 wrote just
+    ``[relative_due_dates.tables.default]``) gets a ``[relative_due_dates]``
+    header, placed before its first subtable.
+    """
+    header = _RELATIVE_HEADER_RE.search(text)
+    if header is None:
+        subtable = _RELATIVE_SUBTABLE_RE.search(text)
+        if subtable is None:
+            return None, [
+                f"NOTICE: {SETTINGS_RELPATH.name} has no [{RELATIVE_DUE_DATES_KEY}] section; "
+                f"{CUTOFF_KEY}, {', '.join(DEFAULT_TIMES)} were not added"
+            ], []
+        body = ""
+    else:
+        next_header = _ANY_HEADER_RE.search(text, header.end())
+        body = text[header.end(): next_header.start() if next_header else len(text)]
+    section = tomllib.loads(text).get(RELATIVE_DUE_DATES_KEY, {})
+
+    messages: list[str] = []
+    blocks: list[str] = []
+    if CUTOFF_KEY in body:
+        messages.append(f"[{RELATIVE_DUE_DATES_KEY}] already mentions {CUTOFF_KEY}; left as it is")
+    else:
+        blocks.append(CUTOFF_HELP)
+        messages.append(f"Add a commented-out {CUTOFF_KEY} line to [{RELATIVE_DUE_DATES_KEY}]")
+    added: list[str] = []
+    times = ""
+    for key, value in DEFAULT_TIMES.items():
+        if key in section:
+            messages.append(f"[{RELATIVE_DUE_DATES_KEY}] already sets {key}; left as it is")
+        else:
+            times += f'{key} = "{value}"\n'
+            added.append(key)
+            messages.append(f'Add {key} = "{value}" to [{RELATIVE_DUE_DATES_KEY}]')
+    if times:
+        blocks.append(DEFAULT_TIMES_HELP + times)
+    if not blocks:
+        return None, messages, []
+    insert = "\n".join(blocks) + "\n"
+
+    if header is None:
+        at = subtable.start()
+        messages.insert(0, f"Add a [{RELATIVE_DUE_DATES_KEY}] header")
+        return text[:at] + f"[{RELATIVE_DUE_DATES_KEY}]\n" + insert + text[at:], messages, added
+    # Just after the header line (and its newline, when there is one).
+    after = text[: header.end()].rstrip("\r") + "\n"
+    rest = text[header.end():].removeprefix("\n")
+    return after + insert + rest, messages, added
+
+
+def _migrate_8_to_9(state: UpgradeState) -> list[str]:
+    """Add format 9's [relative_due_dates] settings; stamp the manifests.
+
+    Format 9 adds ``dont_reschedule_dates_before`` (written commented out) and
+    ``default_unlock_time`` / ``default_lock_time`` (written as real values) to
+    ``[relative_due_dates]``; an older tool would reject them as unknown keys.
+    The lines go directly under the section header (text-level, so the rest of
+    the file is byte-identical), and the result is re-parsed to make sure
+    nothing but the two keys was added.
+    """
+    lines: list[str] = []
+    if settings_path(state.repo).exists() and read_repo_version(state.repo) < 9:
+        text = tomlkit.dumps(state.settings_doc)
+        new_text, messages, added = _with_new_settings(text)
+        if new_text is None:
+            lines.extend(messages)
+        else:
+            try:
+                new_data = tomllib.loads(new_text)
+                for key in added:
+                    del new_data[RELATIVE_DUE_DATES_KEY][key]
+                same = new_data == tomllib.loads(text)
+            except (tomllib.TOMLDecodeError, KeyError):
+                same = False
+            if same:
+                state.settings_doc = tomlkit.parse(new_text)
+                lines.extend(messages)
+            else:
+                lines.append(
+                    f"NOTICE: could not add {CUTOFF_KEY} and the default unlock and lock "
+                    f"times to [{RELATIVE_DUE_DATES_KEY}] (unusual layout); left unchanged"
+                )
+    for manifest_path in state.manifests:
+        lines.append(f"Record format version 9 in {manifest_path.name}")
+    return lines
+
+
 #: Ordered migrations, keyed by the version they migrate *from*.
 MIGRATIONS: dict[int, Migration] = {
     0: _migrate_0_to_1,
@@ -555,6 +730,8 @@ MIGRATIONS: dict[int, Migration] = {
     4: _migrate_4_to_5,
     5: _migrate_5_to_6,
     6: _migrate_6_to_7,
+    7: _migrate_7_to_8,
+    8: _migrate_8_to_9,
 }
 
 

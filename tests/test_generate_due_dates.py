@@ -142,7 +142,7 @@ def test_old_repo_is_refused(tmp_path):
     root = _repo(tmp_path)
     _write(
         root / "course_settings" / "course_settings.toml",
-        _settings_text(root).replace("format_version = 7", "format_version = 1"),
+        _settings_text(root).replace("format_version = 9", "format_version = 1"),
     )
     with pytest.raises(RepoFormatError):
         gd.plan_generation(root, _term(tmp_path))
@@ -379,6 +379,26 @@ def test_term_file_with_relative_table_is_rejected_by_the_command(tmp_path):
     assert "Traceback" not in result.output
 
 
+# --- due dates outside the term -------------------------------------------------
+
+
+@pytest.mark.parametrize("flag", ["--yes", "--noop"])
+def test_due_date_outside_the_term_stops_the_run_and_writes_nothing(tmp_path, flag):
+    stale = SETTINGS.replace(
+        '    { name = "Midterm Quiz"',
+        '    { name = "Week 1 Discussion Reply", relative_to = { type = "ABSOLUTE_DATE", date = "2026-05-04" } },\n'
+        '    { name = "Midterm Quiz"',
+    )
+    root = _repo(tmp_path, stale)
+    before = _settings_text(root)
+    result = _run(root, _term(tmp_path), flag)
+    assert result.exit_code == 1
+    assert "1 item is due outside the term (2026-09-30 to 2026-12-18)" in result.output
+    assert "Its relative_to is ABSOLUTE_DATE 2026-05-04." in result.output
+    assert "Relative table:" not in result.output  # stopped before the plan was shown
+    assert _settings_text(root) == before
+
+
 # --- warnings ----------------------------------------------------------------
 
 
@@ -513,7 +533,8 @@ def test_field_lines_are_alphabetical_and_datetimes_line_up():
         ],
     )
     lines = [text for text, _ in gd.render_plan(plan)]
-    assert lines[1:] == [
+    assert lines[0].startswith("Not rescheduling dates: no cutoff")
+    assert lines[2:] == [
         "Space Needle:",
         "\tdue_at: 2026-04-18T06:59:00",
         "\t     -> 2026-10-21T23:59:00-07:00",
@@ -521,4 +542,296 @@ def test_field_lines_are_alphabetical_and_datetimes_line_up():
         "\tunlock_at: CREATE_NONE_THEN_KEEP -> KEEP",
     ]
     # the two date values start in the same column
-    assert lines[2].index("2026") == lines[3].index("2026")
+    assert lines[3].index("2026") == lines[4].index("2026")
+
+
+# --- dont_reschedule_dates_before ---------------------------------------------
+
+PS = "Week 1 Problem Set"  # computed: unlock KEEP, due 2026-10-05, lock 2026-10-12 (23:59)
+DISC = "Week 1 Discussion"  # computed: unlock NONE, due 2026-10-07, lock 2026-10-14
+
+
+def _at(day: str) -> str:
+    """23:59 Pacific on ``day`` (MM-DD in 2026), as generate-due-dates writes it."""
+    return f"2026-{day}T23:59:00-07:00"
+
+
+def _cutoff_settings(cutoff: str | None, rows: list[str], extra_items: str = "") -> str:
+    cutoff_line = f'dont_reschedule_dates_before = "{cutoff}"\n' if cutoff is not None else ""
+    return (
+        '# course settings\ntitle = "Course"\n\ndue_dates = [\n'
+        + "".join(f"    {r},\n" for r in rows)
+        + "]\n\n[relative_due_dates]\n"
+        + cutoff_line
+        + 'days_of_week = ["Mon", "Wed"]\nlock_relative_default = "+7 CALENDAR_DAY"\n\n'
+        + "[relative_due_dates.tables.default]\nitems = [\n"
+        + f'    {{ name = "{PS}", relative_to = {{ type = "START_OF_QUARTER" }}, offsets = ["+1 CLASS_DAY"] }},\n'
+        + f'    {{ name = "{DISC}", type = "discussion", relative_to = {{ type = "START_OF_QUARTER" }}, offsets = ["+2 CLASS_DAY"], unlock_offset = "NONE" }},\n'
+        + extra_items
+        + "]\n"
+    )
+
+
+def _row(name, unlock, due, lock, kind=None):
+    type_part = f', type = "{kind}"' if kind else ""
+    return f'{{ name = "{name}"{type_part}, unlock_at = "{unlock}", due_at = "{due}", lock_at = "{lock}" }}'
+
+
+def _cutoff_plan(tmp_path, cutoff, rows, extra_items=""):
+    root = _repo(tmp_path, _cutoff_settings(cutoff, rows, extra_items))
+    return root, gd.plan_generation(root, _term(tmp_path))
+
+
+def _change(plan, name):
+    return next(c for c in plan.changes if c.name == name)
+
+
+def test_past_item_is_untouched(tmp_path):
+    root, plan = _cutoff_plan(
+        tmp_path, "2026-10-01", [_row(PS, _at("09-24"), _at("09-30"), _at("10-01"))]
+    )
+    change = _change(plan, PS)
+    assert change.kind == "unchanged" and change.fields == {}
+    assert list(change.kept) == ["unlock_at", "due_at", "lock_at"]
+    assert plan.not_rescheduled == [change]
+
+
+def test_due_exactly_at_the_cutoff_is_kept(tmp_path):
+    root, plan = _cutoff_plan(
+        tmp_path, "2026-10-01 23:59", [_row(PS, "KEEP", _at("10-01"), "KEEP")]
+    )
+    change = _change(plan, PS)
+    assert "due_at" in change.kept and "due_at" not in change.fields
+    assert set(change.fields) == {"lock_at"}
+
+
+def test_open_item_keeps_only_its_past_unlock(tmp_path):
+    root, plan = _cutoff_plan(
+        tmp_path, "2026-10-01", [_row(PS, _at("09-28"), _at("10-06"), _at("10-13"))]
+    )
+    change = _change(plan, PS)
+    assert change.kind == "changed" and list(change.kept) == ["unlock_at"]
+    gd.apply_plan(plan)
+    entry = _entries(root)[PS]
+    assert (entry["unlock_at"], entry["due_at"], entry["lock_at"]) == (
+        _at("09-28"), _at("10-05"), _at("10-12"),
+    )
+
+
+def test_future_date_moved_into_the_past_and_sentinels_are_written(tmp_path):
+    root, plan = _cutoff_plan(tmp_path, "2026-10-13", [_row(PS, "KEEP", _at("10-14"), "KEEP")])
+    gd.apply_plan(plan)
+    entry = _entries(root)[PS]
+    # due 10-14 was after the cutoff, so it moves to 10-05 (before it); KEEP is not a date
+    assert (entry["due_at"], entry["lock_at"]) == (_at("10-05"), _at("10-12"))
+    assert plan.not_rescheduled == []
+
+
+def test_naive_current_date_is_read_in_the_term_zone(tmp_path):
+    # Read in Pacific time this is after the cutoff; read as UTC it would be
+    # 2026-10-01 22:00 Pacific, before the cutoff, and would be kept.
+    root, plan = _cutoff_plan(
+        tmp_path, "2026-10-01", [_row(PS, "KEEP", "2026-10-02T05:00:00", "KEEP")]
+    )
+    assert "due_at" not in _change(plan, PS).kept
+
+
+def test_new_entry_is_written_in_full_even_before_the_cutoff(tmp_path):
+    root, plan = _cutoff_plan(tmp_path, "2026-10-15", [_row(PS, "KEEP", _at("10-05"), _at("10-12"))])
+    assert _change(plan, DISC).kind == "added"
+    gd.apply_plan(plan)
+    assert _entries(root)[DISC]["due_at"] == _at("10-07")
+
+
+def test_kept_field_with_no_difference_is_not_counted(tmp_path):
+    root, plan = _cutoff_plan(tmp_path, "2026-10-06", [_row(PS, "KEEP", _at("10-05"), _at("10-12"))])
+    assert _change(plan, PS).kept == {}
+    assert plan.not_rescheduled == []
+
+
+EARLY = '    { name = "Early Lab", relative_to = { type = "ABSOLUTE_DATE", date = "2026-09-30" }, lock_offset = "+1 CALENDAR_DAY" },\n'
+
+
+def _inconsistent_plan(tmp_path, cutoff="2026-10-01"):
+    # unlock 2026-10-01 is kept; due moves from 10-06 to 09-30, before the kept unlock
+    rows = [
+        _row(PS, "KEEP", _at("10-20"), _at("10-27")),
+        _row("Early Lab", _at("10-01"), _at("10-06"), _at("10-13")),
+    ]
+    return _cutoff_plan(tmp_path, cutoff, rows, EARLY)
+
+
+def test_inconsistent_entry_is_skipped_with_an_error(tmp_path):
+    root, plan = _inconsistent_plan(tmp_path)
+    change = _change(plan, "Early Lab")
+    assert change.kind == "skipped" and change.fields == {}
+    (error,) = plan.errors
+    assert "Early Lab" in error
+    assert error.startswith(
+        "ERROR: Early Lab: keeping the dates on or before 2026-10-01 puts "
+        f"unlock_at (kept, {_at('10-01')}) after due_at (computed, {_at('09-30')}). "
+    )
+    before = _entries(root)["Early Lab"]
+    gd.apply_plan(plan)
+    entries = _entries(root)
+    assert entries["Early Lab"] == before
+    assert entries[PS]["due_at"] == _at("10-05")  # the others are still written
+    text = _settings_text(root)
+    assert "\n# course settings\n" in text
+    assert text.count("dont_reschedule_dates_before") == 1
+
+
+def test_entry_without_kept_fields_is_not_checked(tmp_path):
+    root, plan = _inconsistent_plan(tmp_path, cutoff="2026-09-30 12:00")
+    assert _change(plan, "Early Lab").kind == "changed" and plan.errors == []
+
+
+def test_bad_cutoff_stops_before_calculating(tmp_path, mocker):
+    root = _repo(tmp_path, _cutoff_settings("2026-01-15", [_row(PS, "KEEP", "KEEP", "KEEP")]))
+    calculate = mocker.patch.object(rd, "calculate", side_effect=AssertionError("calculated"))
+    before = _settings_text(root)
+    with pytest.raises(rd.RelativeDueDatesError, match="outside the term"):
+        gd.plan_generation(root, _term(tmp_path))
+    calculate.assert_not_called()
+    result = _run(root, _term(tmp_path), "--yes")
+    assert result.exit_code == 1 and "outside the term" in result.output
+    assert _settings_text(root) == before
+
+
+# --- dont_reschedule_dates_before: command output -----------------------------
+
+
+def test_cutoff_is_shown_first(tmp_path):
+    root = _repo(tmp_path, _cutoff_settings("2026-10-01", [_row(PS, "KEEP", _at("10-05"), _at("10-12"))]))
+    result = _run(root, _term(tmp_path), "--noop")
+    lines = result.output.splitlines()
+    first = next(i for i, l in enumerate(lines) if l.startswith("Not rescheduling"))
+    assert lines[first] == (
+        "Not rescheduling dates on or before: Thu Oct 1, 2026 11:59 PM PDT "
+        "(dont_reschedule_dates_before)"
+    )
+    assert lines[first + 1].startswith("Relative table")
+
+
+def test_no_cutoff_is_shown(tmp_path):
+    result = _run(_repo(tmp_path), _term(tmp_path), "--noop")
+    assert "Not rescheduling dates: no cutoff (dont_reschedule_dates_before is not set)" in result.output
+
+
+def _three_kept(tmp_path):
+    rows = [
+        _row(PS, _at("09-24"), _at("09-30"), _at("10-01")),
+        _row(DISC, _at("09-24"), _at("09-30"), _at("10-01"), kind="discussion"),
+        _row("Early Lab", "KEEP", _at("09-29"), _at("10-01")),
+    ]
+    return _repo(tmp_path, _cutoff_settings("2026-10-01", rows, EARLY))
+
+
+def test_kept_resources_are_counted_when_nothing_else_changes(tmp_path):
+    root = _three_kept(tmp_path)
+    before = _settings_text(root)
+    result = _run(root, _term(tmp_path))  # no terminal, no --yes: it must not ask
+    assert result.exit_code == 0, result.output
+    assert (
+        "3 resources were not rescheduled because of dont_reschedule_dates_before "
+        "date of Thu Oct 1, 2026 11:59 PM PDT"
+    ) in result.output
+    assert "Nothing to change" in result.output
+    assert "\tWeek 1 Problem Set:" not in result.output  # no list without --verbose
+    assert _settings_text(root) == before
+
+
+def test_verbose_lists_kept_resources_and_their_fields(tmp_path):
+    root = _three_kept(tmp_path)
+    result = _run(root, _term(tmp_path), "--verbose")
+    assert (
+        "3 resources were not rescheduled because of dont_reschedule_dates_before "
+        "date of Thu Oct 1, 2026 11:59 PM PDT\n"
+        "\tWeek 1 Problem Set: unlock_at, due_at, lock_at\n"
+        "\tWeek 1 Discussion (discussion): unlock_at, due_at, lock_at\n"
+        "\tEarly Lab: due_at\n"
+    ) in result.output
+    assert "\tEarly Lab: due_at" in _run(root, _term(tmp_path), "-v").output
+
+
+def test_noop_shows_kept_resources_and_writes_nothing(tmp_path):
+    rows = [
+        _row(PS, _at("09-24"), _at("09-30"), _at("10-01")),
+        _row(DISC, _at("09-24"), _at("09-30"), _at("10-01"), kind="discussion"),
+    ]
+    root = _repo(tmp_path, _cutoff_settings("2026-10-01", rows, EARLY))
+    before = _settings_text(root)
+    result = _run(root, _term(tmp_path), "--noop")
+    assert result.exit_code == 0, result.output
+    assert "Not rescheduling dates on or before: Thu Oct 1, 2026" in result.output
+    assert "2 resources were not rescheduled" in result.output
+    assert "Early Lab (new entry):" in result.output
+    assert _settings_text(root) == before
+
+
+def test_error_is_shown_before_the_prompt_and_exit_is_non_zero(tmp_path, mocker):
+    mocker.patch("markdown_to_canvas.cli._stdin_is_terminal", return_value=True)
+    root, _ = _inconsistent_plan(tmp_path)
+    before = _settings_text(root)
+    result = _run(root, _term(tmp_path), input="n\n")
+    assert result.exit_code == 1
+    error_at = result.output.index("ERROR: Early Lab")
+    assert error_at < result.output.index("Write these dates into due_dates?")
+    assert "left unchanged because of the error above" in result.output
+    assert _settings_text(root) == before
+
+
+def test_yes_writes_the_others_and_exits_non_zero(tmp_path):
+    root, _ = _inconsistent_plan(tmp_path)
+    result = _run(root, _term(tmp_path), "--yes")
+    assert result.exit_code == 1
+    entries = _entries(root)
+    assert entries[PS]["due_at"] == _at("10-05")
+    assert entries["Early Lab"]["due_at"] == _at("10-06")
+
+
+def test_noop_with_an_error_exits_non_zero(tmp_path):
+    root, _ = _inconsistent_plan(tmp_path)
+    result = _run(root, _term(tmp_path), "--noop")
+    assert result.exit_code == 1 and "ERROR: Early Lab" in result.output
+
+
+def test_only_inconsistent_entries(tmp_path):
+    rows = [
+        _row(PS, "KEEP", _at("10-05"), _at("10-12")),
+        _row(DISC, "NONE", _at("10-07"), _at("10-14"), kind="discussion"),
+        _row("Early Lab", _at("10-01"), _at("10-06"), _at("10-13")),
+    ]
+    root = _repo(tmp_path, _cutoff_settings("2026-10-01", rows, EARLY))
+    before = _settings_text(root)
+    result = _run(root, _term(tmp_path))
+    assert result.exit_code == 1
+    assert "ERROR: Early Lab" in result.output and "Nothing to change" in result.output
+    assert "Write these dates" not in result.output
+    assert _settings_text(root) == before
+
+
+def test_update_ignores_the_cutoff(tmp_path, mocker):
+    root = _repo(tmp_path, content=False)
+    _write(root / "assignments" / "w1.md", "---\ntitle: Week 1 Problem Set\n---\n\nHi\n")
+    assert _run(root, _term(tmp_path), "--yes").exit_code == 0
+
+    canvas_cls = mocker.patch("markdown_to_canvas.canvas_api.Canvas")
+    course = MagicMock()
+    canvas_cls.return_value.get_course.return_value = course
+    created = MagicMock(id=101, html_url="https://s.instructure.com/courses/1/assignments/101")
+    course.create_assignment.return_value = created
+    cfg = Config(base_url="https://s.instructure.com", course_id=1, api_token="t")
+    run_sync(cfg, root)
+    assert course.create_assignment.call_args.kwargs["assignment"]["due_at"] == _at("10-05")
+
+    # Setting the cutoff changes nothing update sends: no course settings, no dates.
+    path = root / "course_settings" / "course_settings.toml"
+    path.write_text(path.read_text().replace(
+        "[relative_due_dates]\n", '[relative_due_dates]\ndont_reschedule_dates_before = "2026-10-01"\n'
+    ))
+    course.reset_mock()
+    run_sync(cfg, root)
+    course.create_assignment.assert_not_called()
+    course.get_assignment.assert_not_called()
+    course.update.assert_not_called()

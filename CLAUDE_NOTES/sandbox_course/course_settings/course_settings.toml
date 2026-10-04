@@ -1,0 +1,31 @@
+format_version = 9
+
+due_dates = [
+    {name = "Problem Set 1", unlock_at = "NONE", due_at = "2026-09-23T23:59:00-07:00", lock_at = "2026-09-30T23:59:00-07:00"},
+    {name = "Problem Set 2", unlock_at = "NONE", due_at = "2026-09-30T23:59:00-07:00", lock_at = "2026-10-12T23:59:00-07:00"},
+    {name = "Problem Set 3", unlock_at = "2026-09-28T23:59:00-07:00", due_at = "2026-10-07T23:59:00-07:00", lock_at = "2026-10-14T23:59:00-07:00"},
+    {name = "Problem Set 4", unlock_at = "2026-10-07T00:00:00-07:00", due_at = "2026-10-14T23:59:00-07:00", lock_at = "2026-10-21T23:59:00-07:00"},
+    {name = "Lab 1", unlock_at = "2026-10-01T23:59:00-07:00", due_at = "2026-10-06T23:59:00-07:00", lock_at = "2026-10-13T23:59:00-07:00"},
+    {name = "Week 1 Discussion", type = "discussion", unlock_at = "NONE", due_at = "2026-09-28T23:59:00-07:00", lock_at = "2026-10-05T23:59:00-07:00"},
+    {name = "Quiz 1", type = "quiz", unlock_at = "NONE", due_at = "2026-10-12T23:59:00-07:00", lock_at = "2026-10-19T23:59:00-07:00"},
+    {name = "Problem Set 5", unlock_at = "2026-10-14T17:00:00-07:00", due_at = "2026-10-21T17:00:00-07:00", lock_at = "2026-10-28T17:00:00-07:00"},
+]
+[relative_due_dates]
+days_of_week = ["Mon", "Wed"]
+unlock_relative_default = "NONE"
+lock_relative_default = "+7 CALENDAR_DAY"
+default_unlock_time = "00:00"
+default_lock_time = "23:59"
+dont_reschedule_dates_before = "2026-10-03"
+
+[relative_due_dates.tables.default]
+items = [
+    { name = "Problem Set 1", relative_to = { type = "START_OF_QUARTER" }, offsets = ["+1 CLASS_DAY"] },
+    { name = "Problem Set 2", relative_to = { type = "START_OF_QUARTER" }, offsets = ["+3 CLASS_DAY"] },
+    { name = "Problem Set 3", relative_to = { type = "START_OF_QUARTER" }, offsets = ["+4 CLASS_DAY"], unlock_offset = "-7 CALENDAR_DAY" },
+    { name = "Problem Set 4", relative_to = { type = "START_OF_QUARTER" }, offsets = ["+6 CLASS_DAY"], unlock_offset = "-7 CALENDAR_DAY" },
+    { name = "Problem Set 5", relative_to = { type = "START_OF_QUARTER" }, offsets = ["+8 CLASS_DAY", "17:00 ABS_TIME"], unlock_offset = "-7 CALENDAR_DAY" },
+    { name = "Lab 1", relative_to = { type = "ABSOLUTE_DATE", date = "2026-09-29" }, unlock_offset = "-5 CALENDAR_DAY" },
+    { name = "Week 1 Discussion", type = "discussion", relative_to = { type = "START_OF_QUARTER" }, offsets = ["+2 CLASS_DAY"] },
+    { name = "Quiz 1", type = "quiz", relative_to = { type = "START_OF_QUARTER" }, offsets = ["+5 CLASS_DAY"] },
+]

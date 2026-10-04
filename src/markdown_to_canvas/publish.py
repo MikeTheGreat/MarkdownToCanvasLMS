@@ -26,6 +26,7 @@ from .conditionals import apply_conditionals, resolve_published_if
 from . import repo_format
 from .config import Config
 from .convert import (
+    COURSE_REFERENCE_RELPATH,
     apply_outside_fences,
     expand_frontmatter_snippets,
     markdown_to_html,
@@ -493,6 +494,7 @@ def stage_content_markdown(
     repo: Path,
     flags: dict[str, bool] | None = None,
     errors: list[str] | None = None,
+    course_id: int | None = None,
 ) -> str | None:
     """Return the published Markdown for a page/assignment/discussion file.
 
@@ -505,6 +507,9 @@ def stage_content_markdown(
     When ``errors`` is given, local links and images that point at a missing
     file or outside the repo are reported there, using the same Pandoc HTML
     and rules as ``update`` (any error stops ``run_publish``).
+
+    ``course_id`` is appended to the course-reference snippet's URL (see
+    convert.course_reference_url).
     """
     frontmatter, body = parse_frontmatter(md_path.read_text())
     frontmatter, body = expand_frontmatter_snippets(frontmatter, body, md_path, repo / "snippets")
@@ -513,7 +518,9 @@ def stage_content_markdown(
         body = apply_conditionals(body, flags, source_desc, errors)
         if body is None:
             return None
-    body = preprocess_snippets(body, md_path, repo / "snippets", errors, flags=flags)
+    body = preprocess_snippets(
+        body, md_path, repo / "snippets", errors, flags=flags, course_id=course_id
+    )
     if errors is not None:
         # Before the quiz-link rewrite, whose placeholder target is not a repo file.
         check_local_links(markdown_to_html(body), md_path, repo, errors)
@@ -729,6 +736,13 @@ def stage(
     site_name = load_site_name(repo)
     flags = load_course_flags(repo, config=config)
     errors: list[str] = []
+    course_id = config.course_id if config is not None and config.course_id else None
+    if course_id is None and (repo / "snippets" / COURSE_REFERENCE_RELPATH).exists():
+        print(
+            f"  WARNING: no course_id (no canvas.toml, or it has no course_id); "
+            f"links built on snippets/{COURSE_REFERENCE_RELPATH.as_posix()} will "
+            f"not include a course ID"
+        )
 
     syllabus = _find_syllabus(repo, flags)
     assignments = _discover_type(repo, "assignments", flags)
@@ -776,7 +790,7 @@ def stage(
             if repo_rel.startswith("modules/"):
                 staged = render_module_overview(src, repo, flags, errors)
             else:
-                staged = stage_content_markdown(src, repo, flags, errors)
+                staged = stage_content_markdown(src, repo, flags, errors, course_id)
             if staged is None:
                 print(f"  Skipping (conditional-directive errors): {repo_rel}")
                 continue
@@ -925,8 +939,9 @@ def run_publish(
 
     ``config`` supplies the [course_flags] overrides of the canvas.toml this
     site is being built for (see sync.load_course_flags); None means only the
-    flags in course_settings.toml apply. publish never contacts Canvas, so the
-    rest of the config is unused and no API token is needed.
+    flags in course_settings.toml apply. Its course_id, when set, completes
+    the course-reference snippet. publish never contacts Canvas, so the rest
+    of the config is unused and no API token is needed.
     """
     repo = Path(course_dir).resolve()
     if not repo.is_dir():

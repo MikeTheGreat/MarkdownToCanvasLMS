@@ -881,7 +881,9 @@ _UNPUBLISHERS = {
     "discussion": lambda obj: obj.update(published=False),
     "announcement": lambda obj: obj.update(published=False),
     "quiz": lambda obj: obj.edit(quiz={"published": False}),
-    "module": lambda obj: obj.edit(module={"published": False}),
+    # Module only: prune unpublishes orphaned content files on their own, and
+    # a cascade would also unpublish content still used by other modules.
+    "module": lambda obj: obj.edit(module={"published": False, "skip_content_tags": True}),
 }
 
 
@@ -1353,7 +1355,17 @@ def finalize_quiz_publish_state(quiz, published: bool) -> bool:
 
 
 def create_or_update_module(course, canvas_id: int | None, title: str, **kwargs):
-    """Return the canvasapi Module object (created or updated)."""
+    """Return the canvasapi Module object (created or updated).
+
+    A ``published`` change applies to the module only. Without
+    ``skip_content_tags`` Canvas cascades it to every item in the module and
+    its underlying content (unpublishing a module would unpublish its pages,
+    publishing it would publish content whose own frontmatter says
+    ``published: false``). With it, each item keeps its own state, like the
+    web UI's "Publish/Unpublish module only".
+    """
+    if "published" in kwargs:
+        kwargs["skip_content_tags"] = True
     if canvas_id is not None:
         try:
             module = course.get_module(canvas_id)
@@ -1364,9 +1376,10 @@ def create_or_update_module(course, canvas_id: int | None, title: str, **kwargs)
     # Canvas's create-module endpoint has no `published` parameter and always
     # creates the module unpublished, so publishing takes a follow-up edit.
     published = kwargs.pop("published", None)
+    kwargs.pop("skip_content_tags", None)
     module = course.create_module(module={"name": title, **kwargs})
     if published:
-        module.edit(module={"published": True})
+        module.edit(module={"published": True, "skip_content_tags": True})
     return module
 
 
@@ -1480,7 +1493,10 @@ def add_module_item(
                 "published": published,
             }
         )
-        warn = _set_module_item_published(module, mi, item["title"], False) if not published else None
+        # Canvas creates ExternalUrl items unpublished whatever `published` says
+        # (and whether or not the module is published), so set the state with
+        # a follow-up PUT in both directions.
+        warn = _set_module_item_published(module, mi, item["title"], published)
         return mi.id, warn
 
     local_path = item["local_path"]
