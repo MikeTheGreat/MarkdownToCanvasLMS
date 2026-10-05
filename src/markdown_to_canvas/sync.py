@@ -40,6 +40,7 @@ from .link_rewrite import extract_local_refs, infer_canvas_type, rewrite_links
 from .links import LINK_TEXT
 from .orphans import ResourceKey, extract_canvas_refs
 from .quiz import parse_question_file, parse_quiz_file
+from .unrecorded_moves import Commands, check_unrecorded_moves, find_orphans
 
 _DATE_KEYS = ("unlock_at", "due_at", "lock_at")
 
@@ -1861,6 +1862,8 @@ def run_sync(
     force_overwrite: bool = False,
     verbose: bool = False,
     check_all: bool = False,
+    new_paths: Iterable[str] = (),
+    commands: Commands | None = None,
 ) -> bool:
     """Main sync pipeline: assets → content → modules. Returns True if any errors occurred.
 
@@ -1873,6 +1876,9 @@ def run_sync(
     The manifest file is the one belonging to ``config`` (see
     ``manifest.manifest_name_for``), so two canvas.toml files in one repo keep
     two independent sets of Canvas IDs.
+
+    ``new_paths`` (``update --new``) and ``commands`` go to the unrecorded-move
+    check, which runs before any Canvas change and is skipped in check mode.
     """
     repo_format.check_repo_format(repo_path)
     manifest_path: Path | None
@@ -1912,6 +1918,16 @@ def run_sync(
     # error; validate them before phase 0 so nothing is applied to Canvas first.
     pinned = load_pinned_resources(repo_path, _settings_dict)
     group_categories = load_group_categories(repo_path, _settings_dict)
+
+    # Files moved without `mv` would be created as second Canvas items; stop
+    # before anything in Canvas changes (check mode has no manifest to compare).
+    if not check_all and check_unrecorded_moves(
+        repo_path, manifest, manifest_path,
+        lambda canvas_type, entry: api.get_orphan_item(course, canvas_type, entry),
+        errors, new_paths=new_paths, commands=commands, verbose=verbose,
+    ):
+        _print_errors_summary(errors)
+        return True
 
     # 0. Course settings (metadata, grading standards, assignment groups, policies, rubrics)
     rubric_ids, changed_sections, deferred_ag_rules, recreated_rubrics = (
@@ -2099,16 +2115,9 @@ def run_prune(config: Config, repo_path: Path, mode: str) -> bool:
     manifest_path = manifest_lib.manifest_path_for(repo_path, config.config_path)
     manifest = manifest_lib.load(manifest_path)
 
-    # Canvas-only modules (module_order.toml entries cached under
-    # EXTERNAL_MODULE_PREFIX) have no local file by definition, so they are
-    # never orphans — prune must not offer to delete the college's module.
-    orphans = [
-        (key, entry)
-        for key, entry in manifest.items()
-        if not (repo_path / key).exists()
-        and entry.get("canvas_type") != EXTERNAL_MODULE_TYPE
-        and not manifest_lib.is_reserved_key(key, entry)
-    ]
+    # Canvas-only modules are never orphans, so prune never offers to delete
+    # the college's module (see unrecorded_moves.find_orphans).
+    orphans = find_orphans(manifest, repo_path)
     if not orphans:
         print("No orphaned manifest entries found; nothing to prune.")
         return False
@@ -2800,12 +2809,9 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
     _leave_stale_for_deferred_links(manifest, manifest_path, local_key, deferred)
 
 
-# Manifest key prefix and canvas_type for a Canvas module that has no local
-# file — one the college (or anyone else) created directly in Canvas, listed in
-# module_order.toml by its Canvas name so the tool can position it relative to
-# the modules it does manage.
-EXTERNAL_MODULE_PREFIX = "canvas_modules/"
-EXTERNAL_MODULE_TYPE = "external_module"
+# Defined in manifest.py (see there); kept here under their original names.
+EXTERNAL_MODULE_PREFIX = manifest_lib.EXTERNAL_MODULE_PREFIX
+EXTERNAL_MODULE_TYPE = manifest_lib.EXTERNAL_MODULE_TYPE
 
 
 def external_module_key(name: str) -> str:
@@ -3519,6 +3525,8 @@ def run_targeted_sync(
     force_uploads: bool = False,
     force_overwrite: bool = False,
     verbose: bool = False,
+    new_paths: Iterable[str] = (),
+    commands: Commands | None = None,
 ) -> bool:
     """Sync only the specified targets. Returns True if any errors occurred.
 
@@ -3534,6 +3542,15 @@ def run_targeted_sync(
     assets_root = repo_path / "assets"
     newer_on_canvas: list[str] = []
     errors: list[str] = []
+    # The whole repo is checked, not just the targets: link stubbing can create
+    # any file's Canvas item.
+    if check_unrecorded_moves(
+        repo_path, manifest, manifest_path,
+        lambda canvas_type, entry: capi.get_orphan_item(course, canvas_type, entry),
+        errors, new_paths=new_paths, commands=commands, verbose=verbose,
+    ):
+        _print_errors_summary(errors)
+        return True
     unpublishable_items: list[tuple[str, str]] = []
     ignored_fields: list[tuple[str, str]] = []
     assignment_group_ids = capi.get_assignment_group_ids(course)

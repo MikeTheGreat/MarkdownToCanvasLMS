@@ -24,6 +24,13 @@ DEFAULT_CONFIG_STEM = "canvas"
 COURSE_KEY = "_canvas_course"
 COURSE_TYPE = "course_identity"
 
+#: Manifest key prefix and canvas_type for a Canvas module that has no local
+#: file — one the college (or anyone else) created directly in Canvas, listed in
+#: module_order.toml by its Canvas name so the tool can position it relative to
+#: the modules it does manage.
+EXTERNAL_MODULE_PREFIX = "canvas_modules/"
+EXTERNAL_MODULE_TYPE = "external_module"
+
 #: Reserved manifest key recording the repo format version the manifest was
 #: written in: ``_repo_format = { format_version = N }``. Not a repo path
 #: either; see is_reserved_key.

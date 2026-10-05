@@ -515,6 +515,13 @@ subcommand — updating the manifest, rewriting cross-references, and updating
 
 The `mv` subcommand's core logic (in `mv.py`) is designed to be called
 programmatically, so the watcher would be a thin event-detection layer on top.
+`mv --after OLD NEW` (`run_mv(after=True)`) already records a move that has
+happened on disk, which is exactly what a watcher would call after seeing one.
+
+`update` now catches moves made without `mv` before they create duplicate Canvas
+items (see "Unrecorded-move check" in ARCHITECTURE.md), so a missed event is no
+longer silent: the next `update` stops and prints the `mv --after` command. A
+watcher would only save that one step.
 
 Caveats to address:
 
@@ -522,7 +529,8 @@ Caveats to address:
   be distinguished from user-initiated operations
 - Some editors implement rename as create-new + delete-old rather than atomic
   rename, so the watcher would need heuristic correlation
-- Must be running at the time of the move — missed events are silent failures
+- Must be running at the time of the move (a missed event is caught by
+  `update`'s unrecorded-move check, but only at the next `update`)
 - Cross-filesystem moves decompose into copy+delete with no way to correlate
 
 ## `generate-due-dates`: revisit lock and unlock handling

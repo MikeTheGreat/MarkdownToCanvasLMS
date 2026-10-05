@@ -41,6 +41,7 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
 * If you change a Module Markdown file then all the links in that module will be invalidated.  
 
 * If you want to move or rename a file please use the `mv` subcommand - it'l adjust links, the manifest cache, etc, for you.
+  If you moved it some other way (git, a file manager, an editor), `update` stops before creating a duplicate Canvas item and tells you to run `mv --after OLD NEW`. See [Files moved without `mv`](#files-moved-without-mv).
 
 ## Contents
 
@@ -70,6 +71,7 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
   - [Canvas overwrite protection](#canvas-overwrite-protection)
     - [Full sync (default)](#full-sync-default)
     - [Typical full-sync workflow](#typical-full-sync-workflow)
+    - [Files moved without `mv`](#files-moved-without-mv)
   - [Checking a course before deploying (`--check-all`)](#checking-a-course-before-deploying---check-all)
   - [Selective sync](#selective-sync)
     - [`-t` — recursive (BFS)](#-t--recursive-bfs)
@@ -79,6 +81,7 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
   - [Checking and repairing the manifest (`fix-manifest`)](#checking-and-repairing-the-manifest-fix-manifest)
   - [Cleaning Word debris out of Markdown (`fix-markdown`)](#cleaning-word-debris-out-of-markdown-fix-markdown)
   - [Moving and renaming files (`mv`)](#moving-and-renaming-files-mv)
+    - [Recording a move made without `mv` (`--after`)](#recording-a-move-made-without-mv---after)
   - [Copying content between courses (`cp`)](#copying-content-between-courses-cp)
   - [Finding unreferenced content](#finding-unreferenced-content)
     - [`find-local-orphans` — the repo](#find-local-orphans--the-repo)
@@ -573,6 +576,10 @@ Options:
                                   first time to a brand-new empty Canvas course. Contacts
                                   Canvas for nothing and writes nothing. Exits nonzero if any
                                   problems are found.
+  --new PATH                      PATH is a separate item, not a moved copy of the
+                                  orphaned manifest entries it matches: forget those
+                                  entries (their Canvas items stay in Canvas, untracked)
+                                  and continue. Repeatable. See "Files moved without mv".
   -y, --yes                       Record the course for a manifest that has none
                                   without asking (see "Which course a manifest
                                   belongs to"). Never overrides a different course.
@@ -648,6 +655,54 @@ CANVAS_API_TOKEN=your-token-here \
 
 The manifest (`.manifest-canvas.toml`) that `update` writes is local. Do not
 commit it.
+
+### Files moved without `mv`
+
+The manifest records which Canvas item belongs to each file by the file's path.
+When a file is moved or renamed with git, a file manager or an editor instead
+of [`mv`](#moving-and-renaming-files-mv), its manifest entry stays under the
+old path, and `update` would treat the file at the new path as new and create
+a second Canvas item next to the first. Students can then submit to both.
+
+So before it changes anything in Canvas, `update` (including `-t`/`-s` runs,
+which check the whole repo) looks for files that have no manifest entry and
+match an *orphaned* entry, one whose file is gone. A file matches an orphan
+when both are the same kind of Canvas item and they have the same file name or
+the same title. The orphan's title is read from Canvas, one request per
+orphaned entry; a run with no orphaned entries makes no extra requests. An
+orphan whose Canvas item has been deleted never matches.
+
+When something matches, `update` stops, changes nothing, and prints the pair
+with two ways forward:
+
+```text
+  ERROR: assignments/advising.md → assignments/educational-plan/advising.md (same file name and same title): this looks like a move made without `markdown-to-canvas mv`. Updating would create a second Canvas assignment next to assignment 42270446.
+      To record the move and keep using assignment 42270446:
+        markdown-to-canvas mv --after assignments/advising.md assignments/educational-plan/advising.md
+      Or, if assignments/educational-plan/advising.md is a separate item, forget the old entry (assignment 42270446 stays in Canvas):
+        markdown-to-canvas update . --new assignments/educational-plan/advising.md
+```
+
+* `mv --after OLD NEW` records the move (see
+  [Recording a move made without `mv`](#recording-a-move-made-without-mv---after)).
+  The next `update` keeps using the existing Canvas item.
+* `update --new NEW` says the file really is a separate item. The manifest
+  entries of the orphans that match it are removed (Canvas is not changed),
+  a warning is printed for each one, and the run continues and creates NEW as
+  a new Canvas item. The old Canvas item stays in Canvas, no longer tracked by
+  the tool, so `prune` will not see it either; delete it in Canvas if you don't
+  need it. `--new` is repeatable. It cannot be combined with `--check-all`.
+
+If a duplicate already exists (an earlier `update` created it before this
+check existed), `update` prints a warning on every run naming both files and
+both Canvas IDs, and carries on. To stop the warning, either run
+`update --new` with the file that is still in the repo, which forgets the old
+entry and leaves both Canvas items alone, or remove the old item with
+[`prune`](#removing-content-prune). `prune` acts on every orphaned entry at
+once, and deleting an assignment also deletes the submissions made to it.
+Canvas will not unpublish an assignment that has submissions.
+
+`--check-all` does not run this check, because it ignores the manifest.
 
 ---
 
@@ -768,8 +823,10 @@ Options:
 ```
 
 `prune` looks for **orphans** — manifest entries whose local file is gone — which
-covers both deleting a file and renaming one (the old path is orphaned; the new
-name syncs as a fresh item on the next `update`).
+covers both deleting a file and renaming one without `mv`. A renamed or moved
+file is caught by `update` before it can create a second Canvas item (see
+[Files moved without `mv`](#files-moved-without-mv)); record it with
+`mv --after` rather than pruning the old entry.
 
 You must pass exactly one of `--delete`, `--unpublish`, or `--manifest-only`;
 there is no default, so the intent is always explicit. Changes are applied
@@ -1095,6 +1152,9 @@ Usage: markdown-to-canvas mv [OPTIONS] SRC DEST
 Options:
   -n, --noop     Show what would change without making any modifications.
   -v, --verbose  Print each individual change (moved file, updated link, etc.).
+  --after        Record a move already made on disk (with git, a file manager
+                 or an editor): SRC is gone and DEST exists. Updates
+                 everything mv does except moving the files.
   --help         Show this message and exit.
 ```
 
@@ -1146,6 +1206,41 @@ markdown-to-canvas mv --noop pages/old.md pages/new.md
 
 This command is purely local — it never contacts Canvas. Run `update` afterward
 to push the changes.
+
+### Recording a move made without `mv` (`--after`)
+
+`mv --after OLD NEW` is for a file or folder that was already moved with git,
+a file manager or an editor. OLD is where it used to be and NEW is where it is
+now. It makes every change `mv` makes except moving anything: it rekeys every
+manifest, rewrites links to OLD in other files, and updates `module_order.toml`,
+`front_page`, `dashboard_image` and `pinned_resources`. `update` then keeps
+using the existing Canvas items.
+
+```bash
+# The file was moved with git
+git mv assignments/advising.md assignments/educational-plan/
+markdown-to-canvas mv --after assignments/advising.md assignments/educational-plan/advising.md
+
+# A folder was renamed in the file manager
+markdown-to-canvas mv --after pages/week-1 pages/unit-1
+```
+
+NEW is always the actual new location, so an existing folder NEW is not
+expanded to `NEW/OLD-name` the way plain `mv` does.
+
+Links inside the moved file may have been written for its old folder or
+already fixed by your editor for the new one. A link that reaches an existing
+file from the new folder is left alone; a link that only reaches an existing
+file from the old folder is rewritten for the new folder; a link that reaches
+nothing from either is left alone.
+
+It refuses, changing nothing, when OLD still exists (use plain `mv`), when NEW
+does not exist, when no manifest has OLD, or when the two are in different
+content folders. If a manifest already has an entry for NEW as well as OLD,
+that course already has the duplicate: the manifest is left unchanged, both
+Canvas IDs are printed, and the `update --new` command that forgets the old
+entry for that course is shown. Other manifests are still updated. If every
+manifest that has OLD also has NEW, nothing is changed at all.
 
 ---
 

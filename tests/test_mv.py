@@ -1267,3 +1267,197 @@ def test_mv_keeps_a_group_discussions_group_category(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path, {"discussions/team.md": text})
     run_mv(repo / "discussions/team.md", repo / "discussions/team-plan.md")
     assert (repo / "discussions/team-plan.md").read_text() == text
+
+
+# ---------------------------------------------------------------------------
+# mv --after: record a move already made on disk
+# ---------------------------------------------------------------------------
+
+
+def _read_manifest(path: Path) -> dict:
+    with path.open("rb") as f:
+        return tomllib.load(f)
+
+
+def _after_repo(tmp_path: Path) -> Path:
+    """The College 101 shape: an assignment moved into a subfolder with git,
+    linked from a module, tracked by two section manifests."""
+    repo = _make_repo(tmp_path, {
+        "assignments/educational-plan/advising.md": "---\ntitle: Advising\n---\nBody\n",
+        "modules/week-1.md": "- [Advising](../assignments/advising.md)\n",
+    })
+    for name, cid in ((".manifest-canvas-ol-3.toml", 42270446), (".manifest-canvas-ol-4.toml", 42270453)):
+        with (repo / name).open("wb") as f:
+            tomli_w.dump({
+                "_repo_format": {"format_version": FORMAT_VERSION},
+                "assignments/advising.md": {"canvas_type": "assignment", "canvas_id": cid},
+                "modules/week-1.md": {
+                    "canvas_type": "module", "canvas_id": 7,
+                    "canvas_item_ids": {"assignments/advising.md": 99},
+                },
+            }, f)
+    return repo
+
+
+class TestMvAfter:
+    OLD = "assignments/advising.md"
+    NEW = "assignments/educational-plan/advising.md"
+
+    def test_records_git_move_in_every_manifest_and_link(self, tmp_path: Path) -> None:
+        repo = _after_repo(tmp_path)
+        run_mv(repo / self.OLD, repo / self.NEW, after=True)
+        for name, cid in ((".manifest-canvas-ol-3.toml", 42270446), (".manifest-canvas-ol-4.toml", 42270453)):
+            m = _read_manifest(repo / name)
+            assert self.OLD not in m
+            assert m[self.NEW]["canvas_id"] == cid
+            assert m["modules/week-1.md"]["canvas_item_ids"] == {self.NEW: 99}
+        assert (repo / "modules/week-1.md").read_text() == (
+            "- [Advising](../assignments/educational-plan/advising.md)\n"
+        )
+        assert (repo / self.NEW).exists() and not (repo / self.OLD).exists()
+
+    def test_noop_writes_nothing(self, tmp_path: Path, capsys) -> None:
+        repo = _after_repo(tmp_path)
+        before = {p: p.read_bytes() for p in repo.rglob("*") if p.is_file()}
+        run_mv(repo / self.OLD, repo / self.NEW, after=True, noop=True)
+        assert {p: p.read_bytes() for p in repo.rglob("*") if p.is_file()} == before
+        out = capsys.readouterr().out
+        assert f"Would record move: {self.OLD} → {self.NEW}" in out
+        assert "Would record the move of 1 file(s)" in out
+
+    def test_refuses_when_old_still_exists(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {"pages/a.md": "x", "pages/b.md": "y"})
+        _make_manifest(repo, {"pages/a.md": {"canvas_type": "page", "canvas_id": 1}})
+        with pytest.raises(ValueError, match="without --after"):
+            run_mv(repo / "pages/a.md", repo / "pages/b.md", after=True)
+
+    def test_refuses_when_new_missing(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path)
+        _make_manifest(repo, {"pages/a.md": {"canvas_type": "page", "canvas_id": 1}})
+        (repo / "pages").mkdir()
+        with pytest.raises(ValueError, match="Destination does not exist"):
+            run_mv(repo / "pages/a.md", repo / "pages/b.md", after=True)
+
+    def test_refuses_when_no_manifest_has_old(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {"pages/b.md": "y"})
+        _make_manifest(repo, {})
+        with pytest.raises(ValueError, match="no move to record"):
+            run_mv(repo / "pages/a.md", repo / "pages/b.md", after=True)
+
+    def test_refuses_across_content_types(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {"assignments/a.md": "y"})
+        _make_manifest(repo, {"pages/a.md": {"canvas_type": "page", "canvas_id": 1}})
+        with pytest.raises(ValueError, match="across content types"):
+            run_mv(repo / "pages/a.md", repo / "assignments/a.md", after=True)
+
+    def test_refuses_when_every_manifest_already_has_new(self, tmp_path: Path, capsys) -> None:
+        repo = _after_repo(tmp_path)
+        for name, cid in ((".manifest-canvas-ol-3.toml", 42309815), (".manifest-canvas-ol-4.toml", 42309822)):
+            m = _read_manifest(repo / name)
+            m[self.NEW] = {"canvas_type": "assignment", "canvas_id": cid}
+            with (repo / name).open("wb") as f:
+                tomli_w.dump(m, f)
+        before = {p: p.read_bytes() for p in repo.rglob("*") if p.is_file()}
+        with pytest.raises(ValueError, match="nothing was changed"):
+            run_mv(repo / self.OLD, repo / self.NEW, after=True)
+        assert {p: p.read_bytes() for p in repo.rglob("*") if p.is_file()} == before
+        out = capsys.readouterr().out
+        assert "42270446" in out and "42309815" in out
+        assert "42270453" in out and "42309822" in out
+        assert "--config course_settings/canvas-ol-4.toml --new" in out
+
+    def test_new_tracked_in_one_section_only(self, tmp_path: Path, capsys) -> None:
+        repo = _after_repo(tmp_path)
+        ol3 = repo / ".manifest-canvas-ol-3.toml"
+        m = _read_manifest(ol3)
+        m[self.NEW] = {"canvas_type": "assignment", "canvas_id": 42309815}
+        with ol3.open("wb") as f:
+            tomli_w.dump(m, f)
+        before_ol3 = ol3.read_bytes()
+        run_mv(repo / self.OLD, repo / self.NEW, after=True)
+        assert ol3.read_bytes() == before_ol3
+        ol4 = _read_manifest(repo / ".manifest-canvas-ol-4.toml")
+        assert self.OLD not in ol4 and ol4[self.NEW]["canvas_id"] == 42270453
+        assert "educational-plan/advising.md" in (repo / "modules/week-1.md").read_text()
+        assert ".manifest-canvas-ol-3.toml: left unchanged" in capsys.readouterr().out
+
+    def test_directory_rekeys_every_key_under_it(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {
+            "pages/unit-1/a.md": "x", "pages/unit-1/b.md": "y",
+        })
+        manifest = _make_manifest(repo, {
+            "pages/week-1/a.md": {"canvas_type": "page", "canvas_id": 1},
+            "pages/week-1/b.md": {"canvas_type": "page", "canvas_id": 2},
+        })
+        run_mv(repo / "pages/week-1", repo / "pages/unit-1", after=True)
+        m = _read_manifest(manifest)
+        assert m["pages/unit-1/a.md"]["canvas_id"] == 1
+        assert m["pages/unit-1/b.md"]["canvas_id"] == 2
+        assert "pages/week-1/a.md" not in m
+
+    def test_quiz_folder_rename_maps_inner_file(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {
+            "quizzes/new-quiz/new-quiz.md": "---\ntitle: Q\n---\n",
+            "quizzes/new-quiz/questions/q1.md": "q",
+        })
+        manifest = _make_manifest(repo, {
+            "quizzes/old-quiz/old-quiz.md": {"canvas_type": "quiz", "canvas_id": 5},
+        })
+        run_mv(repo / "quizzes/old-quiz", repo / "quizzes/new-quiz", after=True)
+        m = _read_manifest(manifest)
+        assert m["quizzes/new-quiz/new-quiz.md"]["canvas_id"] == 5
+        assert "quizzes/old-quiz/old-quiz.md" not in m
+
+    def test_moved_file_keeps_links_an_editor_already_fixed(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {
+            "pages/x.md": "x",
+            "pages/sub/moved.md": "[ok](../x.md) [stale](x.md) [nowhere](missing.md)\n",
+        })
+        _make_manifest(repo, {"pages/moved.md": {"canvas_type": "page", "canvas_id": 1}})
+        run_mv(repo / "pages/moved.md", repo / "pages/sub/moved.md", after=True)
+        # ../x.md works from the new folder: kept. x.md only worked from the
+        # old folder: rebased. missing.md reaches nothing: kept.
+        assert (repo / "pages/sub/moved.md").read_text() == (
+            "[ok](../x.md) [stale](../x.md) [nowhere](missing.md)\n"
+        )
+
+    def test_module_file_rename_updates_module_order(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {"modules/new-mod.md": "x"})
+        (repo / "course_settings" / "module_order.toml").write_text(
+            'order = ["old-mod.md"]\n'
+        )
+        _make_manifest(repo, {"modules/old-mod.md": {"canvas_type": "module", "canvas_id": 3}})
+        run_mv(repo / "modules/old-mod.md", repo / "modules/new-mod.md", after=True)
+        order = tomllib.loads((repo / "course_settings" / "module_order.toml").read_text())
+        assert order["order"] == ["new-mod.md"]
+
+    def test_front_page_and_pinned_resources_follow_the_move(self, tmp_path: Path) -> None:
+        repo = _make_repo(tmp_path, {"pages/new-home.md": "x"})
+        settings = repo / "course_settings" / "course_settings.toml"
+        settings.write_text(
+            settings.read_text()
+            + 'front_page = "pages/old-home.md"\npinned_resources = ["pages/old-home.md"]\n'
+        )
+        _make_manifest(repo, {"pages/old-home.md": {"canvas_type": "page", "canvas_id": 1}})
+        run_mv(repo / "pages/old-home.md", repo / "pages/new-home.md", after=True)
+        data = tomllib.loads(settings.read_text())
+        assert data["front_page"] == "pages/new-home.md"
+        assert data["pinned_resources"] == ["pages/new-home.md"]
+
+    def test_existing_directory_dest_is_not_expanded(self, tmp_path: Path) -> None:
+        # Plain mv would turn DEST into DEST/SRC.name; with --after DEST is the
+        # folder's actual new location.
+        repo = _make_repo(tmp_path, {"assets/units/a.png": "png"})
+        manifest = _make_manifest(repo, {"assets/unit-01/a.png": {"canvas_type": "file", "canvas_id": 4}})
+        run_mv(repo / "assets/unit-01", repo / "assets/units", after=True)
+        assert _read_manifest(manifest)["assets/units/a.png"]["canvas_id"] == 4
+
+    def test_cli_after_flag(self, tmp_path: Path, monkeypatch) -> None:
+        from click.testing import CliRunner
+        from markdown_to_canvas.cli import main
+
+        repo = _after_repo(tmp_path)
+        monkeypatch.chdir(repo)
+        result = CliRunner().invoke(main, ["mv", "--after", self.OLD, self.NEW])
+        assert result.exit_code == 0, result.output
+        assert self.NEW in _read_manifest(repo / ".manifest-canvas-ol-3.toml")

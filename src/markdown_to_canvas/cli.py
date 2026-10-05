@@ -59,6 +59,7 @@ from .publish import run_publish
 from .relative_dates import RelativeDueDatesError
 from .repo_format import RepoFormatError, run_upgrade
 from .sync import collect_title_items, run_prune, run_sync, run_targeted_sync
+from .unrecorded_moves import Commands
 
 
 # all commands must use die() for user-facing errors — no tracebacks, no raw exceptions.
@@ -300,7 +301,17 @@ def install_completion(shell: str | None) -> None:
     default=False,
     help="Print each individual change (moved file, updated link, etc.).",
 )
-def mv_cmd(src: Path, dest: str, noop: bool, verbose: bool) -> None:
+@click.option(
+    "--after",
+    is_flag=True,
+    default=False,
+    help=(
+        "Record a move already made on disk (with git, a file manager or an "
+        "editor): SRC is gone and DEST exists. Updates everything mv does "
+        "except moving the files."
+    ),
+)
+def mv_cmd(src: Path, dest: str, noop: bool, verbose: bool, after: bool) -> None:
     """Move or rename a file/directory, updating the manifest and all references.
 
     SRC is the file or directory to move. DEST is the new path, or an
@@ -314,9 +325,13 @@ def mv_cmd(src: Path, dest: str, noop: bool, verbose: bool) -> None:
     snippet references, and module_order.toml as needed.
 
     Uses git mv when inside a git repository.
+
+    With --after, SRC is where the file used to be and DEST is where it is
+    now. Use it when a file was moved without this command, so that update
+    keeps using the existing Canvas item instead of creating a second one.
     """
     try:
-        run_mv(src, dest, noop=noop, verbose=verbose)
+        run_mv(src, dest, noop=noop, verbose=verbose, after=after)
     except ValueError as e:
         die(str(e))
     except subprocess.CalledProcessError as e:
@@ -1223,6 +1238,19 @@ def _format_concise_date(iso_date: str) -> str:
         return iso_date[:16] if len(iso_date) >= 16 else iso_date
 
 
+def _move_check_commands(
+    repo: Path, course_dir: str | None, config_given: Path | None
+) -> Commands:
+    """How the unrecorded-move check prints its `update`/`prune` commands: the
+    course and --config as this run was given them, so they act on the same
+    manifest. prune needs a course, so one is always included."""
+    commands = Commands(repo)
+    parts = [shlex.quote(course_dir) if course_dir is not None else commands.shown(".")]
+    if config_given is not None:
+        parts += ["--config", shlex.quote(str(config_given))]
+    return Commands(repo, " ".join(parts))
+
+
 @main.command()
 @_course_dir_argument()
 @click.option(
@@ -1288,6 +1316,17 @@ def _format_concise_date(iso_date: str) -> str:
         "needed. Exits nonzero if any problems are found."
     ),
 )
+@click.option(
+    "--new",
+    "new_paths",
+    multiple=True,
+    metavar="PATH",
+    help=(
+        "PATH is a separate item, not a moved copy of the orphaned manifest "
+        "entries it matches: forget those entries (their Canvas items stay in "
+        "Canvas, untracked) and continue. Repeatable."
+    ),
+)
 @click.option("--yes", "-y", "assume_yes", is_flag=True, default=False, help=_YES_HELP)
 @_handle_cli_errors
 def update(
@@ -1299,6 +1338,7 @@ def update(
     single_target: str | None,
     verbose: bool,
     check_all: bool,
+    new_paths: tuple[str, ...],
     assume_yes: bool,
 ) -> None:
     """Sync a Markdown course repo to Canvas LMS.
@@ -1306,9 +1346,18 @@ def update(
     COURSE_DIR is the course content directory: a path or a registered course
     key. If omitted, the enclosing course is found by walking up from the
     current directory.
+
+    Before changing anything in Canvas, update stops if a file looks like it
+    was moved or renamed without `markdown-to-canvas mv` (it has no manifest
+    entry but matches an entry whose file is gone), since uploading it would
+    create a second Canvas item. Record the move with `mv --after OLD NEW`, or
+    pass --new NEW if the file really is a separate item.
     """
+    config_given = config
     repo, config = _resolve_course(course_dir, config)
     _ensure_pandoc()
+    if check_all and new_paths:
+        die("--check-all ignores the manifest, so there are no orphaned entries for --new to forget; drop --new.")
     if check_all and (target_recursively or single_target):
         die("--check-all always checks the whole repo; it cannot be combined with -t/--target-recursively or -s/--single-target.")
     if check_all and (force_uploads or force_overwrite):
@@ -1332,6 +1381,7 @@ def update(
     course = get_course(cfg)
     click.echo(f"Course:    {course.name}")
     _guard_course(repo, cfg, course, assume_yes)
+    commands = _move_check_commands(repo, course_dir, config_given)
 
     if target_recursively or single_target:
         recursive_list = (
@@ -1346,12 +1396,12 @@ def update(
         )
         had_errors = run_targeted_sync(
             cfg, repo, recursive_list, single_list, force_uploads, force_overwrite,
-            verbose=verbose,
+            verbose=verbose, new_paths=new_paths, commands=commands,
         )
     else:
         had_errors = run_sync(
             cfg, repo, force_uploads=force_uploads, force_overwrite=force_overwrite,
-            verbose=verbose,
+            verbose=verbose, new_paths=new_paths, commands=commands,
         )
 
     if had_errors:

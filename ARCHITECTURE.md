@@ -206,6 +206,63 @@ Before any of that, `run_sync`, `run_targeted_sync` and `course_guard.check_cour
 `repo_format.check_repo_format()`, which refuses a repo or manifest in a different
 format version (see "Repo format version and `upgrade`").
 
+### Unrecorded-move check and `--new`
+
+A file moved with git or an editor instead of `mv` keeps its manifest entry
+under the old path, so without a check the next `update` would create a second
+Canvas item for the new path (the creation sites are `_sync_content_file`,
+`_sync_quiz`, `_sync_module`, `_walk_assets` and the link stub creator). One
+pre-flight check covers all of them: `unrecorded_moves.check_unrecorded_moves`,
+called by `run_sync` after the manifest is loaded and before phase 0
+(`sync_course_settings`), and by `run_targeted_sync` right after its manifest
+load. Nothing has been written to Canvas at either point. A targeted run checks
+the whole repo, because link stubbing can create any file's item. `--check-all`
+skips the check: it starts from an empty manifest, so there are no orphans.
+
+- **Orphans** come from `unrecorded_moves.find_orphans`, which `run_prune` also
+  uses: entries whose file is gone, excluding reserved keys and
+  `external_module` entries. Only the types in `CHECKED_TYPES` (page,
+  assignment, discussion, announcement, quiz, module, file) are considered.
+- **Canvas read**: `load_orphans` fetches each orphan's item once with
+  `canvas_api.get_orphan_item` (the `_GETTERS` table; page slug for pages, ID
+  otherwise) to learn whether it still exists and its title (`title`, `name` or
+  `display_name` by type). A 404 or `workflow_state == "deleted"` drops the
+  orphan, since no duplicate can result. Any other `CanvasException` is treated
+  as "exists, title unknown", so the orphan can still match by file name and
+  the error leans toward stopping. With no orphans there is no Canvas call.
+  The full course listing (`list_course_objects`) was rejected: its cost grows
+  with the course, while this grows with the orphan count.
+- **Matching** (`match_orphans`, pure): equal Canvas type, and equal file name
+  (last path component) or equal `pair_manifest.normalize_title`. Files under
+  `assets/` match by name only, since their local "title" is their path. Local
+  files and titles come from `pair_manifest.collect_local_items`, which applies
+  `.canvasignore`. A match against a file with no entry is a probable move. A
+  match against a tracked file is an existing duplicate.
+- **Moves stop the run**: each pair is reported through `warn()` (so it lands in
+  the error summary) with the `mv --after` and `update --new` commands, and
+  `run_sync` returns True before any Canvas write. Ambiguous one-to-many pairs
+  are all listed. The tool never picks one.
+- **Existing duplicates** print a warning (not an error) on every run, naming
+  both IDs and the `update --new` / `prune` ways to clear it.
+- **`--new PATH`** (repeatable; rejected with `--check-all`) is resolved from
+  the current directory first, like `-t`/`-s`, then from the repo root. Every
+  PATH is validated before anything is removed: it must exist, be a file
+  `collect_local_items` returns, and match at least one orphan (as a new or a
+  tracked file). Any failure stops the run with nothing changed. Then the
+  matching orphans' entries are removed from the in-memory manifest and one
+  inline warning per entry says the Canvas item was left in place untracked.
+  The manifest is flushed only if the run then goes on. If another unrecorded
+  move still stops it, the file on disk is untouched.
+- **Printed commands** (`unrecorded_moves.Commands`): paths are shown
+  relative to the current directory when that is inside the repo, absolute
+  otherwise. `cli._move_check_commands` repeats the run's COURSE_DIR (or the
+  repo path, since `prune` requires one) and `--config`, so a printed
+  `update --new` acts on the same manifest.
+
+`import` and `publish` have no counterpart. `import` builds a repo from an
+export and writes no manifest, and `publish` never contacts Canvas or reads a
+manifest, so neither can create a duplicate this way.
+
 ### Course-directory resolution
 
 Every command that acts on an existing course takes `COURSE_DIR` and resolves it the same
@@ -421,8 +478,10 @@ scan skips the reserved course entry (its key is not a repo path).
 Removes Canvas items whose local source file no longer exists. Because the
 manifest is the only record of what the tool created, an entry is treated as an
 **orphan** when `COURSE_DIR / <local_key>` is gone from disk — which covers both
-deleting a file and renaming one (a rename leaves the old path orphaned while the
-new path syncs as a fresh item, per the path-keyed manifest).
+deleting a file and renaming one. Since the unrecorded-move check, a rename made
+without `mv` stops the next `update` instead of syncing the new path as a fresh
+item. The orphan set comes from `unrecorded_moves.find_orphans`, shared with
+that check.
 
 Exactly one of `--delete`, `--unpublish`, or `--manifest-only` is required; there
 is no default, so the intent is always explicit. Changes are applied immediately
@@ -1145,7 +1204,7 @@ Moves or renames a file or directory within the course repo, updating all
 internal references so nothing breaks on the next sync.
 
 ```text
-markdown-to-canvas mv [--noop/-n] [--verbose/-v] SRC DEST
+markdown-to-canvas mv [--noop/-n] [--verbose/-v] [--after] SRC DEST
 ```
 
 `resolve_dest()` runs first, before validation and before any path map is
@@ -1224,6 +1283,45 @@ check, which is correct — only typed input carries the intent.
 
 This subcommand is purely local — it never contacts Canvas. Run `update` after
 moving files to push the changes.
+
+### `--after` (record a move already made on disk)
+
+`run_mv(after=True)` hands off to `_run_mv_after`, which reuses the update
+computations but not the physical move. Differences from a plain `mv`:
+
+- **No `resolve_dest`**: DEST is the actual new location, so an existing
+  directory DEST must not be expanded to `DEST/SRC.name`. The repo root is
+  found by walking up from DEST (SRC is gone).
+- **Validation** (`validate_after`): SRC must not exist (else "use mv without
+  --after"), DEST must exist, both in the repo and in the same content-type
+  folder.
+- **Path map** (`build_after_path_map`): built from what is at DEST, since SRC
+  cannot be walked. A file maps to SRC itself. Each file under a directory maps
+  to the same suffix under SRC. For a renamed quiz/qbank folder whose inner file
+  was renamed with it (`quizzes/b/b.md`), the suffix entry `quizzes/a/b.md` is
+  replaced by `quizzes/a/a.md → quizzes/b/b.md`.
+- **Manifests one at a time** (`plan_after_manifest_updates`): a manifest that
+  has both an OLD key and its NEW key already has the duplicate in that course.
+  It is left unchanged, and `_describe_clashes` prints both IDs and the
+  `update --new` command for that course (`--config course_settings/<stem>.toml`
+  inferred from `.manifest-<stem>.toml`). Other manifests are rekeyed with
+  `compute_manifest_updates`. No manifest with an OLD key raises "no move to
+  record". All manifests clashing raises before anything is written, links
+  included. One section updated after the move and the other not is the case
+  this per-manifest rule exists for.
+- **Links inside the moved file**: `compute_file_updates(after=True)` finds a
+  moved file at its NEW path and passes `transform_links` a `url_map` from
+  `_after_link_keeper`. A link that reaches an existing file from the new folder
+  is kept (an editor may already have fixed it). One that reaches an existing
+  file only from the old folder falls through to the normal rebase. One that
+  reaches nothing from either is kept. Links in other files that point at OLD
+  are rewritten as for `mv`.
+- module_order, `front_page`/`dashboard_image` and `pinned_resources` updates,
+  `--noop` and the summary are shared (`_write_updates`, `_describe_changes(after=True)`,
+  which says "Recorded the move of N file(s)").
+
+`update`'s unrecorded-move check (see the `update` section) prints the
+`mv --after` command for each move it detects.
 
 ## `cp` Subcommand
 

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from canvasapi import Canvas
-from canvasapi.exceptions import BadRequest, Forbidden, ResourceDoesNotExist
+from canvasapi.exceptions import BadRequest, CanvasException, Forbidden, ResourceDoesNotExist
 from canvasapi.rubric import RubricAssociation
 from canvasapi.util import combine_kwargs
 
@@ -896,6 +896,49 @@ def _get_object(course, canvas_type: str, entry: dict[str, Any]):
     if getter is None:
         return None
     return getter(course, _object_key(canvas_type, entry))
+
+
+# canvas_type → the attribute holding the item's title, as Canvas returns it.
+_TITLE_ATTRS = {
+    "page": "title",
+    "assignment": "name",
+    "discussion": "title",
+    "announcement": "title",
+    "quiz": "title",
+    "module": "name",
+    "file": "display_name",
+}
+
+
+class OrphanItem(NamedTuple):
+    """What the unrecorded-move check needs to know about an orphan's Canvas item."""
+
+    exists: bool
+    title: str | None
+
+
+def get_orphan_item(course, canvas_type: str, entry: dict[str, Any]) -> OrphanItem:
+    """Whether a manifest entry's Canvas item still exists, and its title.
+
+    A 404 (or a soft-deleted workflow_state) means gone. Any other Canvas error
+    leaves the answer unknown, reported as existing with no title: the caller
+    then still matches by file name, so an unreadable item errs toward stopping
+    `update` instead of letting it create a duplicate.
+    """
+    getter = _GETTERS.get(canvas_type)
+    if getter is None:
+        return OrphanItem(True, None)
+    key = entry.get("canvas_url") if canvas_type == "page" else None
+    try:
+        obj = getter(course, key or entry["canvas_id"])
+    except ResourceDoesNotExist:
+        return OrphanItem(False, None)
+    except CanvasException:
+        return OrphanItem(True, None)
+    if getattr(obj, "workflow_state", None) == "deleted":
+        return OrphanItem(False, None)
+    title = getattr(obj, _TITLE_ATTRS[canvas_type], None)
+    return OrphanItem(True, str(title) if title is not None else None)
 
 
 def delete_content(course, canvas_type: str, entry: dict[str, Any]) -> bool:

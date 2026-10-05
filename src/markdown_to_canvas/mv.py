@@ -8,12 +8,14 @@ import subprocess
 import tomllib
 import uuid
 from pathlib import Path, PurePosixPath
+from urllib.parse import unquote
 
 import tomlkit
 
 from . import manifest as manifest_lib
 from . import repo_format, toml_write
 from .links import transform_links  # re-exported: mv's public API before links.py
+from .links import resolve_repo_relative, split_suffix
 from .config import find_repo_root  # re-exported: mv's public API since before the move
 
 _CONTENT_TYPE_DIRS = {
@@ -181,6 +183,61 @@ def build_path_map(src: Path, dest: Path, repo_root: Path) -> dict[str, str]:
 
         _add_quiz_qbank_inner_renames(src, dest, src_rel, dest_rel, path_map)
 
+    return path_map
+
+
+def _repo_rel(path: Path, repo_root: Path, what: str) -> str:
+    try:
+        return path.resolve().relative_to(repo_root.resolve()).as_posix()
+    except ValueError:
+        raise ValueError(f"{what} is outside the course repo ({repo_root}): {path}")
+
+
+def validate_after(old: Path, new: Path, repo_root: Path) -> None:
+    """Validate `mv --after OLD NEW`: the move already happened on disk."""
+    if old.exists():
+        raise ValueError(
+            f"{old} still exists, so there is no move to record.\n"
+            "To move it, run mv without --after."
+        )
+    if not new.exists():
+        raise ValueError(
+            f"Destination does not exist: {new}\n"
+            "With --after, NEW is where the file or folder already is."
+        )
+    old_type = _content_type_dir(_repo_rel(old, repo_root, "Source"))
+    new_type = _content_type_dir(_repo_rel(new, repo_root, "Destination"))
+    if old_type != new_type:
+        raise ValueError(
+            f"Cannot move across content types: {old_type}/ → {new_type}/\n"
+            f"Both source and destination must be in the same top-level directory."
+        )
+
+
+def build_after_path_map(old: Path, new: Path, repo_root: Path) -> dict[str, str]:
+    """old→new mapping for a move already made on disk.
+
+    OLD is gone, so the map is built from what is at NEW: a file maps to OLD
+    itself, a folder maps each file under it to the same path under OLD. A
+    renamed quiz/qbank folder whose inner file was renamed with it maps the
+    old inner name (OLD/OLD.md) to the new one (NEW/NEW.md).
+    """
+    old_rel = _repo_rel(old, repo_root, "Source")
+    new_rel = _repo_rel(new, repo_root, "Destination")
+    if new.is_file():
+        return {old_rel: new_rel}
+    path_map: dict[str, str] = {}
+    for child in sorted(new.rglob("*")):
+        if child.is_file():
+            child_rel = child.resolve().relative_to(repo_root.resolve()).as_posix()
+            path_map[old_rel + child_rel[len(new_rel):]] = child_rel
+    parts = old_rel.split("/")
+    suffix = _INNER_FILE_SUFFIX.get(parts[0]) if len(parts) >= 2 else None
+    if suffix is not None and old.name != new.name:
+        new_inner = f"{new_rel}/{new.name}{suffix}"
+        if new_inner in path_map.values():
+            path_map.pop(f"{old_rel}/{new.name}{suffix}", None)
+            path_map[f"{old_rel}/{old.name}{suffix}"] = new_inner
     return path_map
 
 
@@ -368,12 +425,48 @@ def compute_pinned_resources_updates(
     return updates or None
 
 
+def _after_link_keeper(
+    repo_root: Path, old_dir: str, new_dir: str, path_map: dict[str, str]
+):
+    """url_map for a file that was moved before `mv --after` ran.
+
+    Its links may have been written for its old folder or already updated by
+    an editor for its new one, and the text alone cannot say which. A link
+    that reaches an existing file from the new folder is kept as is; one that
+    only reaches an existing file from the old folder is left to the normal
+    rebase (returns None); one that reaches nothing from either is kept.
+    """
+
+    def exists(rel: str | None) -> bool:
+        return rel is not None and (repo_root / rel).exists()
+
+    def url_map(url: str) -> str | None:
+        path_part, _ = split_suffix(url)
+        if not path_part:
+            return url
+        decoded = unquote(path_part)
+        if exists(resolve_repo_relative(new_dir, decoded)):
+            return url
+        from_old = resolve_repo_relative(old_dir, decoded)
+        if from_old is not None and exists(path_map.get(from_old, from_old)):
+            return None
+        return url
+
+    return url_map
+
+
 def compute_file_updates(
     repo_root: Path,
     path_map: dict[str, str],
+    after: bool = False,
 ) -> dict[str, tuple[str, str]]:
-    """Compute {new_repo_rel_path: (old_content, new_content)} for files with link changes."""
+    """Compute {new_repo_rel_path: (old_content, new_content)} for files with link changes.
+
+    With ``after`` (``mv --after``) the moved files are already at their new
+    paths on disk; their own links go through ``_after_link_keeper``.
+    """
     moved_files = set(path_map.keys())
+    moved_back = {new: old for old, new in path_map.items()} if after else {}
     updates: dict[str, tuple[str, str]] = {}
 
     for md_file in sorted(repo_root.rglob("*.md")):
@@ -384,7 +477,13 @@ def compute_file_updates(
         except ValueError:
             continue
 
-        if repo_rel in moved_files:
+        url_map = None
+        if repo_rel in moved_back:
+            old_dir = str(PurePosixPath(moved_back[repo_rel]).parent)
+            new_path = repo_rel
+            new_dir = str(PurePosixPath(repo_rel).parent)
+            url_map = _after_link_keeper(repo_root, old_dir, new_dir, path_map)
+        elif repo_rel in moved_files:
             old_dir = str(PurePosixPath(repo_rel).parent)
             new_path = path_map[repo_rel]
             new_dir = str(PurePosixPath(new_path).parent)
@@ -398,7 +497,7 @@ def compute_file_updates(
         except (OSError, UnicodeDecodeError):
             continue
 
-        new_content = transform_links(content, old_dir, new_dir, path_map)
+        new_content = transform_links(content, old_dir, new_dir, path_map, url_map=url_map)
         if new_content != content:
             updates[new_path] = (content, new_content)
 
@@ -531,6 +630,67 @@ def compute_all_manifest_updates(
     return updates
 
 
+def plan_after_manifest_updates(
+    repo_root: Path, path_map: dict[str, str]
+) -> tuple[
+    list[tuple[Path, manifest_lib.ManifestDict]],
+    list[tuple[Path, list[tuple[str, str, object, object]]]],
+    bool,
+]:
+    """Manifest rewrites for `mv --after`, one manifest at a time.
+
+    A manifest that already has an entry for a NEW path as well as its OLD path
+    is left unchanged (the duplicate already exists in that course) and
+    returned in the second list as (manifest, [(old, new, old_id, new_id)]).
+    The flag says whether any manifest has an OLD key at all.
+    """
+    updates: list[tuple[Path, manifest_lib.ManifestDict]] = []
+    clashes: list[tuple[Path, list[tuple[str, str, object, object]]]] = []
+    any_old = False
+    for path in find_manifests(repo_root):
+        manifest = manifest_lib.load(path)
+        olds = [o for o in path_map if o in manifest]
+        any_old = any_old or bool(olds)
+        both = [
+            (o, path_map[o], manifest[o].get("canvas_id"), manifest[path_map[o]].get("canvas_id"))
+            for o in olds
+            if path_map[o] in manifest
+        ]
+        if both:
+            clashes.append((path, both))
+            continue
+        new_manifest = compute_manifest_updates(manifest, path_map)
+        if new_manifest != manifest:
+            updates.append((path, new_manifest))
+    return updates, clashes, any_old
+
+
+def _config_args_for(manifest_path: Path) -> str:
+    """--config for the canvas.toml a manifest belongs to (the usual layout:
+    .manifest-<stem>.toml ↔ course_settings/<stem>.toml)."""
+    stem = manifest_path.name[len(".manifest-"):-len(".toml")]
+    if stem == manifest_lib.DEFAULT_CONFIG_STEM:
+        return ""
+    return f" --config course_settings/{stem}.toml"
+
+
+def _describe_clashes(
+    repo_root: Path, clashes: list[tuple[Path, list[tuple[str, str, object, object]]]]
+) -> None:
+    from .unrecorded_moves import Commands
+
+    for path, pairs in clashes:
+        for old, new, old_id, new_id in pairs:
+            commands = Commands(repo_root)
+            course = commands.shown(".") + _config_args_for(path)
+            print(
+                f"  {path.name}: left unchanged. {old} (Canvas ID {old_id}) and {new} "
+                f"(Canvas ID {new_id}) both have entries, so they are probably "
+                "duplicate Canvas items. To forget the old entry:\n"
+                f"    {Commands(repo_root, course).update_new(new)}"
+            )
+
+
 def _describe_changes(
     path_map: dict[str, str],
     manifest_names: list[str],
@@ -540,13 +700,15 @@ def _describe_changes(
     pinned_updates: dict[str, str] | None,
     noop: bool,
     verbose: bool,
+    after: bool = False,
 ) -> None:
     """Print summary or verbose output of changes."""
     prefix = "Would " if noop else ""
+    verb = "record move" if after else "move"
 
     if verbose or noop:
         for old, new in sorted(path_map.items()):
-            print(f"  {prefix}move: {old} → {new}")
+            print(f"  {prefix}{verb}: {old} → {new}")
 
     files_moved = len(path_map)
     manifest_entries = sum(1 for o, n in path_map.items() if o != n) if manifest_names else 0
@@ -571,7 +733,10 @@ def _describe_changes(
             link_total += sum(1 for o, n in zip(old_lines, new_lines) if o != n)
 
     parts = []
-    parts.append(f"{'Would move' if noop else 'Moved'} {files_moved} file(s)")
+    if after:
+        parts.append(f"{'Would record' if noop else 'Recorded'} the move of {files_moved} file(s)")
+    else:
+        parts.append(f"{'Would move' if noop else 'Moved'} {files_moved} file(s)")
     if manifest_names:
         where = "" if len(manifest_names) == 1 else f" in {', '.join(manifest_names)}"
         parts.append(f"updated {manifest_entries} manifest entry/entries{where}")
@@ -593,12 +758,24 @@ def _describe_changes(
 
 
 def run_mv(
-    src: Path, dest: Path | str, noop: bool = False, verbose: bool = False
+    src: Path,
+    dest: Path | str,
+    noop: bool = False,
+    verbose: bool = False,
+    after: bool = False,
 ) -> None:
     """Move/rename a file or directory, updating manifest and all references.
 
     DEST may be a str so a trailing separator survives to `resolve_dest`.
+
+    ``after`` (``mv --after``) records a move already made on disk: SRC is
+    gone and DEST exists. Everything is updated except the files themselves,
+    which are not moved. DEST names the actual location, so it is never
+    expanded to DEST/SRC.name.
     """
+    if after:
+        _run_mv_after(src.absolute(), Path(dest).absolute(), noop, verbose)
+        return
     must_be_dir = has_trailing_slash(dest)
     src = src.absolute()
     dest = resolve_dest(src, Path(dest).absolute(), must_be_dir=must_be_dir)
@@ -654,6 +831,21 @@ def run_mv(
     use_git = _is_git_repo(repo_root) and _has_tracked_content(repo_root, src)
     _do_move(src, dest, repo_root, use_git, inner_renames_paths)
 
+    _write_updates(
+        repo_root, file_updates, manifest_updates, module_order_updates,
+        course_settings_updates, pinned_updates,
+    )
+
+
+def _write_updates(
+    repo_root: Path,
+    file_updates: dict[str, tuple[str, str]],
+    manifest_updates: list[tuple[Path, manifest_lib.ManifestDict]],
+    module_order_updates: list[str] | None,
+    course_settings_updates: dict[str, str] | None,
+    pinned_updates: dict[str, str] | None,
+) -> None:
+    """Write the link, manifest, module_order and course_settings changes."""
     for file_new_path, (_, new_content) in file_updates.items():
         target = repo_root / file_new_path
         target.write_text(new_content)
@@ -678,3 +870,52 @@ def run_mv(
         for old_entry, new_value in (pinned_updates or {}).items():
             content = _replace_toml_quoted_string(content, old_entry, new_value)
         settings_path.write_text(content, encoding="utf-8")
+
+
+def _run_mv_after(old: Path, new: Path, noop: bool, verbose: bool) -> None:
+    """`mv --after OLD NEW`; see run_mv."""
+    repo_root = find_repo_root(new) or find_repo_root(old)
+    if repo_root is None:
+        raise ValueError(
+            "Could not find course repo root.\n"
+            "Looked for course_settings/course_settings.toml by walking up from\n"
+            f"  {new}"
+        )
+    repo_format.check_repo_format(repo_root)
+    validate_after(old, new, repo_root)
+
+    old_rel = _repo_rel(old, repo_root, "Source")
+    new_rel = _repo_rel(new, repo_root, "Destination")
+    path_map = build_after_path_map(old, new, repo_root)
+
+    manifest_updates, clashes, any_old = plan_after_manifest_updates(repo_root, path_map)
+    if not any_old:
+        raise ValueError(
+            f"No manifest has an entry for {old_rel}"
+            f"{' or anything under it' if new.is_dir() else ''}, so there is no "
+            "move to record."
+        )
+    _describe_clashes(repo_root, clashes)
+    if not manifest_updates:
+        raise ValueError(
+            "Every manifest that has the old path also has the new one, so there "
+            "is nothing to rekey; nothing was changed."
+        )
+
+    file_updates = compute_file_updates(repo_root, path_map, after=True)
+    module_order_updates = compute_module_order_updates(repo_root, path_map)
+    course_settings_updates = compute_course_settings_updates(repo_root, path_map)
+    pinned_updates = compute_pinned_resources_updates(
+        repo_root, path_map, old_rel, new_rel
+    )
+    _describe_changes(
+        path_map, [path.name for path, _ in manifest_updates], file_updates,
+        module_order_updates, course_settings_updates, pinned_updates,
+        noop, verbose, after=True,
+    )
+    if noop:
+        return
+    _write_updates(
+        repo_root, file_updates, manifest_updates, module_order_updates,
+        course_settings_updates, pinned_updates,
+    )
