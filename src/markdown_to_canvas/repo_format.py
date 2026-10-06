@@ -31,7 +31,7 @@ from .relative_dates import CUTOFF_HELP, CUTOFF_KEY, DEFAULT_TIMES, DEFAULT_TIME
 #: The format version this tool reads and writes. Increase it (and add a
 #: migration to MIGRATIONS) whenever a change makes the tool read an existing
 #: repo file differently. See CLAUDE.md.
-FORMAT_VERSION = 9
+FORMAT_VERSION = 10
 
 SETTINGS_RELPATH = Path("course_settings") / "course_settings.toml"
 
@@ -721,6 +721,82 @@ def _migrate_8_to_9(state: UpgradeState) -> list[str]:
     return lines
 
 
+_TOP_DUE_DATES_RE = re.compile(r"^due_dates[ \t]*=", re.MULTILINE)
+
+
+def _with_date_format(text: str) -> tuple[str | None, str]:
+    """``text`` with format 10's ``replace_date_with_format`` line added.
+
+    Returns (new text or None when the key is already set, message). The
+    commented line goes directly above the top-level ``due_dates`` key (above
+    any comment lines attached to it) when that key comes before the first
+    table header, else before the first header, else at the end.
+    """
+    from .date_placeholders import DEFAULT_FORMAT, FORMAT_COMMENT, FORMAT_KEY
+
+    if FORMAT_KEY in tomllib.loads(text):
+        return None, f"{SETTINGS_RELPATH.name} already sets {FORMAT_KEY}; left as it is"
+    header = _ANY_HEADER_RE.search(text)
+    limit = header.start() if header else len(text)
+    due = _TOP_DUE_DATES_RE.search(text, 0, limit)
+    if due is not None:
+        at = due.start()
+        # Step back over comment lines directly above due_dates.
+        while at > 0:
+            prev_start = text.rfind("\n", 0, at - 1) + 1
+            if text[prev_start:at].lstrip().startswith("#"):
+                at = prev_start
+            else:
+                break
+    else:
+        at = limit
+    block = f'{FORMAT_COMMENT}\n{FORMAT_KEY} = "{DEFAULT_FORMAT}"\n\n'
+    before = text[:at]
+    if before and not before.endswith("\n"):
+        before += "\n"
+    message = f'Add {FORMAT_KEY} = "{DEFAULT_FORMAT}" (date placeholder format)'
+    return before + block + text[at:], message
+
+
+def _migrate_9_to_10(state: UpgradeState) -> list[str]:
+    """Add format 10's ``replace_date_with_format`` key; stamp the manifests.
+
+    Format 10 adds ``[text]{.replace_date_with ...}`` date placeholders in
+    content bodies and the top-level default-format key. Older files need no
+    rewriting; the version changes so an older tool refuses a repo whose
+    bodies it would upload with the placeholder markup still in them. The
+    line is inserted text-level (the rest of the file stays byte-identical)
+    and the result re-parsed to make sure only the key was added.
+    """
+    from .date_placeholders import FORMAT_KEY
+
+    lines: list[str] = []
+    if settings_path(state.repo).exists() and read_repo_version(state.repo) < 10:
+        text = tomlkit.dumps(state.settings_doc)
+        new_text, message = _with_date_format(text)
+        if new_text is None:
+            lines.append(message)
+        else:
+            try:
+                new_data = tomllib.loads(new_text)
+                del new_data[FORMAT_KEY]
+                same = new_data == tomllib.loads(text)
+            except (tomllib.TOMLDecodeError, KeyError):
+                same = False
+            if same:
+                state.settings_doc = tomlkit.parse(new_text)
+                lines.append(message)
+            else:
+                lines.append(
+                    f"NOTICE: could not add {FORMAT_KEY} to {SETTINGS_RELPATH.name} "
+                    f"(unusual layout); left unchanged. Placeholders use the default "
+                    f"format until you add it as a top-level key."
+                )
+    for manifest_path in state.manifests:
+        lines.append(f"Record format version 10 in {manifest_path.name}")
+    return lines
+
+
 #: Ordered migrations, keyed by the version they migrate *from*.
 MIGRATIONS: dict[int, Migration] = {
     0: _migrate_0_to_1,
@@ -732,6 +808,7 @@ MIGRATIONS: dict[int, Migration] = {
     6: _migrate_6_to_7,
     7: _migrate_7_to_8,
     8: _migrate_8_to_9,
+    9: _migrate_9_to_10,
 }
 
 

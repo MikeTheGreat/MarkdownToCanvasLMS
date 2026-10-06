@@ -1134,18 +1134,28 @@ def generate_due_dates_cmd(
 
     for line, is_change in render_plan(plan, verbose=verbose):
         click.secho(line, fg="yellow" if is_change else None)
-    for error in plan.errors:
+    for error in [*plan.errors, *plan.placeholder_errors]:
         click.secho(f"  {error}", fg="red")
     for warning in plan.warnings:
         click.echo(f"  {warning}")
 
     _write_generated_dates(plan, noop, assume_yes)
+    problems: list[str] = []
     if plan.errors:
         count = len(plan.errors)
-        die(
+        problems.append(
             f"{count} due_dates entr{'y was' if count == 1 else 'ies were'} left "
             f"unchanged because of the error{'' if count == 1 else 's'} above."
         )
+    if plan.placeholder_errors:
+        count = len(plan.placeholder_errors)
+        problems.append(
+            f"{count} date placeholder{' does' if count == 1 else 's do'} not resolve "
+            f"against the generated due_dates (see above); `update` will not upload "
+            f"the files that contain {'it' if count == 1 else 'them'}."
+        )
+    if problems:
+        die(" ".join(problems))
 
 
 def _write_generated_dates(plan, noop: bool, assume_yes: bool) -> None:

@@ -423,6 +423,19 @@ def test_course_settings_toml_at_root(imported_dir: Path) -> None:
     assert (imported_dir / "course_settings" / "course_settings.toml").exists()
 
 
+def test_course_settings_toml_writes_date_format(imported_dir: Path) -> None:
+    """replace_date_with_format is top-level, with its comment on the line above."""
+    import tomllib
+    from markdown_to_canvas.date_placeholders import DEFAULT_FORMAT, FORMAT_COMMENT
+    text = (imported_dir / "course_settings" / "course_settings.toml").read_text()
+    assert tomllib.loads(text)["replace_date_with_format"] == DEFAULT_FORMAT
+    lines = text.splitlines()
+    at = next(i for i, line in enumerate(lines) if line.startswith("replace_date_with_format"))
+    assert lines[at - 1] == FORMAT_COMMENT
+    first_header = next(i for i, line in enumerate(lines) if line.startswith("["))
+    assert at < first_header
+
+
 def test_course_settings_toml_comments_out_title_and_course_code(
     imported_dir: Path,
 ) -> None:

@@ -25,3 +25,8 @@ Load the token before running the tool, from the project root:
   must change only the module; the external link and the page keep their
   own state (set `published: false` on the page to check it stays
   unpublished when the module is republished).
+- Date placeholders (2026-10-05): discussions/week-1-discussion.md quotes its
+  own due_at (default format, inside a highlighted span) and lock_at (explicit
+  format); pages/week-1-homepage.md quotes Quiz 1's due_at by item= and type=.
+  Changing an entry's due_at in due_dates and running update must re-upload
+  only the files that quote it.

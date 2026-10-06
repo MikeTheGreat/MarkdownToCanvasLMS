@@ -90,6 +90,7 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
   - [Content file format](#content-file-format)
     - [`course_settings.toml`](#course_settingstoml)
       - [Centralized due dates](#centralized-due-dates)
+      - [Quoting due dates in text (`replace_date_with`)](#quoting-due-dates-in-text-replace_date_with)
       - [Pinned resources (`pinned_resources`)](#pinned-resources-pinned_resources)
       - [Group sets/group categories (`group_categories`)](#group-setsgroup-categories-group_categories)
     - [Syllabus (`course_settings/syllabus.md`)](#syllabus-course_settingssyllabusmd)
@@ -593,7 +594,7 @@ to Settings ➡ Navigation and then click the 'Save' button.
 
 ## Canvas overwrite protection
 
-By default, before uploading any item that already exists in Canvas the tool fetches its `updated_at` timestamp from Canvas and compares it to the local file's modification time. If Canvas is newer — meaning someone edited the item directly in Canvas after the last sync — the upload is **skipped**.
+By default, before uploading any item that already exists in Canvas the tool fetches its `updated_at` timestamp from Canvas and compares it to the later of the local file's modification time (including the snippets it includes) and the time of the item's last upload. If Canvas is newer — meaning someone edited the item directly in Canvas after the last sync — the upload is **skipped**. Comparing with the last upload as well means that a re-upload caused by something other than editing the file (a [course flag](#course-flags--conditional-content-if--elif--else--endif) flip, or a changed date quoted by a [date placeholder](#quoting-due-dates-in-text-replace_date_with)) is not blocked by the `updated_at` that the tool's own previous upload set.
 
 At the end of the run, all skipped items are printed together as a single list:
 
@@ -1364,7 +1365,10 @@ work in the destination:
 * an item with the same title and type as a different file already in the
   destination;
 * absolute Canvas URLs that point at the source course (`/courses/<id>/...`),
-  which are common in imported courses.
+  which are common in imported courses;
+* [date placeholders](#quoting-due-dates-in-text-replace_date_with) with an
+  `item=` that names no entry of the destination's `due_dates` (in the file or a
+  snippet it includes).
 
 `cp` never contacts Canvas. Run `update` on the destination course afterwards
 to upload what was copied.
@@ -1932,6 +1936,75 @@ quarter, locks a week later") rather than as calendar dates, the
 [`generate-due-dates`](#generating-due-dates-from-offsets-generate-due-dates)
 command computes this table from a relative schedule at the start of each term.
 After that you edit `due_dates` by hand as usual.
+
+#### Quoting due dates in text (`replace_date_with`)
+
+Instructions often repeat a due date in the body ("Complete step 5 by Monday,
+October 27"). Typed by hand, that text goes stale when the dates move next term.
+A date placeholder fills it in from the `due_dates` table instead:
+
+```markdown
+[**Complete Step 5 by [Oct 27]{.replace_date_with}**]{style="background-color: #fbeeb8;"}
+
+Career Exploration is due [Oct 19]{.replace_date_with item="Career Exploration Assignment" format="%A, %B %-d"}.
+```
+
+A placeholder is a Pandoc span with the class `replace_date_with`. `update` and
+`publish` replace the whole span (brackets, text and attributes) with the date,
+as plain text; nothing of the span reaches Canvas. The text inside the brackets
+is ignored. It is only there so the file reads sensibly in an editor preview,
+and it must not contain `[` or `]`. A placeholder can sit inside other spans or
+emphasis, as in the first line above.
+
+| Attribute | Meaning |
+| --- | --- |
+| `item` | The `name` of a `due_dates` entry. Leave it out in an assignment, discussion or quiz (including a quiz's question files) to mean that item's own entry, found by its title the way `update` finds it. Pages, announcements, the syllabus and question banks have no entry of their own, so they must give `item`. |
+| `type` | `assignment`, `discussion` or `quiz`. Needed only when two entries share a name; it picks the entry with that type (an entry with no `type` matches any). |
+| `field` | `due_at` (the default), `unlock_at` or `lock_at`. |
+| `format` | A [strftime](https://docs.python.org/3/library/datetime.html#format-codes) format. When left out, the course-wide default is used. |
+
+Only entries in `due_dates` can be quoted, and they are named by title, so
+moving or renaming files with `mv` does not affect placeholders. Renaming an
+item's title does: update the placeholders that name it. Entries removed by
+[`only_if`](#only_if-excluding-a-due_dates-entry-by-flag) for the course being
+updated cannot be quoted.
+
+The course-wide default format is the top-level `replace_date_with_format` key
+of `course_settings.toml`, which `import` and `upgrade` write:
+
+```toml
+# Date format (strftime) for [text]{.replace_date_with} placeholders that give no format=
+replace_date_with_format = "%A, %B %-d by %-I:%M %p"
+```
+
+That gives `Tuesday, October 27 by 11:59 PM`. Without the key, the same default
+applies. `%-d`, `%-m`, `%-H`, `%-I`, `%-M` and `%-j` drop the leading zero on
+every platform. The date is shown in the clock time and UTC offset written in
+`due_dates`, with no time-zone conversion: `2026-10-27T23:59:00-07:00` is shown
+as 11:59 PM on October 27. Everything `generate-due-dates` writes is in the term
+file's time zone, so that is the course's local time.
+
+A placeholder that cannot be filled in is an error: no entry with that name, a
+name shared by several entries without `type=`, a missing `item` in a file that
+has no entry of its own, a field set to `NONE`, `KEEP`, `CREATE_NONE_THEN_KEEP`
+or `""`, a value that is not a date, or an unknown attribute. `update` does not
+upload that file, keeps going with the others, and exits with an error at the
+end. `publish` lists every such error and builds nothing. Placeholders inside
+code (fenced blocks or `` `inline code` ``) are left alone. Placeholders are
+replaced in the bodies of pages, assignments, discussions, announcements, the
+syllabus, quizzes and question files, and in snippets those include. They are
+not replaced in frontmatter or module files.
+
+When a quoted date changes (you edit `due_dates`, run `generate-due-dates`,
+flip a flag that changes which entries apply, or change
+`replace_date_with_format`), the next `update` re-uploads exactly the files whose
+quoted text changed, even though the files themselves did not change. The
+manifest records each file's quoted dates for this (`dates_used`). These
+re-uploads go through the usual [overwrite protection](#canvas-overwrite-protection).
+
+`generate-due-dates` also checks every placeholder against the dates it is about
+to write, and [`cp`](#copying-content-between-courses-cp) warns about
+placeholders that name an entry the destination's `due_dates` lacks.
 
 #### Pinned resources (`pinned_resources`)
 
@@ -3326,8 +3399,8 @@ anything on Canvas. If a version differs from the tool's, the command stops and
 changes nothing:
 
 ```text
-Error: This course repo is format version 0 but this tool (markdown-to-canvas 0.2.1) uses format version 9. Run `markdown-to-canvas upgrade` first.
-Error: course_settings/course_settings.toml is format version 10 but this tool (markdown-to-canvas 0.2.1) only understands format version 9. Update markdown-to-canvas.
+Error: This course repo is format version 0 but this tool (markdown-to-canvas 0.2.1) uses format version 10. Run `markdown-to-canvas upgrade` first.
+Error: course_settings/course_settings.toml is format version 11 but this tool (markdown-to-canvas 0.2.1) only understands format version 10. Update markdown-to-canvas.
 ```
 
 A manifest that is older than the repo is named in the message. This happens
@@ -3490,6 +3563,15 @@ real values, the next `generate-due-dates` shows every unlock moving to 00:00
 (and locks computed from a due time other than 23:59 moving to 23:59); unlocks
 on or before `dont_reschedule_dates_before` are kept. An older tool would stop
 with "unknown key" on these settings, which is why the version changes.
+
+Migration 9 to 10 goes with [date placeholders](#quoting-due-dates-in-text-replace_date_with).
+It adds `replace_date_with_format = "%A, %B %-d by %-I:%M %p"` to
+`course_settings.toml`, with a one-line comment above it, as a top-level key just
+above `due_dates` (or above the first section header when there is no
+`due_dates`). A file that already sets the key keeps its value, with a message.
+No other file changes, and every manifest records version 10. Nothing in an
+older repo needed rewriting; the version changes so that an older tool refuses
+a repo with placeholders instead of uploading the span text as it is.
 
 `upgrade` also checks that `tab_configuration` is a top-level key. The tool
 only reads it there, so when it is nested under a section
@@ -3818,6 +3900,13 @@ It prints warnings, each naming the table or tables responsible:
   `due_dates`, or that has a `due_dates` entry but no item in the table.
 * A notice listing `due_dates` entries the table did not produce (for example
   left from another table), which stay as they are.
+
+It also checks every [date placeholder](#quoting-due-dates-in-text-replace_date_with)
+in the repo against `due_dates` as it will be after the run (snippets expanded,
+every `#if` branch checked, `only_if` not applied). Each one that will not
+resolve is printed in red with the other errors. The dates are still written
+when you confirm, but the command exits with an error, because `update` would
+refuse to upload those files.
 
 Titles in the table's `ignore` list are not reported. A problem in the settings,
 such as an unknown key, an unreadable offset, an item relative to a missing

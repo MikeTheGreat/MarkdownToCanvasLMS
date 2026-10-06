@@ -350,8 +350,9 @@ def test_upgrade_keeps_created_by_and_order(tmp_path):
     data = tomllib.loads(text)
     assert data["created_by"] == "0.1"
     assert list(data)[:3] == ["format_version", "created_by", "upgraded_by"]
-    # Migration 6 -> 7 adds its top-level key above the first table.
-    assert "# c\nfoo = 1\ngroup_categories = []\n\n[s]\nbar = 2  # trailing\n" in text
+    # Migrations 6 -> 7 and 9 -> 10 add their top-level keys above the first table.
+    assert "# c\nfoo = 1\ngroup_categories = []\n" in text
+    assert 'replace_date_with_format = "%A, %B %-d by %-I:%M %p"\n\n[s]\nbar = 2  # trailing\n' in text
 
 
 def test_upgrade_fixes_nested_tab_configuration(tmp_path, capsys):
@@ -1427,7 +1428,7 @@ def test_migration_8_to_9_adds_the_cutoff_and_default_times(tmp_path, capsys):
     path = _settings(tmp_path, "format_version = 8\n" + _V8_BODY)
     manifest = _manifest(tmp_path, version=8)
     before = tomllib.loads(path.read_text())
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=9)
     text = path.read_text()
     assert "[relative_due_dates]\n" + _added_block() + "# --- Relative due dates" in text
     assert text.startswith("format_version = 9\n") and "\n# my settings\n" in text
@@ -1450,7 +1451,7 @@ def test_migration_8_to_9_leaves_a_section_that_already_has_everything(tmp_path,
     )
     body = _V8_BODY.replace('days_of_week = ["Mon", "Wed"]\n', 'days_of_week = ["Mon", "Wed"]\n' + existing)
     path = _settings(tmp_path, "format_version = 8\n" + body)
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=9)
     assert _without_upgraded_by(path.read_text()) == "format_version = 9\n" + body
     out = capsys.readouterr().out
     assert "already mentions dont_reschedule_dates_before" in out
@@ -1460,7 +1461,7 @@ def test_migration_8_to_9_leaves_a_section_that_already_has_everything(tmp_path,
 def test_migration_8_to_9_commented_cutoff_counts_as_present(tmp_path):
     body = _V8_BODY.replace('days_of_week = ["Mon", "Wed"]\n', 'days_of_week = ["Mon", "Wed"]\n' + _CUTOFF_LINE)
     path = _settings(tmp_path, "format_version = 8\n" + body)
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=9)
     assert path.read_text().count("dont_reschedule_dates_before") == 1
     assert tomllib.loads(path.read_text())["relative_due_dates"]["default_unlock_time"] == "00:00"
 
@@ -1470,7 +1471,7 @@ def test_migration_8_to_9_keeps_a_default_time_already_set(tmp_path, capsys):
 
     body = _V8_BODY.replace('days_of_week = ["Mon", "Wed"]\n', 'days_of_week = ["Mon", "Wed"]\ndefault_lock_time = "17:00"\n')
     path = _settings(tmp_path, "format_version = 8\n" + body)
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=9)
     text = path.read_text()
     assert "[relative_due_dates]\n" + CUTOFF_HELP + "\n" + DEFAULT_TIMES_HELP + 'default_unlock_time = "00:00"\n\n' in text
     section = tomllib.loads(text)["relative_due_dates"]
@@ -1481,7 +1482,7 @@ def test_migration_8_to_9_keeps_a_default_time_already_set(tmp_path, capsys):
 def test_migration_8_to_9_adds_a_header_when_only_subtables_exist(tmp_path, capsys):
     body = 'title = "Course"\n\n[relative_due_dates.tables.default]\nitems = []\n'
     path = _settings(tmp_path, "format_version = 8\n" + body)
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=9)
     assert _without_upgraded_by(path.read_text()) == (
         'format_version = 9\ntitle = "Course"\n\n[relative_due_dates]\n' + _added_block()
         + "[relative_due_dates.tables.default]\nitems = []\n"
@@ -1491,7 +1492,7 @@ def test_migration_8_to_9_adds_a_header_when_only_subtables_exist(tmp_path, caps
 
 def test_migration_8_to_9_without_a_relative_section(tmp_path, capsys):
     path = _settings(tmp_path, 'format_version = 8\ntitle = "Course"\n')
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=9)
     assert _without_upgraded_by(path.read_text()) == 'format_version = 9\ntitle = "Course"\n'
     assert "NOTICE" in capsys.readouterr().out
 
@@ -1499,7 +1500,7 @@ def test_migration_8_to_9_without_a_relative_section(tmp_path, capsys):
 def test_migration_8_to_9_noop_reports_and_writes_nothing(tmp_path, capsys):
     path = _settings(tmp_path, "format_version = 8\n" + _V8_BODY)
     before = path.read_bytes()
-    rf.run_upgrade(tmp_path, noop=True)
+    rf.run_upgrade(tmp_path, noop=True, target_version=9)
     assert path.read_bytes() == before
     out = capsys.readouterr().out
     assert "Add a commented-out dont_reschedule_dates_before line" in out
@@ -1510,7 +1511,7 @@ def test_migration_8_to_9_noop_reports_and_writes_nothing(tmp_path, capsys):
 def test_migration_8_to_9_skips_settings_already_at_9(tmp_path):
     path = _settings(tmp_path, "format_version = 9\n" + _V8_BODY)
     manifest = _manifest(tmp_path, version=8)
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=9)
     assert _CUTOFF_LINE not in path.read_text()
     assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 9}
 
@@ -1526,3 +1527,88 @@ def test_upgrade_from_scratch_gets_the_commented_cutoff(tmp_path):
     rf.run_upgrade(tmp_path)
     text = (tmp_path / "course_settings/course_settings.toml").read_text()
     assert _CUTOFF_LINE in text[text.index("[relative_due_dates]"):]
+
+
+# --- migration 9 -> 10 -----------------------------------------------------
+
+_V9_BODY = """\
+# my settings
+title = "Course"
+
+# Due dates for every gradeable item.
+due_dates = [
+    {name = "HW 1", due_at = "2026-10-27T23:59:00-07:00"},
+]
+
+[late_policy]
+x = 1
+"""
+
+
+def _format_block():
+    from markdown_to_canvas.date_placeholders import DEFAULT_FORMAT, FORMAT_COMMENT
+
+    return f'{FORMAT_COMMENT}\nreplace_date_with_format = "{DEFAULT_FORMAT}"\n\n'
+
+
+def test_migration_9_to_10_adds_the_date_format(tmp_path, capsys):
+    path = _settings(tmp_path, "format_version = 9\n" + _V9_BODY)
+    manifest = _manifest(tmp_path, version=9)
+    before = tomllib.loads(path.read_text())
+    rf.run_upgrade(tmp_path)
+    text = path.read_text()
+    # Above due_dates and the comment attached to it.
+    assert '"Course"\n\n' + _format_block() + "# Due dates for every gradeable item.\ndue_dates" in text
+    after = tomllib.loads(text)
+    assert after.pop("format_version") == 10 and before.pop("format_version") == 9
+    after.pop("upgraded_by")
+    assert after.pop("replace_date_with_format") == "%A, %B %-d by %-I:%M %p"
+    assert after == before
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 10}
+    assert "Add replace_date_with_format" in capsys.readouterr().out
+
+
+def test_migration_9_to_10_without_due_dates_goes_before_first_header(tmp_path):
+    path = _settings(tmp_path, 'format_version = 9\ntitle = "Course"\n\n[late_policy]\nx = 1\n')
+    rf.run_upgrade(tmp_path)
+    text = _without_upgraded_by(path.read_text())
+    assert text == 'format_version = 10\ntitle = "Course"\n\n' + _format_block() + "[late_policy]\nx = 1\n"
+
+
+def test_migration_9_to_10_keeps_a_format_already_set(tmp_path, capsys):
+    body = 'replace_date_with_format = "%b %-d"\n' + _V9_BODY
+    path = _settings(tmp_path, "format_version = 9\n" + body)
+    rf.run_upgrade(tmp_path)
+    assert _without_upgraded_by(path.read_text()) == "format_version = 10\n" + body
+    assert "already sets replace_date_with_format" in capsys.readouterr().out
+
+
+def test_migration_9_to_10_noop_reports_and_writes_nothing(tmp_path, capsys):
+    path = _settings(tmp_path, "format_version = 9\n" + _V9_BODY)
+    before = path.read_bytes()
+    rf.run_upgrade(tmp_path, noop=True)
+    assert path.read_bytes() == before
+    out = capsys.readouterr().out
+    assert "Add replace_date_with_format" in out
+    assert "no files were written" in out
+
+
+def test_migration_9_to_10_skips_settings_already_at_10(tmp_path):
+    path = _settings(tmp_path, "format_version = 10\n" + _V9_BODY)
+    manifest = _manifest(tmp_path, version=9)
+    rf.run_upgrade(tmp_path)
+    assert "replace_date_with_format" not in path.read_text()
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 10}
+
+
+def test_version_9_tool_refuses_a_version_10_repo(tmp_path, monkeypatch):
+    _settings(tmp_path, "format_version = 10\n")
+    monkeypatch.setattr(rf, "FORMAT_VERSION", 9)
+    with pytest.raises(RepoFormatError, match="Update markdown-to-canvas"):
+        rf.check_repo_format(tmp_path)
+
+
+def test_upgrade_from_scratch_gets_the_date_format(tmp_path):
+    rf.run_upgrade(tmp_path)
+    data = tomllib.loads((tmp_path / "course_settings/course_settings.toml").read_text())
+    assert data["replace_date_with_format"] == "%A, %B %-d by %-I:%M %p"

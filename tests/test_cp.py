@@ -566,6 +566,35 @@ class TestWarnings:
         ws = self._warnings(src, dest, "pages/url.md")
         assert any("/courses/555/" in w for w in ws)
 
+    def test_date_placeholder_entry_missing_in_destination(self, src, dest):
+        _write(src, "pages/dated.md", '[x]{.replace_date_with item="Career Exploration"}\n')
+        ws = self._warnings(src, dest, "pages/dated.md")
+        assert any(
+            "pages/dated.md" in w and "'Career Exploration'" in w and "destination's due_dates" in w
+            for w in ws
+        )
+
+    def test_date_placeholder_entry_present_in_destination(self, src, dest):
+        _write(
+            dest, "course_settings/course_settings.toml",
+            'name = "Dest"\ndue_dates = [{ name = "Career Exploration", due_at = "NONE" }]\n',
+        )
+        make_current(dest)
+        _write(src, "pages/dated.md", '[x]{.replace_date_with item="Career Exploration"}\n')
+        ws = self._warnings(src, dest, "pages/dated.md")
+        assert not any("date placeholder" in w for w in ws)
+
+    def test_date_placeholder_in_included_snippet(self, src, dest):
+        _write(src, "snippets/dated.md", '[x]{.replace_date_with item="Snip Item" type=quiz}\n')
+        _write(src, "pages/uses.md", "[d](../snippets/dated.md)\n")
+        ws = self._warnings(src, dest, "pages/uses.md")
+        assert any("pages/uses.md" in w and "'Snip Item' (type quiz)" in w for w in ws)
+
+    def test_date_placeholder_without_item_not_warned(self, src, dest):
+        _write(src, "pages/own.md", "[x]{.replace_date_with}\n")
+        ws = self._warnings(src, dest, "pages/own.md")
+        assert not any("date placeholder" in w for w in ws)
+
     def test_warnings_do_not_change_file(self, src, dest):
         assert _cp([src / "assignments/hw1.md"], dest)
         assert (dest / "assignments/hw1.md").read_bytes() == (

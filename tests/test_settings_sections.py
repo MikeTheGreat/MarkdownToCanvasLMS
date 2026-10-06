@@ -51,6 +51,13 @@ class TestComputeSettingsSectionHashes:
         )
         assert compute_settings_section_hashes(base) == compute_settings_section_hashes(varied)
 
+    def test_date_format_affects_no_section(self) -> None:
+        """Editing replace_date_with_format re-uploads no settings section; the
+        bodies that use it re-sync through their dates_used records."""
+        base = {"title": "X", "late_policy": {"late_submission_deduction": 10}}
+        varied = dict(base, replace_date_with_format="%b %-d")
+        assert compute_settings_section_hashes(base) == compute_settings_section_hashes(varied)
+
     def test_unknown_top_level_key_counts_as_metadata(self) -> None:
         a = compute_settings_section_hashes({"title": "X"})
         b = compute_settings_section_hashes({"title": "X", "mystery_key": 42})
@@ -317,7 +324,7 @@ def test_manifest_without_section_hashes_migrates(tmp_path, mocker) -> None:
     with manifest_path.open("wb") as f:
         tomli_w.dump(
             {
-                "_repo_format": {"format_version": 9},
+                "_repo_format": {"format_version": 10},
                 "course_settings/course_settings.toml": {
                     "canvas_id": 0,
                     "canvas_type": "course_settings",
@@ -346,7 +353,7 @@ def test_mv_preserves_resolved_dates(tmp_path) -> None:
     with manifest_path.open("wb") as f:
         tomli_w.dump(
             {
-                "_repo_format": {"format_version": 9},
+                "_repo_format": {"format_version": 10},
                 "assignments/hw1.md": {
                     "canvas_id": 101,
                     "canvas_type": "assignment",
@@ -408,7 +415,7 @@ def test_version_keys_change_makes_no_course_update(tmp_path, mocker) -> None:
     settings_path = root / "course_settings" / "course_settings.toml"
     text = settings_path.read_text()
     settings_path.write_text(
-        text.replace("format_version = 9\n", 'format_version = 9\ncreated_by = "0.2.0"\n'
+        text.replace("format_version = 10\n", 'format_version = 10\ncreated_by = "0.2.0"\n'
                      'upgraded_by = ["0.2.1 on 2026-09-20: 0 -> 1"]\n', 1)
     )
     assert "upgraded_by" in settings_path.read_text()
@@ -421,7 +428,7 @@ def test_version_keys_change_makes_no_course_update(tmp_path, mocker) -> None:
 def test_version_keys_never_reach_the_metadata_payload(tmp_path, mocker) -> None:
     root = _make_repo(
         tmp_path,
-        'format_version = 9\ncreated_by = "0.2.0"\nupgraded_by = ["x"]\n'
+        'format_version = 10\ncreated_by = "0.2.0"\nupgraded_by = ["x"]\n'
         'title = "Test Course"\n',
     )
     course = _mock_canvas_course(mocker)

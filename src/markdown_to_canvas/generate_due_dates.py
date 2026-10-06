@@ -72,6 +72,9 @@ class GenerationPlan:
     cutoff: datetime | None = None
     #: one message per skipped (inconsistent) entry; the command exits non-zero
     errors: list[str] = field(default_factory=list)
+    #: date placeholders that will not resolve against the generated
+    #: due_dates; the dates are still written, and the command exits non-zero
+    placeholder_errors: list[str] = field(default_factory=list)
 
     @property
     def has_changes(self) -> bool:
@@ -270,6 +273,32 @@ def check_term_not_over(term_path: Path, source: str) -> None:
         )
 
 
+def _after_plan(due_dates: list[Any], changes: list[EntryChange]) -> list[dict[str, Any]]:
+    """The due_dates entries as they will be once the plan is applied."""
+    entries = [dict(e) if isinstance(e, dict) else e for e in due_dates]
+    for change in changes:
+        if change.kind == "changed":
+            entries[change.index].update({k: new for k, (_old, new) in change.fields.items()})
+        elif change.kind == "added":
+            entries.append(_new_row(change))
+    return entries
+
+
+def _placeholder_errors(
+    repo: Path, settings: dict[str, Any], due_dates: list[Any], changes: list[EntryChange]
+) -> list[str]:
+    """Every replace_date_with placeholder that will not resolve against the
+    generated due_dates. ``only_if`` is not applied (this command never does),
+    so every entry counts."""
+    from . import date_placeholders
+
+    try:
+        ctx = date_placeholders.make_context(_after_plan(due_dates, changes), settings)
+    except ValueError as exc:
+        return [f"ERROR: {exc}"]
+    return date_placeholders.check_repo(repo, ctx, load_ignore_matcher(repo))
+
+
 def plan_generation(repo: Path, term_path: Path, table_name: str | None = None) -> GenerationPlan:
     """Work out what ``generate-due-dates`` would do; changes nothing.
 
@@ -337,6 +366,7 @@ def plan_generation(repo: Path, term_path: Path, table_name: str | None = None) 
         source_text=source_text,
         cutoff=cutoff,
         errors=errors,
+        placeholder_errors=_placeholder_errors(repo, settings, due_dates, changes),
     )
 
 

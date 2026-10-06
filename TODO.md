@@ -109,6 +109,8 @@ display due dates for assignments, discussions, or quizzes. If it did, it would
 need to read the centralized `due_dates` table from
 `course_settings/course_settings.toml` and apply the same override logic that
 `update` uses (centralized dates take precedence over per-file frontmatter).
+Dates quoted in a body with a `replace_date_with` placeholder already appear on
+the site; this item is about showing each item's own dates without one.
 
 ## `read_only` and `reusable` flags are ignored by Canvas on rubric create
 

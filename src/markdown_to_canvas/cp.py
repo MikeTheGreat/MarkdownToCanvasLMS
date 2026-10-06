@@ -22,7 +22,7 @@ from typing import Any
 import tomlkit
 import yaml
 
-from . import repo_format, toml_write
+from . import date_placeholders, repo_format, toml_write
 from .conditionals import find_referenced_flags, find_referenced_flags_in_frontmatter
 from .config import find_repo_root
 from .convert import (
@@ -614,6 +614,7 @@ def _plan_warnings(planner: _Planner) -> None:
     relative_names = _relative_names(src_settings)
     dest_titles = _dest_titles(planner.dest)
     course_ids = _source_course_ids(planner.src)
+    dest_due_dates = [e for e in load_due_dates(planner.dest, dest_settings) if isinstance(e, dict)]
 
     for rel in planner.copied_md():
         path = planner.src / rel
@@ -673,12 +674,48 @@ def _plan_warnings(planner: _Planner) -> None:
                     f"'{title}' ({', '.join(others)})"
                 )
 
+        _warn_unresolvable_placeholders(planner, rel, path, text, dest_due_dates)
+
         if course_ids:
             found = sorted({m.group(1) for m in _COURSE_URL_RE.finditer(text)} & course_ids)
             if found:
                 plan.warnings.append(
                     f"{rel}: contains absolute Canvas URL(s) to the source course "
                     f"(/courses/{', '.join(found)}/...)"
+                )
+
+
+def _warn_unresolvable_placeholders(
+    planner: _Planner, rel: str, path: Path, text: str, dest_due_dates: list[dict[str, Any]]
+) -> None:
+    """Warn about each date placeholder with an explicit item= (in the file or
+    a snippet it includes) that names no entry of the destination's due_dates.
+    Placeholders without item= are covered by the own-entry warning above."""
+    texts = [text]
+    for snippet in sorted(find_referenced_snippets(text, path, planner.snippets_dir)):
+        try:
+            texts.append(snippet.read_text())
+        except (OSError, UnicodeDecodeError):
+            continue
+    seen: set[tuple[str, str | None]] = set()
+    for chunk in texts:
+        for ph in date_placeholders.find_placeholders(chunk):
+            if isinstance(ph, date_placeholders.PlaceholderError) or ph.item is None:
+                continue
+            key = (ph.item, ph.type)
+            if key in seen:
+                continue
+            seen.add(key)
+            if not any(
+                e.get("name") == ph.item
+                and (ph.type is None or not e.get("type") or e.get("type") == ph.type)
+                for e in dest_due_dates
+            ):
+                where = f" (type {ph.type})" if ph.type else ""
+                plan = planner.plan
+                plan.warnings.append(
+                    f"{rel}: date placeholder names '{ph.item}'{where}, which has no "
+                    f"entry in the destination's due_dates"
                 )
 
 

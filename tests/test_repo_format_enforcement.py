@@ -113,7 +113,7 @@ def test_entry_point_refuses_out_of_date_repo(name, state, tmp_path, mocker) -> 
 
 
 NESTED_SETTINGS = (
-    'format_version = 9\n\n[late_policy]\nx = 1\ntab_configuration = [{ id = "modules" }]\n'
+    f'format_version = {FORMAT_VERSION}\n\n[late_policy]\nx = 1\ntab_configuration = [{{ id = "modules" }}]\n'
 )
 
 

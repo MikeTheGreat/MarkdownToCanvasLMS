@@ -1,5 +1,5 @@
 [_repo_format]
-format_version = 9
+format_version = 10
 
 [_canvas_course]
 canvas_type = "course_identity"
@@ -11,7 +11,7 @@ recorded_at = "2026-10-03T17:48:06.042754+00:00"
 ["course_settings/course_settings.toml"]
 canvas_id = 0
 canvas_type = "course_settings"
-last_synced = "2026-10-03T18:07:18.907343+00:00"
+last_synced = "2026-10-06T03:18:46.319536+00:00"
 
 ["course_settings/course_settings.toml".section_hashes]
 grading_standards = "43d9bcb84acb9bbb"
@@ -76,7 +76,21 @@ lock_at = "2026-10-21T23:59:00-07:00"
 ["discussions/week-1-discussion.md"]
 canvas_id = 21873380
 canvas_type = "discussion"
-last_synced = "2026-10-03T17:48:11.668638+00:00"
+last_synced = "2026-10-06T03:18:48.733691+00:00"
+
+[["discussions/week-1-discussion.md".dates_used]]
+item = "Week 1 Discussion"
+type = "discussion"
+field = "due_at"
+format = ""
+text = "Monday, September 28 at 11:59 PM"
+
+[["discussions/week-1-discussion.md".dates_used]]
+item = "Week 1 Discussion"
+type = "discussion"
+field = "lock_at"
+format = "%A, %B %-d"
+text = "Monday, October 5"
 
 ["discussions/week-1-discussion.md".resolved_dates]
 unlock_at = "NONE"
@@ -109,13 +123,20 @@ lock_at = "2026-10-28T17:00:00-07:00"
 ["pages/week-1-homepage.md"]
 canvas_id = 42494571
 canvas_type = "page"
-last_synced = "2026-10-04T17:32:03.680481+00:00"
+last_synced = "2026-10-06T03:17:51.672537+00:00"
 canvas_url = "week-1-homepage"
+
+[["pages/week-1-homepage.md".dates_used]]
+item = "Quiz 1"
+type = "quiz"
+field = "due_at"
+format = ""
+text = "Monday, October 12 at 11:59 PM"
 
 ["modules/week-1.md"]
 canvas_id = 11724188
 canvas_type = "module"
-last_synced = "2026-10-04T17:32:07.001135+00:00"
+last_synced = "2026-10-06T03:17:55.778330+00:00"
 
 ["modules/week-1.md".canvas_item_ids]
-"pages/week-1-homepage.md" = 109194372
+"pages/week-1-homepage.md" = 109217909

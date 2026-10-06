@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .conditionals import apply_conditionals
+from .date_placeholders import DatePlaceholderContext, expand as expand_dates
 from .convert import (
     expand_frontmatter_snippets,
     iter_lines_with_fence_info,
@@ -33,6 +34,8 @@ def parse_quiz_file(
     source_desc: str | None = None,
     errors: list[str] | None = None,
     course_id: int | None = None,
+    dates: DatePlaceholderContext | None = None,
+    dates_used: list[dict[str, str]] | None = None,
 ) -> tuple[dict[str, Any], str, list[Path]]:
     """Parse a quiz-level .md file.
 
@@ -44,6 +47,11 @@ def parse_quiz_file(
     body (so a whole question-list entry can be conditional). A directive
     error is reported via ``errors`` and yields an empty body — callers
     detect the new error and skip the quiz.
+
+    When ``dates`` is given, date placeholders are replaced after snippet
+    expansion, with this quiz (its title, type ``quiz``) as the file's own
+    entry; the records are appended to ``dates_used``, and an unresolved
+    placeholder is reported via ``errors``.
     """
     text = quiz_md.read_text(encoding="utf-8")
     frontmatter, body = _parse_frontmatter(text)
@@ -59,6 +67,11 @@ def parse_quiz_file(
         body = preprocess_snippets(
             body, quiz_md, snippets_dir, errors, flags=flags, course_id=course_id
         )
+    if dates is not None:
+        own = dates.for_file(frontmatter.get("title", quiz_md.parent.name), "quiz")
+        body, records = expand_dates(body, own, source_desc or quiz_md.name, errors)
+        if dates_used is not None:
+            dates_used.extend(r for r in records if r not in dates_used)
 
     description_md, question_files = split_quiz_body(body, quiz_md)
     desc_html = markdown_to_html(description_md) if description_md else ""
@@ -255,6 +268,8 @@ def parse_question_file(
     source_desc: str | None = None,
     errors: list[str] | None = None,
     course_id: int | None = None,
+    dates: DatePlaceholderContext | None = None,
+    dates_used: list[dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Parse a quiz question .md file.
 
@@ -267,6 +282,10 @@ def parse_question_file(
     When ``flags`` is given, course-flag conditionals are evaluated on the
     body. A directive error is reported via ``errors`` and yields an empty
     body — callers detect the new error and skip the quiz/bank.
+
+    When ``dates`` is given (already set to the quiz's own entry, or to none
+    for a question bank), date placeholders are replaced after snippet
+    expansion and their records appended to ``dates_used``.
     """
     text = q_path.read_text(encoding="utf-8")
     frontmatter, body = _parse_frontmatter(text)
@@ -280,6 +299,10 @@ def parse_question_file(
         body = preprocess_snippets(
             body, q_path, snippets_dir, errors, flags=flags, course_id=course_id
         )
+    if dates is not None:
+        body, records = expand_dates(body, dates, source_desc or q_path.name, errors)
+        if dates_used is not None:
+            dates_used.extend(r for r in records if r not in dates_used)
 
     question_type = frontmatter.get("question_type", "essay_question")
     points = frontmatter.get("points_possible", 0)

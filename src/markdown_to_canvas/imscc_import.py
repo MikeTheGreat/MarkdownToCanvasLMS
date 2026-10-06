@@ -15,7 +15,7 @@ from urllib.parse import unquote
 import pypandoc
 import tomlkit
 
-from . import toml_write
+from . import date_placeholders, toml_write
 from .relative_dates import CUTOFF_HELP, DEFAULT_TIMES, DEFAULT_TIMES_HELP
 from .canvas_api import NUMERIC_TAB_IDS, TOOL_TAB_PREFIX
 from .convert import COURSE_REFERENCE_COMMENT, apply_outside_fences
@@ -2919,6 +2919,12 @@ def _write_course_settings_toml(
     # must come before any table header, including [late_policy] below. Their
     # layout is fixed by key (toml_write), so a long row can never turn either
     # into a [[table]] block that would capture the keys after it.
+    # The date format for replace_date_with placeholders, a live flat key with
+    # its one-line comment directly above it, just before due_dates.
+    doc.add(tomlkit.nl())
+    toml_write.add_comment_text(doc, date_placeholders.FORMAT_COMMENT + "\n")
+    toml_write.fill_table(doc, {date_placeholders.FORMAT_KEY: date_placeholders.DEFAULT_FORMAT})
+
     live_arrays: dict[str, Any] = {}
     if due_dates:
         live_arrays["due_dates"] = _due_dates_rows(due_dates)

@@ -846,3 +846,60 @@ def test_stage_without_course_id_warns(tmp_path, capsys):
     repo = _course_reference_repo(tmp_path)
     publish.stage(repo, tmp_path / "staging")
     assert "WARNING: no course_id" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Date placeholders
+# ---------------------------------------------------------------------------
+
+_DUE_SETTINGS = (
+    'due_dates = [\n'
+    '    {name = "HW", due_at = "2026-10-27T23:59:00-07:00"},\n'
+    '    {name = "Online", due_at = "2026-11-03T23:59:00-08:00", only_if = "online"},\n'
+    ']\n\n[course_flags]\nonline = false\n'
+)
+
+
+def _dated_repo(tmp_path, body):
+    repo = _assignment_repo(tmp_path, body)
+    (repo / "course_settings").mkdir()
+    (repo / "course_settings" / "course_settings.toml").write_text(_DUE_SETTINGS)
+    return repo
+
+
+def test_stage_replaces_date_placeholders(tmp_path):
+    repo = _dated_repo(
+        tmp_path,
+        '[**Due [x]{.replace_date_with}**]{style="color: red"} and '
+        '[y]{.replace_date_with item="HW" format="%b %-d"}',
+    )
+    staging = tmp_path / "staging"
+    info = publish.stage(repo, staging)
+    assert info["errors"] == []
+    text = (staging / "docs" / "assignments" / "hw.md").read_text()
+    assert "**Due Tuesday, October 27 by 11:59 PM** and Oct 27" in text
+    assert "replace_date_with" not in text
+
+
+def test_stage_reports_unresolved_date_placeholder(tmp_path):
+    repo = _dated_repo(tmp_path, '[x]{.replace_date_with item="Online"}')
+    info = publish.stage(repo, tmp_path / "staging")
+    assert len(info["errors"]) == 1
+    assert "assignments/hw.md" in info["errors"][0]
+    assert "no due_dates entry named 'Online'" in info["errors"][0]
+
+
+def test_run_publish_stops_on_unresolved_date_placeholder(tmp_path, monkeypatch):
+    import pytest
+
+    from tests.conftest import make_current
+
+    repo = _dated_repo(tmp_path, '[x]{.replace_date_with item="Nope"}')
+    make_current(repo)
+    monkeypatch.setattr(publish.importlib.util, "find_spec", lambda name: object())
+    ran = []
+    monkeypatch.setattr(publish.subprocess, "run", lambda *a, **k: ran.append(a))
+    with pytest.raises(ValueError, match="error"):
+        publish.run_publish(repo, tmp_path / "site")
+    assert ran == []
+    assert not (tmp_path / "site").exists()

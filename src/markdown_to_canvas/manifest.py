@@ -116,6 +116,7 @@ def needs_sync(
     extra_mtime_paths: Callable[[], Iterable[Path]] | None = None,
     current_flags: dict[str, bool] | None = None,
     verbose: bool = False,
+    extra_stale: Callable[[dict[str, Any]], str | None] | None = None,
 ) -> bool:
     """Return True if the file should be synced to Canvas.
 
@@ -124,7 +125,10 @@ def needs_sync(
     extra_mtime_paths() is newer than last_synced. When ``current_flags`` is
     given, also True when any course flag recorded in the entry's
     ``flags_used`` sub-table is missing from current_flags or differs in value
-    (in verbose mode the changed flag is printed as the reason).
+    (in verbose mode the changed flag is printed as the reason). When
+    ``extra_stale`` is given, it is called with the entry last and a non-None
+    return (the reason, printed in verbose mode) also makes the file stale; the
+    date-placeholder records (``dates_used``) are checked this way.
 
     extra_mtime_paths is a zero-arg callable rather than a plain iterable so
     callers can defer the (potentially file-reading) work of computing it —
@@ -150,6 +154,12 @@ def needs_sync(
         if change is not None:
             if verbose:
                 print_flag_change_reason(change)
+            return True
+    if extra_stale is not None:
+        reason = extra_stale(entry)
+        if reason is not None:
+            if verbose:
+                print(f"  re-syncing: {reason}")
             return True
     return False
 

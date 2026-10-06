@@ -23,7 +23,7 @@ from urllib.parse import unquote
 import yaml
 
 from .conditionals import apply_conditionals, resolve_published_if
-from . import repo_format
+from . import date_placeholders, repo_format
 from .config import Config
 from .convert import (
     COURSE_REFERENCE_RELPATH,
@@ -32,12 +32,15 @@ from .convert import (
     markdown_to_html,
     preprocess_snippets,
 )
-from .link_rewrite import check_local_links
+from .link_rewrite import check_local_links, infer_canvas_type
 from .quiz import parse_question_file, split_quiz_body
 from .sync import (
     _content_default_published,
     check_course_flags_coverage,
+    filter_due_dates_by_flags,
     load_course_flags,
+    load_date_format,
+    load_due_dates,
     parse_frontmatter,
     parse_module_body,
 )
@@ -495,6 +498,7 @@ def stage_content_markdown(
     flags: dict[str, bool] | None = None,
     errors: list[str] | None = None,
     course_id: int | None = None,
+    dates: date_placeholders.DatePlaceholderContext | None = None,
 ) -> str | None:
     """Return the published Markdown for a page/assignment/discussion file.
 
@@ -510,6 +514,10 @@ def stage_content_markdown(
 
     ``course_id`` is appended to the course-reference snippet's URL (see
     convert.course_reference_url).
+
+    When ``dates`` is given, date placeholders are replaced after snippet
+    expansion; an unresolved one is reported via ``errors`` (which stops
+    ``run_publish`` before anything is built).
     """
     frontmatter, body = parse_frontmatter(md_path.read_text())
     frontmatter, body = expand_frontmatter_snippets(frontmatter, body, md_path, repo / "snippets")
@@ -521,6 +529,12 @@ def stage_content_markdown(
     body = preprocess_snippets(
         body, md_path, repo / "snippets", errors, flags=flags, course_id=course_id
     )
+    if dates is not None:
+        rel = md_path.relative_to(repo).as_posix() if md_path.is_relative_to(repo) else md_path.name
+        own = date_placeholders.own_entry(
+            infer_canvas_type(rel), frontmatter.get("title", md_path.stem)
+        )
+        body, _ = date_placeholders.expand(body, dates.for_file(*own), rel, errors)
     if errors is not None:
         # Before the quiz-link rewrite, whose placeholder target is not a repo file.
         check_local_links(markdown_to_html(body), md_path, repo, errors)
@@ -681,13 +695,17 @@ def _render_index(
     nav_sections: dict[str, list[tuple[str, str]]],
     flags: dict[str, bool] | None = None,
     errors: list[str] | None = None,
+    course_id: int | None = None,
+    dates: date_placeholders.DatePlaceholderContext | None = None,
 ) -> str:
     front_page_path = _load_front_page(repo)
     front_page_body = ""
     if front_page_path:
         fp = repo / front_page_path
         if fp.exists() and fp.suffix == ".md":
-            front_page_body = stage_content_markdown(fp, repo, flags, errors) or ""
+            front_page_body = stage_content_markdown(
+                fp, repo, flags, errors, course_id, dates
+            ) or ""
 
     if front_page_body:
         return front_page_body
@@ -735,6 +753,9 @@ def stage(
 
     site_name = load_site_name(repo)
     flags = load_course_flags(repo, config=config)
+    dates = date_placeholders.DatePlaceholderContext(
+        tuple(filter_due_dates_by_flags(load_due_dates(repo), flags)), load_date_format(repo)
+    )
     errors: list[str] = []
     course_id = config.course_id if config is not None and config.course_id else None
     if course_id is None and (repo / "snippets" / COURSE_REFERENCE_RELPATH).exists():
@@ -770,7 +791,7 @@ def stage(
     (staging_dir / "overrides" / "main.html").write_text(OVERRIDES_MAIN)
     (docs / f"{QUIZ_NOT_PUBLISHED_PAGE}.md").write_text(QUIZ_NOT_PUBLISHED_MD)
     (docs / "index.md").write_text(
-        _render_index(site_name, repo, syllabus, nav_sections, flags, errors)
+        _render_index(site_name, repo, syllabus, nav_sections, flags, errors, course_id, dates)
     )
 
     staged_files: list[str] = []
@@ -790,7 +811,7 @@ def stage(
             if repo_rel.startswith("modules/"):
                 staged = render_module_overview(src, repo, flags, errors)
             else:
-                staged = stage_content_markdown(src, repo, flags, errors, course_id)
+                staged = stage_content_markdown(src, repo, flags, errors, course_id, dates)
             if staged is None:
                 print(f"  Skipping (conditional-directive errors): {repo_rel}")
                 continue

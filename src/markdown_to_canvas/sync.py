@@ -6,7 +6,7 @@ import json
 import re
 import tomllib
 from collections import defaultdict, deque
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -15,6 +15,7 @@ from typing import Any
 import yaml
 
 from . import canvas_api as capi
+from . import date_placeholders
 from . import dryrun
 from . import manifest as manifest_lib
 from . import repo_format
@@ -77,6 +78,8 @@ class SyncContext:
     newer_on_canvas: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     due_dates: list[dict[str, Any]] = field(default_factory=list)
+    # replace_date_with_format: the default for date placeholders.
+    date_format: str = date_placeholders.DEFAULT_FORMAT
     # [course_flags] values driving #if/#elif/#else/#endif conditionals.
     flags: dict[str, bool] = field(default_factory=dict)
     # Normalized pinned_resources entries; matching resources are never
@@ -104,6 +107,26 @@ class SyncContext:
     group_category_ids: dict[str, list[int]] | None = None
     # Listed names whose creation on Canvas failed this run (not retried).
     group_category_failures: set[str] = field(default_factory=set)
+
+    @property
+    def date_context(self) -> date_placeholders.DatePlaceholderContext:
+        """What date placeholders resolve against: the flag-filtered due_dates
+        and the default format (no file of its own; see for_file)."""
+        return date_placeholders.DatePlaceholderContext(
+            tuple(e for e in self.due_dates if isinstance(e, dict)), self.date_format
+        )
+
+
+def load_date_format(repo_path: Path, settings: dict | None = None) -> str:
+    """The replace_date_with_format setting (default when absent). A
+    non-string value raises ValueError, a whole-run configuration error."""
+    if settings is None:
+        settings_path = repo_path / "course_settings" / "course_settings.toml"
+        if not settings_path.exists():
+            return date_placeholders.DEFAULT_FORMAT
+        with settings_path.open("rb") as fh:
+            settings = tomllib.load(fh)
+    return date_placeholders.load_default_format(settings)
 
 
 def load_due_dates(repo_path: Path, settings: dict | None = None) -> list[dict[str, Any]]:
@@ -370,6 +393,46 @@ def _flags_used_for(
     for snippet_path in snippet_paths:
         names |= find_referenced_flags(snippet_path.read_text())
     return {name: flags[name] for name in sorted(names) if name in flags}
+
+
+def _expand_dates(
+    ctx: SyncContext,
+    body: str,
+    local_key: str,
+    own: tuple[str | None, str | None] = (None, None),
+) -> tuple[str, list[dict[str, str]]] | None:
+    """Replace the date placeholders in ``body`` (after snippet expansion).
+
+    Returns (body, dates_used records), or None when a placeholder did not
+    resolve; the errors are already in ``ctx.errors`` and the caller skips the
+    upload.
+    """
+    before = len(ctx.errors)
+    body, records = date_placeholders.expand(
+        body, ctx.date_context.for_file(*own), local_key, ctx.errors
+    )
+    if len(ctx.errors) > before:
+        return None
+    return body, records
+
+
+def _dates_stale(ctx: SyncContext) -> Callable[[dict[str, Any]], str | None]:
+    """needs_sync's extra_stale check: a recorded date placeholder whose
+    text would now be different (or that no longer resolves)."""
+    date_ctx = ctx.date_context
+    return lambda entry: date_placeholders.first_stale_reason(entry.get("dates_used"), date_ctx)
+
+
+def _tracking(
+    flags_used: dict[str, bool] | None, dates_used: list[dict[str, str]] | None
+) -> dict[str, Any]:
+    """The per-file manifest sub-tables that decide later staleness."""
+    extra: dict[str, Any] = {}
+    if flags_used:
+        extra["flags_used"] = flags_used
+    if dates_used:
+        extra["dates_used"] = dates_used
+    return extra
 
 
 def check_course_flags_coverage(
@@ -1161,8 +1224,14 @@ def _canvas_is_newer(
     )
     if identifier is None:
         return False
+    # Compare with the later of the local mtime and the last upload: a re-sync
+    # caused by something other than a local edit (a course flag flip, a
+    # changed due date quoted by a date placeholder) has a local file older
+    # than Canvas's updated_at, which our own last upload set. The question
+    # is whether Canvas was edited since that upload.
+    since = max(local_mtime, datetime.fromisoformat(entry["last_synced"]))
     canvas_ts = api.get_canvas_updated_at(course, canvas_type, identifier)
-    if canvas_ts is not None and canvas_ts > local_mtime:
+    if canvas_ts is not None and canvas_ts > since:
         print(f"Skipping (Canvas is newer): {local_key}")
         newer_on_canvas.append(local_key)
         return True
@@ -1182,7 +1251,7 @@ def sync_syllabus(ctx: SyncContext) -> None:
     if not manifest_lib.needs_sync(
         manifest, local_key, syllabus_md, ctx.force_uploads,
         extra_mtime_paths=lambda: _file_referenced_snippets(syllabus_md, ctx.snippets_dir),
-        current_flags=ctx.flags, verbose=ctx.verbose,
+        current_flags=ctx.flags, verbose=ctx.verbose, extra_stale=_dates_stale(ctx),
     ):
         if ctx.verbose:
             print(f"Skipping (up-to-date): {local_key}")
@@ -1203,7 +1272,15 @@ def sync_syllabus(ctx: SyncContext) -> None:
     body = preprocess_snippets(
         body, syllabus_md, ctx.snippets_dir, errors, flags=ctx.flags, course_id=ctx.course_id
     )
+    expanded = _expand_dates(ctx, body, local_key)
+    if expanded is None:
+        print(f"  Skipping upload due to errors: {local_key}")
+        return
+    body, dates_used = expanded
     html = markdown_to_html(body.strip()) if body.strip() else ""
+    if date_placeholders.check_leftovers_html(html, local_key, errors):
+        print(f"  Skipping upload due to errors: {local_key}")
+        return
     error_count_before = len(errors)
     # A real stub creator, not a no-op: the syllabus syncs before the content
     # phases, so on a fresh course a syllabus link to a not-yet-synced page
@@ -1221,10 +1298,10 @@ def sync_syllabus(ctx: SyncContext) -> None:
         print(f"  Skipping upload due to errors: {local_key}")
         return
     ctx.api.update_syllabus_body(ctx.course, html)
-    flags_used = _flags_used_for([syllabus_md], ctx.snippets_dir, ctx.flags)
+    tracking = _tracking(_flags_used_for([syllabus_md], ctx.snippets_dir, ctx.flags), dates_used)
     manifest_lib.record(
         manifest, ctx.manifest_path, local_key, course_id, "syllabus",
-        extra={"flags_used": flags_used} if flags_used else None,
+        extra=tracking or None,
     )
     _leave_stale_for_deferred_links(manifest, ctx.manifest_path, local_key, deferred)
 
@@ -1252,6 +1329,9 @@ _NON_METADATA_SETTINGS_KEYS = _SETTINGS_SECTION_KEYS + (
     # Group sets/group categories are created by _ensure_group_categories every
     # full run, not by the course-settings phase.
     "group_categories",
+    # The date-placeholder format only affects bodies, which re-sync through
+    # their dates_used records.
+    "replace_date_with_format",
     # Repo-format bookkeeping written by import/upgrade; never Canvas metadata.
     "format_version",
     "created_by",
@@ -1941,6 +2021,7 @@ def run_sync(
 
     course_flags = load_course_flags(repo_path, _settings_dict, config)
     due_dates = filter_due_dates_by_flags(load_due_dates(repo_path, _settings_dict), course_flags)
+    date_format = load_date_format(repo_path, _settings_dict)
 
     ctx = SyncContext(
         course=course,
@@ -1956,6 +2037,7 @@ def run_sync(
         newer_on_canvas=newer_on_canvas,
         errors=errors,
         due_dates=due_dates,
+        date_format=date_format,
         flags=course_flags,
         pinned=pinned,
         assignment_group_ids=assignment_group_ids,
@@ -2320,7 +2402,7 @@ def _apply_rubric(
 
 def _upload_page(
     ctx: SyncContext, existing: dict | None, frontmatter: dict, html: str, title: str,
-    published: bool, local_key: str, flags_used: dict[str, bool] | None = None
+    published: bool, local_key: str, tracking: dict[str, Any] | None = None
 ) -> None:
     """Upload a page to Canvas."""
     course = ctx.course
@@ -2339,8 +2421,7 @@ def _upload_page(
     if not ctx.check_only:
         print(f"  Link: {entry['html_url']}")
     extra: dict[str, Any] = {"canvas_url": entry["canvas_url"]}
-    if flags_used:
-        extra["flags_used"] = flags_used
+    extra.update(tracking or {})
     manifest_lib.record(
         manifest,
         manifest_path,
@@ -2423,7 +2504,7 @@ def _warn_unpublish_refused(
 
 def _upload_assignment(
     ctx: SyncContext, existing: dict | None, frontmatter: dict, html: str, title: str,
-    published: bool, local_key: str, flags_used: dict[str, bool] | None = None
+    published: bool, local_key: str, tracking: dict[str, Any] | None = None
 ) -> None:
     """Upload an assignment to Canvas."""
     course = ctx.course
@@ -2503,9 +2584,7 @@ def _upload_assignment(
     if not ctx.check_only:
         print(f"  Link: {entry['html_url']}")
     unpublish_refused = _warn_unpublish_refused(entry, local_key, "assignment", errors)
-    extra_record: dict[str, Any] = {}
-    if flags_used:
-        extra_record["flags_used"] = flags_used
+    extra_record: dict[str, Any] = dict(tracking or {})
     # record() rebuilds the entry wholesale, so the resolved-dates cache must
     # be re-supplied here or it is silently dropped. Skipped on date_warning
     # so the dates-only pass retries on the next run.
@@ -2522,7 +2601,7 @@ def _upload_assignment(
 
 def _upload_discussion(
     ctx: SyncContext, existing: dict | None, frontmatter: dict, html: str, title: str,
-    published: bool, local_key: str, flags_used: dict[str, bool] | None = None
+    published: bool, local_key: str, tracking: dict[str, Any] | None = None
 ) -> None:
     """Upload a discussion to Canvas."""
     course = ctx.course
@@ -2584,9 +2663,7 @@ def _upload_discussion(
     if not ctx.check_only:
         print(f"  Link: {entry['html_url']}")
     unpublish_refused = _warn_unpublish_refused(entry, local_key, "discussion", errors)
-    extra_record: dict[str, Any] = {}
-    if flags_used:
-        extra_record["flags_used"] = flags_used
+    extra_record: dict[str, Any] = dict(tracking or {})
     if override is not None and not entry.get("date_warning"):
         extra_record["resolved_dates"] = resolve_dates_symbolic(override)
     manifest_lib.record(
@@ -2606,7 +2683,7 @@ _ANNOUNCEMENT_HANDLED_KEYS = frozenset({"title", "published", "canvas_type"})
 
 def _upload_announcement(
     ctx: SyncContext, existing: dict | None, frontmatter: dict, html: str, title: str,
-    published: bool, local_key: str, flags_used: dict[str, bool] | None = None
+    published: bool, local_key: str, tracking: dict[str, Any] | None = None
 ) -> None:
     """Upload (post) an announcement to Canvas.
 
@@ -2649,7 +2726,7 @@ def _upload_announcement(
         print(f"  Link: {entry['html_url']}")
     manifest_lib.record(
         manifest, manifest_path, local_key, entry["canvas_id"], "announcement",
-        extra={"flags_used": flags_used} if flags_used else None,
+        extra=dict(tracking) if tracking else None,
     )
     if synced_keys is not None:
         synced_keys.add(local_key)
@@ -2691,7 +2768,7 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
     if not manifest_lib.needs_sync(
         manifest, local_key, md_file, force_uploads,
         extra_mtime_paths=lambda: _file_referenced_snippets(md_file, snippets_dir),
-        current_flags=ctx.flags, verbose=verbose,
+        current_flags=ctx.flags, verbose=verbose, extra_stale=_dates_stale(ctx),
     ):
         if verbose:
             print(f"Skipping (up-to-date): {local_key}")
@@ -2744,7 +2821,17 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
     if errors is not None and len(errors) > error_count_before_snippets:
         print(f"  Skipping upload due to errors: {local_key}")
         return
+    expanded = _expand_dates(
+        ctx, body, local_key, date_placeholders.own_entry(canvas_type, frontmatter.get("title", md_file.stem))
+    )
+    if expanded is None:
+        print(f"  Skipping upload due to errors: {local_key}")
+        return
+    body, dates_used = expanded
     html = markdown_to_html(body)
+    if date_placeholders.check_leftovers_html(html, local_key, errors):
+        print(f"  Skipping upload due to errors: {local_key}")
+        return
 
     if re.search(r"<h1[\s>]", html, re.IGNORECASE):
         msg = (
@@ -2794,18 +2881,18 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
 
     existing = manifest.get(local_key)
     title = frontmatter.get("title", md_file.stem)
-    flags_used = _flags_used_for([md_file], snippets_dir, ctx.flags)
+    tracking = _tracking(_flags_used_for([md_file], snippets_dir, ctx.flags), dates_used)
 
     verb = "Would upload" if ctx.check_only else "Uploading"
     print(f"  {verb}: {local_key}")
     if canvas_type == "page":
-        _upload_page(ctx, existing, frontmatter, html, title, published, local_key, flags_used)
+        _upload_page(ctx, existing, frontmatter, html, title, published, local_key, tracking)
     elif canvas_type == "assignment":
-        _upload_assignment(ctx, existing, frontmatter, html, title, published, local_key, flags_used)
+        _upload_assignment(ctx, existing, frontmatter, html, title, published, local_key, tracking)
     elif canvas_type == "discussion":
-        _upload_discussion(ctx, existing, frontmatter, html, title, published, local_key, flags_used)
+        _upload_discussion(ctx, existing, frontmatter, html, title, published, local_key, tracking)
     elif canvas_type == "announcement":
-        _upload_announcement(ctx, existing, frontmatter, html, title, published, local_key, flags_used)
+        _upload_announcement(ctx, existing, frontmatter, html, title, published, local_key, tracking)
     _leave_stale_for_deferred_links(manifest, manifest_path, local_key, deferred)
 
 
@@ -3131,11 +3218,14 @@ def _quiz_needs_sync(
     snippets_dir: Path,
     current_flags: dict[str, bool] | None = None,
     verbose: bool = False,
+    extra_stale: Callable[[dict[str, Any]], str | None] | None = None,
 ) -> bool:
     """Return True if the quiz .md, any question file, or any snippet they
     reference is newer than last_synced, or if any course flag recorded in
     the quiz entry's flags_used table changed (the quiz and its questions
-    sync as one unit, so flags_used covers all of them)."""
+    sync as one unit, so flags_used covers all of them), or if
+    ``extra_stale`` gives a reason (the dates_used records, which also cover
+    the description and every question file)."""
     if force_uploads:
         return True
     entry = manifest.get(local_key)
@@ -3160,6 +3250,12 @@ def _quiz_needs_sync(
             if verbose:
                 manifest_lib.print_flag_change_reason(change)
             return True
+    if extra_stale is not None:
+        reason = extra_stale(entry)
+        if reason is not None:
+            if verbose:
+                print(f"  re-syncing: {reason}")
+            return True
     return False
 
 
@@ -3183,7 +3279,7 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
 
     if not _quiz_needs_sync(
         quiz_md, questions_dir, local_key, manifest, force_uploads, snippets_dir,
-        current_flags=ctx.flags, verbose=verbose,
+        current_flags=ctx.flags, verbose=verbose, extra_stale=_dates_stale(ctx),
     ):
         if verbose:
             print(f"Skipping (up-to-date): {local_key}")
@@ -3206,14 +3302,16 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
     print(f"Processing quiz: {local_key}")
 
     error_count_before_parse = len(errors) if errors is not None else 0
+    dates_used: list[dict[str, str]] = []
     frontmatter, desc_html, question_paths = parse_quiz_file(
         quiz_md, snippets_dir, flags=ctx.flags, source_desc=local_key, errors=errors,
-        course_id=ctx.course_id,
+        course_id=ctx.course_id, dates=ctx.date_context, dates_used=dates_used,
     )
     if errors is not None and len(errors) > error_count_before_parse:
         print(f"  Skipping upload due to errors: {local_key}")
         return
     title = frontmatter.get("title", quiz_folder.name)
+    question_dates = ctx.date_context.for_file(title, "quiz")
     published = resolve_published_if(frontmatter, ctx.flags, local_key, errors)
     if published is None:
         print(f"  Skipping upload due to errors: {local_key}")
@@ -3279,6 +3377,8 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
             source_desc=f"{local_key.rsplit('/', 1)[0]}/{rel_path}",
             errors=errors,
             course_id=ctx.course_id,
+            dates=question_dates,
+            dates_used=dates_used,
         )
         # §7: rewrite links in question text
         if q_data.get("question_text"):
@@ -3336,9 +3436,7 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
     quiz_files: list[Path] = [quiz_md]
     if questions_dir.exists():
         quiz_files.extend(questions_dir.glob("*.md"))
-    flags_used = _flags_used_for(quiz_files, snippets_dir, ctx.flags)
-    if flags_used:
-        extra["flags_used"] = flags_used
+    extra.update(_tracking(_flags_used_for(quiz_files, snippets_dir, ctx.flags), dates_used))
     if override is not None and not result.get("date_warning"):
         extra["resolved_dates"] = resolve_dates_symbolic(override)
     manifest_lib.record(
@@ -3397,6 +3495,8 @@ def _sync_question_banks(ctx: SyncContext) -> None:
                     source_desc=q_path.relative_to(repo_root).as_posix(),
                     errors=ctx.errors,
                     course_id=ctx.course_id,
+                    # Banks are only validated (never uploaded), so no record.
+                    dates=ctx.date_context,
                 )
                 q_data["rel_path"] = q_path.relative_to(bank_folder).as_posix()
                 questions.append(q_data)
@@ -3559,6 +3659,7 @@ def run_targeted_sync(
     _targeted_position_map = _local_module_positions(_targeted_order_entries)
     course_flags = load_course_flags(repo_path, config=config)
     due_dates = filter_due_dates_by_flags(load_due_dates(repo_path), course_flags)
+    date_format = load_date_format(repo_path)
     pinned = load_pinned_resources(repo_path)
     group_categories = load_group_categories(repo_path)
     matcher = load_ignore_matcher(repo_path)
@@ -3576,6 +3677,7 @@ def run_targeted_sync(
         newer_on_canvas=newer_on_canvas,
         errors=errors,
         due_dates=due_dates,
+        date_format=date_format,
         flags=course_flags,
         pinned=pinned,
         matcher=matcher,

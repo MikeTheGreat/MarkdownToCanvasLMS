@@ -2867,7 +2867,7 @@ def test_tab_configuration_misplaced_under_section_is_left_alone(
     (root / "course_settings").mkdir(parents=True)
     settings = root / "course_settings" / "course_settings.toml"
     settings.write_text(
-        'format_version = 9\ntitle = "Intro to CS"\n\n[late_policy]\n'
+        'format_version = 10\ntitle = "Intro to CS"\n\n[late_policy]\n'
         "missing_submission_deduction_enabled = false\n\n"
         'tab_configuration = [\n    { id = "modules" },\n]\n'
     )
@@ -6191,6 +6191,51 @@ def test_canvas_is_newer_ignores_unsynced_stub() -> None:
     assert _canvas_is_newer(None, "pages/x.md", local_mtime, manifest, newer, api=api) is False
     api.get_canvas_updated_at.assert_not_called()
     assert newer == []
+
+
+def _newer_check(updated_at, local_mtime):
+    from datetime import datetime, timezone
+    from markdown_to_canvas.sync import _canvas_is_newer
+
+    api = MagicMock()
+    api.get_canvas_updated_at.return_value = updated_at
+    newer: list[str] = []
+    manifest = {"assignments/a.md": {
+        "canvas_type": "assignment", "canvas_id": 1,
+        "last_synced": "2026-10-01T12:00:00+00:00",
+    }}
+    result = _canvas_is_newer(None, "assignments/a.md", local_mtime, manifest, newer, api=api)
+    assert newer == (["assignments/a.md"] if result else [])
+    return result
+
+
+def test_canvas_is_newer_resync_without_local_edit_is_not_blocked() -> None:
+    """A flag flip or a changed quoted due date re-syncs a file older than our
+    last upload; Canvas's updated_at from that upload must not block it."""
+    from datetime import datetime, timezone
+
+    utc = timezone.utc
+    assert not _newer_check(
+        datetime(2026, 10, 1, 11, 59, 58, tzinfo=utc), datetime(2026, 9, 1, tzinfo=utc)
+    )
+
+
+def test_canvas_is_newer_detects_edit_after_last_upload() -> None:
+    from datetime import datetime, timezone
+
+    utc = timezone.utc
+    assert _newer_check(
+        datetime(2026, 10, 2, tzinfo=utc), datetime(2026, 9, 1, tzinfo=utc)
+    )
+
+
+def test_canvas_is_newer_local_edit_after_canvas_edit_wins() -> None:
+    from datetime import datetime, timezone
+
+    utc = timezone.utc
+    assert not _newer_check(
+        datetime(2026, 10, 2, tzinfo=utc), datetime(2026, 10, 3, tzinfo=utc)
+    )
 
 
 def test_reorder_modules_skips_page_entry_and_survives_failure(tmp_path, capsys) -> None:

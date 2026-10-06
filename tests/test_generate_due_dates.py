@@ -142,7 +142,7 @@ def test_old_repo_is_refused(tmp_path):
     root = _repo(tmp_path)
     _write(
         root / "course_settings" / "course_settings.toml",
-        _settings_text(root).replace("format_version = 9", "format_version = 1"),
+        _settings_text(root).replace("format_version = 10", "format_version = 1"),
     )
     with pytest.raises(RepoFormatError):
         gd.plan_generation(root, _term(tmp_path))
@@ -835,3 +835,74 @@ def test_update_ignores_the_cutoff(tmp_path, mocker):
     course.create_assignment.assert_not_called()
     course.get_assignment.assert_not_called()
     course.update.assert_not_called()
+
+
+# --- date placeholders ------------------------------------------------------
+
+
+def _with_page(root: Path, body: str) -> None:
+    _write(root / "pages" / "schedule.md", f"---\ntitle: Schedule\n---\n\n{body}\n")
+    make_current(root)
+
+
+def test_placeholder_naming_a_missing_entry_is_reported(tmp_path):
+    root = _repo(tmp_path)
+    _with_page(root, '[x]{.replace_date_with item="HW 9"}')
+    plan = gd.plan_generation(root, _term(tmp_path))
+    assert plan.errors == []
+    assert len(plan.placeholder_errors) == 1
+    assert "pages/schedule.md" in plan.placeholder_errors[0]
+    assert "'HW 9'" in plan.placeholder_errors[0]
+
+
+def test_placeholder_naming_an_entry_the_plan_adds_is_fine(tmp_path):
+    root = _repo(tmp_path)
+    # Week 1 Discussion has no due_dates entry yet; the plan adds it.
+    _with_page(root, '[x]{.replace_date_with item="Week 1 Discussion"}')
+    assert gd.plan_generation(root, _term(tmp_path)).placeholder_errors == []
+
+
+def test_own_entry_and_only_if_entries_count(tmp_path):
+    root = _repo(tmp_path)
+    # The entry has only_if = "in_person"; generate-due-dates ignores only_if.
+    _write(
+        root / "assignments" / "w1.md",
+        "---\ntitle: Week 1 Problem Set\n---\n\nDue [x]{.replace_date_with}\n",
+    )
+    make_current(root)
+    assert gd.plan_generation(root, _term(tmp_path)).placeholder_errors == []
+
+
+def test_placeholder_quoting_an_entry_with_no_due_date(tmp_path):
+    root = _repo(tmp_path)
+    _with_page(root, '[x]{.replace_date_with item="Old Item"}')
+    (err,) = gd.plan_generation(root, _term(tmp_path)).placeholder_errors
+    assert "no date for due_at (NONE)" in err
+
+
+def test_placeholders_in_code_and_snippets(tmp_path):
+    root = _repo(tmp_path)
+    _write(root / "snippets" / "due.md", '[x]{.replace_date_with item="Nope"}\n')
+    _with_page(root, "`[x]{.replace_date_with}`\n\n[Due](../snippets/due.md)")
+    (err,) = gd.plan_generation(root, _term(tmp_path)).placeholder_errors
+    assert "'Nope'" in err
+
+
+def test_cli_writes_dates_and_exits_non_zero_on_placeholder_errors(tmp_path):
+    root = _repo(tmp_path)
+    _with_page(root, '[x]{.replace_date_with item="HW 9"}')
+    result = _run(root, _term(tmp_path), "--yes")
+    assert result.exit_code != 0
+    assert "'HW 9'" in result.output
+    assert "1 date placeholder does not resolve" in result.output
+    assert "Week 1 Discussion" in _settings_text(root)  # dates were still written
+
+
+def test_cli_noop_reports_placeholder_errors(tmp_path):
+    root = _repo(tmp_path)
+    _with_page(root, '[x]{.replace_date_with item="HW 9"}')
+    before = _settings_text(root)
+    result = _run(root, _term(tmp_path), "--noop")
+    assert result.exit_code != 0
+    assert "'HW 9'" in result.output
+    assert _settings_text(root) == before
