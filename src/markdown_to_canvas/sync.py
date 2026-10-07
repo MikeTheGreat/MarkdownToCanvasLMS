@@ -10,7 +10,7 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 
@@ -45,6 +45,35 @@ from .unrecorded_moves import Commands, check_unrecorded_moves, find_orphans
 
 _DATE_KEYS = ("unlock_at", "due_at", "lock_at")
 
+# "real" syncs to Canvas; "noop" (`update --noop`) reads the real course and
+# manifest but simulates every write; "new_course" (`update
+# --check-as-new-course`) simulates a first sync to an empty course offline.
+SyncMode = Literal["real", "noop", "new_course"]
+
+
+@dataclass
+class SyncCounts:
+    """What a run did (or, in a dry run, would do), for the --noop summary.
+
+    created/updated count items sent to Canvas, split by whether the item
+    already existed there; skipped counts content files that were up to date.
+    """
+
+    created: int = 0
+    updated: int = 0
+    skipped: int = 0
+
+
+def _count_action(ctx: SyncContext, entry: dict[str, Any] | None) -> None:
+    """Count one upload of an item whose manifest entry (before the upload) is
+    ``entry``. No entry, no canvas_id, or a negative (noop fake) id means the
+    item does not exist on Canvas yet."""
+    canvas_id = (entry or {}).get("canvas_id")
+    if canvas_id is None or (isinstance(canvas_id, int) and canvas_id < 0):
+        ctx.counts.created += 1
+    else:
+        ctx.counts.updated += 1
+
 
 @dataclass
 class SyncContext:
@@ -62,18 +91,21 @@ class SyncContext:
     repo_path: Path
     snippets_dir: Path
     manifest: manifest_lib.ManifestDict
-    # None = never write the manifest to disk (check-all mode).
+    # None = never write the manifest to disk (--noop and
+    # --check-as-new-course).
     manifest_path: Path | None
     course_id: int
     force_uploads: bool = False
     force_overwrite: bool = False
     verbose: bool = False
     # All Canvas traffic goes through this namespace: the real canvas_api
-    # module, or a dryrun.DryRunCanvas during `update --check-all`.
+    # module, a dryrun.NoopCanvas during `update --noop`, or a
+    # dryrun.DryRunCanvas during `update --check-as-new-course`.
     api: Any = capi
-    # True during `update --check-all`: same pipeline, but nothing is
-    # uploaded and progress lines read "Would upload" instead of "Uploading".
+    # True in both dry runs: same pipeline, but nothing is uploaded and
+    # progress lines read "Would upload" instead of "Uploading".
     check_only: bool = False
+    counts: SyncCounts = field(default_factory=SyncCounts)
     matcher: IgnoreMatcher | None = None
     newer_on_canvas: list[str] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
@@ -550,7 +582,8 @@ def _apply_due_dates_only(ctx: SyncContext) -> None:
         canvas_id = existing["canvas_id"]
         date_fields = _resolve_date_overrides(override, canvas_id, local_key, errors)
         if date_fields:
-            print(f"  Updating dates: {local_key}")
+            print(f"  {'Would update' if ctx.check_only else 'Updating'} dates: {local_key}")
+            ctx.counts.updated += 1
             result = ctx.api.update_dates(course, ctype, canvas_id, date_fields)
             if result.get("date_warning"):
                 msg = _date_rejection_message(
@@ -730,6 +763,7 @@ def _create_group_category(ctx: SyncContext, name: str) -> int | None:
         ctx.group_category_failures.add(name)
         return None
     ctx.group_category_ids[name] = [new_id]
+    ctx.counts.created += 1
     verb = "Would create" if ctx.check_only else "Created"
     print(f"  {verb} group set/group category: {name}")
     return new_id
@@ -1253,12 +1287,14 @@ def sync_syllabus(ctx: SyncContext) -> None:
         extra_mtime_paths=lambda: _file_referenced_snippets(syllabus_md, ctx.snippets_dir),
         current_flags=ctx.flags, verbose=ctx.verbose, extra_stale=_dates_stale(ctx),
     ):
+        ctx.counts.skipped += 1
         if ctx.verbose:
             print(f"Skipping (up-to-date): {local_key}")
         return
     if _skip_if_pinned(ctx, local_key):
         return
     print("Would sync syllabus..." if ctx.check_only else "Syncing syllabus...")
+    ctx.counts.updated += 1
     try:
         frontmatter, body = parse_frontmatter(syllabus_md.read_text())
     except yaml.YAMLError as exc:
@@ -1374,8 +1410,14 @@ def sync_course_settings(
     settings: dict | None = None,
     errors: list[str] | None = None,
     api=capi,
+    check_only: bool = False,
+    counts: SyncCounts | None = None,
 ) -> tuple[dict[str, int], set[str], list[str], set[str]]:
     """Sync course_settings.toml: metadata, grading standards, assignment groups, policies, rubrics.
+
+    ``check_only`` (a dry run) changes the progress wording to "Would ...";
+    ``counts`` receives one update for the settings file when any section is
+    stale, and one create or update per rubric sent.
 
     Sections of the settings file are change-detected individually via hashes
     cached in the manifest entry's ``section_hashes`` sub-table, so editing
@@ -1441,7 +1483,7 @@ def sync_course_settings(
             if live_rubric_ids is not None:
                 # Only a title this repo has synced before can have gone
                 # missing; one Canvas has never seen is simply new (first sync,
-                # or --check-all against its simulated empty course), and the
+                # or --check-as-new-course against its simulated empty course), and the
                 # hash cache already treats it as stale.
                 synced_before = (manifest.get(rubrics_key) or {}).get(
                     "rubric_hashes"
@@ -1494,7 +1536,9 @@ def sync_course_settings(
             stale_sections.add("metadata")
 
         if stale_sections:
-            print("Syncing course settings...")
+            print("Would sync course settings..." if check_only else "Syncing course settings...")
+            if counts is not None:
+                counts.updated += 1
         elif verbose:
             print(f"Skipping (no section changed): {settings_key}")
         if verbose:
@@ -1570,7 +1614,8 @@ def sync_course_settings(
             image_ok = True
             if image_rel:
                 if image_path is not None and image_path.exists():
-                    print(f"  Uploading dashboard image: {image_rel}")
+                    verb = "Would upload" if check_only else "Uploading"
+                    print(f"  {verb} dashboard image: {image_rel}")
                     try:
                         api.upload_course_image(course, image_path)
                     except Exception as exc:
@@ -1621,7 +1666,7 @@ def sync_course_settings(
 
         # Course-navigation (left sidebar) order/visibility. A nested
         # tab_configuration never gets here: repo_format.check_repo_format moves
-        # it to the top level (or reports it, under --check-all) before any sync.
+        # it to the top level (or reports it, in a dry run) before any sync.
         tab_config_raw = settings.get("tab_configuration")
         if tab_config_raw is None:
             if "tab_configuration" in stale_sections:
@@ -1691,7 +1736,7 @@ def sync_course_settings(
                 != current_rubric_hashes[r.get("title", "")]
             ]
         if stale_rubrics:
-            print("Syncing rubrics...")
+            print("Would sync rubrics..." if check_only else "Syncing rubrics...")
         elif verbose and rubrics:
             print(f"Skipping (no rubric changed): {rubrics_key}")
         if verbose:
@@ -1717,9 +1762,12 @@ def sync_course_settings(
                 rubrics_failed = True
             else:
                 for t in updated:
-                    print(f"  Updated rubric: {t}")
+                    print(f"  {'Would update' if check_only else 'Updated'} rubric: {t}")
                 for t in created:
-                    print(f"  Created rubric: {t}")
+                    print(f"  {'Would create' if check_only else 'Created'} rubric: {t}")
+                if counts is not None:
+                    counts.updated += len(updated)
+                    counts.created += len(created)
                 # Canvas mints a new id rather than restoring the deleted
                 # rubric, so assignments still referencing the old id get
                 # re-pointed after the content phase.
@@ -1912,9 +1960,10 @@ def _phase_modules(ctx: SyncContext, force_uploads: bool) -> None:
             if had_module_warnings:
                 errors.append(f"module {md_file.name}: some items could not be added")
     if order_changed:
+        ctx.counts.updated += 1
         _reorder_modules(
             course, order_entries, repo_path, manifest, errors,
-            api=ctx.api, manifest_path=manifest_path,
+            api=ctx.api, manifest_path=manifest_path, check_only=ctx.check_only,
         )
         manifest_lib.record(manifest, manifest_path, _order_key, 0, "module_order")
 
@@ -1935,49 +1984,96 @@ def _phase_due_dates(ctx: SyncContext, due_dates: list) -> None:
         _check_due_dates_coverage(due_dates, ctx.repo_path, ctx.matcher, ctx.flags)
 
 
+def _setup_mode(
+    config: Config, repo_path: Path, mode: SyncMode
+) -> tuple[Any, Any, manifest_lib.ManifestDict, Path | None]:
+    """(api, course, manifest, manifest_path) for a run in ``mode``.
+
+    Prints the dry-run banner. In noop mode the course's requester is wrapped
+    so that a non-GET request raises (dryrun.block_writes), as a backstop to
+    NoopCanvas simulating every write.
+    """
+    manifest_name = manifest_lib.manifest_name_for(config.config_path)
+    if mode == "new_course":
+        print(
+            "CHECK MODE: simulating a first sync to a brand-new empty Canvas "
+            f"course.\nNothing will be uploaded and {manifest_name} will "
+            "not be modified.\n"
+        )
+        return dryrun.DryRunCanvas(), dryrun.DryRunCourse(), {}, None
+    manifest_path = manifest_lib.manifest_path_for(repo_path, config.config_path)
+    manifest = manifest_lib.load(manifest_path)
+    course = capi.get_course(config)
+    if mode == "noop":
+        print(
+            "NOOP MODE: showing what update would do to this course.\n"
+            f"Nothing will be changed in Canvas and {manifest_name} will not "
+            "be modified.\n"
+        )
+        dryrun.block_writes(course)
+        return dryrun.NoopCanvas(), course, manifest, None
+    return capi, course, manifest, manifest_path
+
+
+def _print_noop_summary(ctx: SyncContext) -> None:
+    counts = ctx.counts
+    rows = [
+        ("Would create", counts.created),
+        ("Would update", counts.updated),
+        ("Up to date (skipped)", counts.skipped),
+        ("Newer on Canvas", len(ctx.newer_on_canvas)),
+        ("Problems", len(ctx.errors)),
+    ]
+    width = max(len(label) for label, _ in rows) + 1
+    print("\nNOOP SUMMARY (nothing was changed)")
+    for label, value in rows:
+        print(f"  {label + ':':<{width}} {value:>4}")
+
+
+def _finish_run(ctx: SyncContext, mode: SyncMode) -> bool:
+    """Print the end-of-run summaries and return True if any errors occurred."""
+    _print_newer_on_canvas_summary(ctx.newer_on_canvas)
+    _print_pinned_summary(ctx.pinned_skips)
+    _print_unpublishable_summary(ctx.unpublishable_items)
+    _print_ignored_fields_summary(ctx.ignored_fields)
+    _print_errors_summary(ctx.errors)
+    if mode == "noop":
+        _print_noop_summary(ctx)
+    return bool(ctx.errors)
+
+
 def run_sync(
     config: Config,
     repo_path: Path,
     force_uploads: bool = False,
     force_overwrite: bool = False,
     verbose: bool = False,
-    check_all: bool = False,
+    mode: SyncMode = "real",
     new_paths: Iterable[str] = (),
     commands: Commands | None = None,
 ) -> bool:
     """Main sync pipeline: assets → content → modules. Returns True if any errors occurred.
 
-    check_all=True runs the same pipeline as a dry run simulating a first sync
-    to a brand-new empty Canvas course: the on-disk manifest is ignored (every
-    file takes the full processing path), all Canvas traffic goes to an
+    mode="new_course" runs the same pipeline as a dry run simulating a first
+    sync to a brand-new empty Canvas course: the on-disk manifest is ignored
+    (every file takes the full processing path), all Canvas traffic goes to an
     in-memory DryRunCanvas, and nothing is written (no Canvas changes, no
     manifest changes — see manifest_path=None).
+
+    mode="noop" is a dry run against the real course: the manifest is loaded
+    from disk but never written, reads go to Canvas, and every write is
+    simulated by a dryrun.NoopCanvas (see _setup_mode).
 
     The manifest file is the one belonging to ``config`` (see
     ``manifest.manifest_name_for``), so two canvas.toml files in one repo keep
     two independent sets of Canvas IDs.
 
     ``new_paths`` (``update --new``) and ``commands`` go to the unrecorded-move
-    check, which runs before any Canvas change and is skipped in check mode.
+    check, which runs before any Canvas change and is skipped in
+    new-course mode.
     """
     repo_format.check_repo_format(repo_path)
-    manifest_path: Path | None
-    if check_all:
-        manifest_name = manifest_lib.manifest_name_for(config.config_path)
-        print(
-            "CHECK MODE: simulating a first sync to a brand-new empty Canvas "
-            f"course.\nNothing will be uploaded and {manifest_name} will "
-            "not be modified.\n"
-        )
-        api: Any = dryrun.DryRunCanvas()
-        course = dryrun.DryRunCourse()
-        manifest: manifest_lib.ManifestDict = {}
-        manifest_path = None
-    else:
-        api = capi
-        manifest_path = manifest_lib.manifest_path_for(repo_path, config.config_path)
-        manifest = manifest_lib.load(manifest_path)
-        course = capi.get_course(config)
+    api, course, manifest, manifest_path = _setup_mode(config, repo_path, mode)
     matcher = load_ignore_matcher(repo_path)
     snippets_dir = repo_path / "snippets"
     newer_on_canvas: list[str] = []
@@ -2000,8 +2096,10 @@ def run_sync(
     group_categories = load_group_categories(repo_path, _settings_dict)
 
     # Files moved without `mv` would be created as second Canvas items; stop
-    # before anything in Canvas changes (check mode has no manifest to compare).
-    if not check_all and check_unrecorded_moves(
+    # before anything in Canvas changes (new-course mode has no manifest to
+    # compare). Under --noop manifest_path is None, so --new forgets entries in
+    # memory only.
+    if mode != "new_course" and check_unrecorded_moves(
         repo_path, manifest, manifest_path,
         lambda canvas_type, entry: api.get_orphan_item(course, canvas_type, entry),
         errors, new_paths=new_paths, commands=commands, verbose=verbose,
@@ -2009,11 +2107,15 @@ def run_sync(
         _print_errors_summary(errors)
         return True
 
+    check_only = mode != "real"
+    counts = SyncCounts()
+
     # 0. Course settings (metadata, grading standards, assignment groups, policies, rubrics)
     rubric_ids, changed_sections, deferred_ag_rules, recreated_rubrics = (
         sync_course_settings(
             course, repo_path, manifest, manifest_path, force_uploads,
             verbose=verbose, settings=_settings_dict, errors=errors, api=api,
+            check_only=check_only, counts=counts,
         )
     )
 
@@ -2047,7 +2149,8 @@ def run_sync(
         unpublishable_items=unpublishable_items,
         ignored_fields=ignored_fields,
         api=api,
-        check_only=check_all,
+        check_only=check_only,
+        counts=counts,
         group_categories=group_categories,
     )
 
@@ -2063,6 +2166,8 @@ def run_sync(
     # 2. Content
     if _phase_content(ctx):
         _print_errors_summary(errors)
+        if mode == "noop":
+            _print_noop_summary(ctx)
         return True
 
     # 2.2. Rubrics re-created in phase 0 have new canvas ids; assignments whose
@@ -2099,12 +2204,7 @@ def run_sync(
     # 5.5. Pinned entries that match nothing on disk (warning only)
     check_pinned_resources_coverage(pinned, repo_path)
 
-    _print_newer_on_canvas_summary(newer_on_canvas)
-    _print_pinned_summary(ctx.pinned_skips)
-    _print_unpublishable_summary(unpublishable_items)
-    _print_ignored_fields_summary(ignored_fields)
-    _print_errors_summary(errors)
-    return bool(errors)
+    return _finish_run(ctx, mode)
 
 
 def _entry_resource_key(canvas_type: str, entry: dict[str, Any]) -> ResourceKey | None:
@@ -2287,6 +2387,7 @@ def _walk_assets(ctx: SyncContext, dir_path: Path, assets_root: Path) -> None:
         if entry.is_file():
             local_key = entry.relative_to(repo_root).as_posix()
             if not manifest_lib.needs_sync(manifest, local_key, entry, ctx.force_uploads):
+                ctx.counts.skipped += 1
                 continue
             if _skip_if_pinned(ctx, local_key):
                 continue
@@ -2299,6 +2400,7 @@ def _walk_assets(ctx: SyncContext, dir_path: Path, assets_root: Path) -> None:
                     api=ctx.api,
                 ):
                     continue
+            _count_action(ctx, manifest.get(local_key))
             verb = "Would upload" if ctx.check_only else "Uploading"
             print(f"{verb} asset: {local_key}")
             canvas_entry = ctx.api.upload_asset(course, entry, assets_root)
@@ -2770,6 +2872,7 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
         extra_mtime_paths=lambda: _file_referenced_snippets(md_file, snippets_dir),
         current_flags=ctx.flags, verbose=verbose, extra_stale=_dates_stale(ctx),
     ):
+        ctx.counts.skipped += 1
         if verbose:
             print(f"Skipping (up-to-date): {local_key}")
         return
@@ -2883,6 +2986,7 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
     title = frontmatter.get("title", md_file.stem)
     tracking = _tracking(_flags_used_for([md_file], snippets_dir, ctx.flags), dates_used)
 
+    _count_action(ctx, existing)
     verb = "Would upload" if ctx.check_only else "Uploading"
     print(f"  {verb}: {local_key}")
     if canvas_type == "page":
@@ -2995,6 +3099,7 @@ def _reorder_modules(
     errors: list[str] | None,
     api=capi,
     manifest_path: Path | None = None,
+    check_only: bool = False,
 ) -> None:
     """Set module positions on Canvas without re-syncing content.
 
@@ -3002,6 +3107,7 @@ def _reorder_modules(
     naming a Canvas-only module resolve by name (cached in the manifest under
     EXTERNAL_MODULE_PREFIX, so the name lookup is skipped on later runs).
     """
+    verb = "Would reorder" if check_only else "Reordering"
     modules_dir = repo_path / "modules"
     name_index: dict[str, list[int]] | None = None
     for position, (value, is_local) in enumerate(entries, start=1):
@@ -3025,7 +3131,7 @@ def _reorder_modules(
                 if errors is not None:
                     errors.append(msg)
                 continue
-            print(f"Reordering module: {local_key} → position {position}")
+            print(f"{verb} module: {local_key} → position {position}")
             try:
                 api.reposition_module(course, entry["canvas_id"], position)
             except Exception as exc:
@@ -3042,7 +3148,7 @@ def _reorder_modules(
         canvas_id = cached.get("canvas_id")
         error: str | None = None
         if canvas_id is not None:
-            print(f"Reordering Canvas-only module: '{value}' → position {position}")
+            print(f"{verb} Canvas-only module: '{value}' → position {position}")
             try:
                 api.reposition_module(course, canvas_id, position)
                 continue
@@ -3060,7 +3166,7 @@ def _reorder_modules(
             if errors is not None:
                 errors.append(error or f"could not resolve module '{value}'")
             continue
-        print(f"Reordering Canvas-only module: '{value}' → position {position}")
+        print(f"{verb} Canvas-only module: '{value}' → position {position}")
         try:
             api.reposition_module(course, canvas_id, position)
         except Exception as exc:
@@ -3096,6 +3202,7 @@ def _sync_module(
         extra_mtime_paths=lambda: _file_referenced_snippets(md_file, snippets_dir),
         current_flags=ctx.flags, verbose=verbose,
     ):
+        ctx.counts.skipped += 1
         if verbose:
             print(f"Skipping (up-to-date): {local_key}")
         return False
@@ -3110,6 +3217,7 @@ def _sync_module(
         ):
             return False
 
+    _count_action(ctx, manifest.get(local_key))
     verb = "Would sync" if ctx.check_only else "Syncing"
     print(f"{verb} module: {local_key}")
 
@@ -3281,6 +3389,7 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
         quiz_md, questions_dir, local_key, manifest, force_uploads, snippets_dir,
         current_flags=ctx.flags, verbose=verbose, extra_stale=_dates_stale(ctx),
     ):
+        ctx.counts.skipped += 1
         if verbose:
             print(f"Skipping (up-to-date): {local_key}")
         return
@@ -3409,6 +3518,7 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
             _resolve_date_overrides(override, canvas_id, local_key, errors)
         )
 
+    _count_action(ctx, existing)
     verb = "Would upload" if ctx.check_only else "Uploading"
     print(f"  {verb}: {local_key}")
     # The publish state is applied after the questions are synced (see
@@ -3424,7 +3534,7 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
         warn(msg, errors)
     if not ctx.check_only:
         print(f"  Link: {result['html_url']}")
-    quiz_obj = course.get_quiz(result["canvas_id"])
+    quiz_obj = ctx.api.get_quiz(course, result["canvas_id"])
     q_id_map = ctx.api.sync_quiz_questions(course, quiz_obj, questions)
     if ctx.api.finalize_quiz_publish_state(quiz_obj, published):
         warn(_quiz_manual_save_message(local_key, title, result.get("html_url")), errors)
@@ -3627,17 +3737,22 @@ def run_targeted_sync(
     verbose: bool = False,
     new_paths: Iterable[str] = (),
     commands: Commands | None = None,
+    mode: SyncMode = "real",
 ) -> bool:
     """Sync only the specified targets. Returns True if any errors occurred.
 
     -t (recursive_targets) runs first: BFS each target plus all transitively referenced files.
     -s (single_targets) runs second, independently: no BFS, no dependency on -t's visited set.
     If -t already uploaded a file and updated its manifest timestamp, -s will skip it via needs_sync.
+
+    ``mode`` is "real" or "noop" (see run_sync); new-course mode always
+    checks the whole repo, so it has no targeted form.
     """
+    if mode == "new_course":
+        raise ValueError("run_targeted_sync does not support new-course mode")
     repo_format.check_repo_format(repo_path)
-    manifest_path = manifest_lib.manifest_path_for(repo_path, config.config_path)
-    manifest = manifest_lib.load(manifest_path)
-    course = capi.get_course(config)
+    api, course, manifest, manifest_path = _setup_mode(config, repo_path, mode)
+    check_only = mode != "real"
     snippets_dir = repo_path / "snippets"
     assets_root = repo_path / "assets"
     newer_on_canvas: list[str] = []
@@ -3646,15 +3761,15 @@ def run_targeted_sync(
     # any file's Canvas item.
     if check_unrecorded_moves(
         repo_path, manifest, manifest_path,
-        lambda canvas_type, entry: capi.get_orphan_item(course, canvas_type, entry),
+        lambda canvas_type, entry: api.get_orphan_item(course, canvas_type, entry),
         errors, new_paths=new_paths, commands=commands, verbose=verbose,
     ):
         _print_errors_summary(errors)
         return True
     unpublishable_items: list[tuple[str, str]] = []
     ignored_fields: list[tuple[str, str]] = []
-    assignment_group_ids = capi.get_assignment_group_ids(course)
-    rubric_ids = capi.get_rubric_ids(course)
+    assignment_group_ids = api.get_assignment_group_ids(course)
+    rubric_ids = api.get_rubric_ids(course)
     _targeted_order_entries = _load_module_order(repo_path)
     _targeted_position_map = _local_module_positions(_targeted_order_entries)
     course_flags = load_course_flags(repo_path, config=config)
@@ -3686,6 +3801,8 @@ def run_targeted_sync(
         unpublishable_items=unpublishable_items,
         ignored_fields=ignored_fields,
         group_categories=group_categories,
+        api=api,
+        check_only=check_only,
     )
 
     visited: set[str] = set()
@@ -3701,7 +3818,8 @@ def run_targeted_sync(
         _settings_state["ran"] = True
         new_rubric_ids, _, deferred, recreated = sync_course_settings(
             course, repo_path, manifest, manifest_path, force_uploads,
-            verbose=verbose, errors=errors,
+            verbose=verbose, errors=errors, api=api,
+            check_only=check_only, counts=ctx.counts,
         )
         _settings_state["deferred_ag_rules"] = deferred
         ctx.rubric_ids.update(new_rubric_ids)
@@ -3722,9 +3840,11 @@ def run_targeted_sync(
                 if manifest_lib.needs_sync(
                     manifest, local_key, file_path, force_uploads
                 ):
+                    ctx.counts.updated += 1
                     _reorder_modules(
                         course, _targeted_order_entries, repo_path, manifest,
-                        errors, manifest_path=manifest_path,
+                        errors, api=api, manifest_path=manifest_path,
+                        check_only=check_only,
                     )
                     manifest_lib.record(
                         manifest, manifest_path, local_key, 0, "module_order"
@@ -3745,11 +3865,13 @@ def run_targeted_sync(
                         file_path.stat().st_mtime, tz=timezone.utc
                     )
                     if _canvas_is_newer(
-                        course, local_key, local_mtime, manifest, newer_on_canvas
+                        course, local_key, local_mtime, manifest, newer_on_canvas,
+                        api=api,
                     ):
                         return
-                print(f"Uploading asset: {local_key}")
-                canvas_entry = capi.upload_asset(course, file_path, assets_root)
+                _count_action(ctx, manifest.get(local_key))
+                print(f"{'Would upload' if check_only else 'Uploading'} asset: {local_key}")
+                canvas_entry = api.upload_asset(course, file_path, assets_root)
                 manifest_lib.record(
                     manifest,
                     manifest_path,
@@ -3759,6 +3881,7 @@ def run_targeted_sync(
                     extra={"canvas_url": canvas_entry["canvas_url"]},
                 )
             else:
+                ctx.counts.skipped += 1
                 if verbose:
                     print(f"Skipping (up-to-date): {local_key}")
         elif folder == "modules":
@@ -3854,7 +3977,7 @@ def run_targeted_sync(
         if settings_path.exists():
             with settings_path.open("rb") as fh:
                 _settings = tomllib.load(fh)
-            capi.apply_assignment_group_rules(
+            api.apply_assignment_group_rules(
                 course,
                 _settings.get("assignment_groups", []),
                 _settings_state["deferred_ag_rules"],
@@ -3866,9 +3989,4 @@ def run_targeted_sync(
     check_course_flags_coverage(course_flags, repo_path, matcher)
     check_pinned_resources_coverage(pinned, repo_path)
 
-    _print_newer_on_canvas_summary(newer_on_canvas)
-    _print_pinned_summary(ctx.pinned_skips)
-    _print_unpublishable_summary(unpublishable_items)
-    _print_ignored_fields_summary(ignored_fields)
-    _print_errors_summary(errors)
-    return bool(errors)
+    return _finish_run(ctx, mode)

@@ -8,6 +8,8 @@ import pytest
 
 from markdown_to_canvas.link_rewrite import (
     canvas_content_url,
+    check_local_links,
+    extract_local_refs,
     infer_canvas_type,
     rewrite_links,
 )
@@ -467,3 +469,80 @@ def test_multiple_different_links_all_rewritten(tmp_path: Path) -> None:
     assert "https://example.com" in result
     assert "#top" in result
     assert "../" not in result
+
+
+# ---------------------------------------------------------------------------
+# HTML entities in attribute values (Pandoc writes & in a file name as &amp;)
+# ---------------------------------------------------------------------------
+
+
+def _setup_entity_files(tmp_path: Path) -> tuple[Path, Path]:
+    course_root, source_file = _setup(tmp_path)
+    (course_root / "assets" / "A & B.pdf").touch()
+    (course_root / "assets" / "images" / "Tom's.png").touch()
+    return course_root, source_file
+
+
+# What Pandoc emits for [x](../assets/A%20&%20B.pdf) and ![](../assets/images/Tom's.png)
+_ENTITY_HTML = (
+    '<p><a href="../assets/A%20&amp;%20B.pdf">x</a>'
+    '<img src="../assets/images/Tom&#39;s.png" alt="" /></p>'
+)
+
+
+def test_entity_encoded_refs_resolve_to_real_file_names(tmp_path: Path) -> None:
+    course_root, source_file = _setup_entity_files(tmp_path)
+    assert extract_local_refs(_ENTITY_HTML, source_file, course_root) == {
+        "assets/A & B.pdf",
+        "assets/images/Tom's.png",
+    }
+
+
+def test_entity_encoded_refs_are_not_reported_missing(tmp_path: Path) -> None:
+    course_root, source_file = _setup_entity_files(tmp_path)
+    errors: list[str] = []
+    check_local_links(_ENTITY_HTML, source_file, course_root, errors)
+    assert errors == []
+
+
+def test_entity_encoded_refs_unescaped_only_once(tmp_path: Path) -> None:
+    course_root, source_file = _setup(tmp_path)
+    (course_root / "assets" / "A &amp; B.pdf").touch()
+    html = '<a href="../assets/A%20&amp;amp;%20B.pdf">x</a>'
+    assert extract_local_refs(html, source_file, course_root) == {"assets/A &amp; B.pdf"}
+
+
+def test_entity_encoded_refs_rewritten_to_canvas_urls(tmp_path: Path) -> None:
+    course_root, source_file = _setup_entity_files(tmp_path)
+    manifest = {
+        "assets/A & B.pdf": {
+            "canvas_type": "file",
+            "canvas_id": 1,
+            "canvas_url": "https://school.instructure.com/files/1/download?download_frd=1&verifier=v",
+        },
+        "assets/images/Tom's.png": {
+            "canvas_type": "file",
+            "canvas_id": 2,
+            "canvas_url": "https://school.instructure.com/files/2/download",
+        },
+    }
+    errors: list[str] = []
+    result = rewrite_links(
+        _ENTITY_HTML, source_file, course_root, manifest, COURSE_ID, _no_stub, errors
+    )
+    assert errors == []
+    assert (
+        '<a href="https://school.instructure.com/files/1/download?download_frd=1&amp;verifier=v">'
+        in result
+    )
+    assert '<img src="https://school.instructure.com/files/2/download" alt="" />' in result
+
+
+def test_entity_encoded_fragment_carried_over_unchanged(tmp_path: Path) -> None:
+    course_root, source_file = _setup(tmp_path)
+    manifest = {
+        "pages/syllabus.md": {"canvas_type": "page", "canvas_id": 1, "canvas_url": "syllabus"}
+    }
+    html = '<a href="syllabus.md#q&amp;a">x</a>'
+    result = rewrite_links(html, source_file, course_root, manifest, COURSE_ID, _no_stub)
+    assert f'href="/courses/{COURSE_ID}/pages/syllabus#q&amp;a"' in result

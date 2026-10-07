@@ -72,7 +72,8 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
     - [Full sync (default)](#full-sync-default)
     - [Typical full-sync workflow](#typical-full-sync-workflow)
     - [Files moved without `mv`](#files-moved-without-mv)
-  - [Checking a course before deploying (`--check-all`)](#checking-a-course-before-deploying---check-all)
+  - [Seeing what `update` would do (`--noop`)](#seeing-what-update-would-do---noop)
+  - [Checking a course before deploying (`--check-as-new-course`)](#checking-a-course-before-deploying---check-as-new-course)
   - [Selective sync](#selective-sync)
     - [`-t` — recursive (BFS)](#-t--recursive-bfs)
     - [`-s` — single target (no traversal)](#-s--single-target-no-traversal)
@@ -520,8 +521,10 @@ before anything is uploaded to it.
 no terminal (a script or CI job). Without a terminal and without `--yes`, the run
 stops and changes nothing.
 
-`update --check-all` and `prune --manifest-only` never contact Canvas and do not
-check.
+`update --check-as-new-course` and `prune --manifest-only` never contact Canvas
+and do not check. `update --noop` checks but never asks or writes: with no
+course recorded it says it would ask and carries on, and with a different
+course recorded it stops.
 
 ### API token
 
@@ -573,10 +576,14 @@ Options:
                                   it transitively references (BFS). Skips the full sync.
   -s, --single-target FILE        Comma-separated files to sync without traversing references.
                                   Runs after -t. Skips the full sync.
-  --check-all                     Dry run: validate the whole repo as if uploading it for the
+  --check-as-new-course           Dry run: validate the whole repo as if uploading it for the
                                   first time to a brand-new empty Canvas course. Contacts
                                   Canvas for nothing and writes nothing. Exits nonzero if any
                                   problems are found.
+  -n, --noop                      Show what this update would do to the course as it is now,
+                                  without doing it: reads Canvas and the manifest, changes
+                                  nothing in Canvas and writes no file. Works with -t, -s and
+                                  the other options. Exits nonzero if any problems are found.
   --new PATH                      PATH is a separate item, not a moved copy of the
                                   orphaned manifest entries it matches: forget those
                                   entries (their Canvas items stay in Canvas, untracked)
@@ -692,7 +699,9 @@ with two ways forward:
   a warning is printed for each one, and the run continues and creates NEW as
   a new Canvas item. The old Canvas item stays in Canvas, no longer tracked by
   the tool, so `prune` will not see it either; delete it in Canvas if you don't
-  need it. `--new` is repeatable. It cannot be combined with `--check-all`.
+  need it. `--new` is repeatable. It cannot be combined with
+  `--check-as-new-course`. With `--noop` the entries are forgotten for that run
+  only, and the manifest file is not changed.
 
 If a duplicate already exists (an earlier `update` created it before this
 check existed), `update` prints a warning on every run naming both files and
@@ -703,13 +712,60 @@ entry and leaves both Canvas items alone, or remove the old item with
 once, and deleting an assignment also deletes the submissions made to it.
 Canvas will not unpublish an assignment that has submissions.
 
-`--check-all` does not run this check, because it ignores the manifest.
+`--check-as-new-course` does not run this check, because it ignores the
+manifest. `--noop` runs it and stops the same way.
 
 ---
 
-## Checking a course before deploying (`--check-all`)
+## Seeing what `update` would do (`--noop`)
 
-`--check-all` runs the entire update pipeline as a **dry run simulating a
+`update --noop` (or `-n`) runs `update` against the course as it is now and
+prints what it would do, without doing it. It reads the manifest and Canvas the
+way a real `update` does, so it reports only what a real run would act on: the
+files changed since their last sync, new files, items newer on Canvas, and any
+problems. Nothing is changed in Canvas and no file is written; the manifest is
+byte-for-byte the same afterwards.
+
+```bash
+markdown-to-canvas update ./my-course --noop
+markdown-to-canvas update ./my-course --noop -t pages/week3.md
+markdown-to-canvas update ./my-course --noop --force-uploads
+```
+
+The output is the normal `update` output with "Would upload", "Would create",
+"Would sync" and so on in place of the action lines, followed by a summary:
+
+```text
+NOOP SUMMARY (nothing was changed)
+  Would create:            1
+  Would update:            3
+  Up to date (skipped):   37
+  Newer on Canvas:         0
+  Problems:                0
+```
+
+"Would create" counts items that do not exist on Canvas yet; "Would update"
+counts existing items that would be sent again (content, modules, course
+settings, rubrics, module order and dates-only updates). "Up to date" counts
+files skipped because they have not changed.
+
+`--noop` works with every other `update` option except
+`--check-as-new-course`: `-t`, `-s`, `--force-uploads`, `--force-overwrite`,
+`--new`, `--config`, `--verbose` and `--yes`. It needs an API token, because it
+reads the course. It exits 1 when a real `update` would report a problem
+(including a [file moved without `mv`](#files-moved-without-mv)), so it can
+gate a script.
+
+It cannot show what Canvas would do with the writes it skips: dates Canvas
+rejects, quizzes that need "Save It Now", and the comparisons that the course
+settings make against Canvas while writing (for example a grading scheme that
+already exists at the account level) are not reported.
+
+---
+
+## Checking a course before deploying (`--check-as-new-course`)
+
+`--check-as-new-course` runs the entire update pipeline as a **dry run simulating a
 first sync to a brand-new, completely empty Canvas course** — every file is
 converted, every link resolved, every rubric / assignment-group / due-date
 reference checked — but:
@@ -720,10 +776,13 @@ reference checked — but:
   not just files changed since the last sync).
 
 ```bash
-markdown-to-canvas update ./my-course --check-all
+markdown-to-canvas update ./my-course --check-as-new-course
 ```
 
-Typical use: develop a course repo over a break, run `--check-all`
+To see what the next `update` would change in the course as it is now, use
+[`--noop`](#seeing-what-update-would-do---noop) instead.
+
+Typical use: develop a course repo over a break, run `--check-as-new-course`
 periodically to catch problems, then deploy the whole course with a plain
 `update` when the quarter starts. It exits nonzero when problems are found,
 so it also works in scripts and pre-deploy hooks.
@@ -742,7 +801,7 @@ dates rejected for falling outside the term, quizzes needing a manual "Save
 It Now", or API permission errors. Those can still surface on the real
 deploy.
 
-`--check-all` always checks the whole repo, so it cannot be combined with
+`--check-as-new-course` always checks the whole repo, so it cannot be combined with
 `-t`/`-s`; `--force-uploads`/`--force-overwrite` are meaningless here (every
 file is already treated as new, and Canvas timestamps are never consulted)
 and are rejected too.
@@ -2086,7 +2145,7 @@ group_category_id: "Project Groups"
   students into groups in Canvas (People → Groups). It never renames, changes or
   deletes a group set/group category, including ones on Canvas that are not
   listed. A targeted `update` (`-t`/`-s`) creates a listed one only when a file
-  it uploads needs it. `update --check-all` reports what it would create and
+  it uploads needs it. `update --check-as-new-course` reports what it would create and
   does not contact Canvas.
 * **Every name must be listed**, even when the group set/group category
   already exists on Canvas. A discussion or assignment whose `group_category_id`
@@ -2095,7 +2154,7 @@ group_category_id: "Project Groups"
   it in the end-of-run error summary, and exits non-zero. Other files still
   sync. This is deliberate: uploading the file without the setting would create
   a whole-class discussion (or an individual assignment), and Canvas may not let
-  you convert it once students have posted. `update --check-all` reports the same
+  you convert it once students have posted. `update --check-as-new-course` reports the same
   error, so a typo is caught offline.
 * **Names are resolved per Canvas course.** The same repo file gets the right
   ID in every course it is synced to (for example two sections with separate
@@ -3080,7 +3139,7 @@ written as raw HTML. These are pasted unchanged: URLs with a scheme (`https:`,
 contain an inline `$...$` snippet reference, anything inside a fenced code
 block, and the content of inline `$...$` snippets. A relative link that points
 outside the course repo when read from the snippet's folder is an error: `update`
-skips the including file (other files still upload), `update --check-all` exits
+skips the including file (other files still upload), `update --check-as-new-course` exits
 non-zero, and `publish` stops before building the site. Repos created before
 format version 4 wrote snippet links relative to the including files; `upgrade`
 converts them (see [Upgrading a repo](#upgrading-a-repo-upgrade)).

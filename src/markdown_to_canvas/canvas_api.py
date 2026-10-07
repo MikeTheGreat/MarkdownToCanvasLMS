@@ -1314,6 +1314,10 @@ def create_stub(course, canvas_type: str, title: str) -> dict[str, Any]:
     raise ValueError(f"Cannot create stub for canvas_type: {canvas_type!r}")
 
 
+def get_quiz(course, quiz_id: int):
+    return course.get_quiz(quiz_id)
+
+
 def create_or_update_quiz(
     course, canvas_id: int | None, title: str, description: str, **kwargs
 ) -> dict[str, Any]:

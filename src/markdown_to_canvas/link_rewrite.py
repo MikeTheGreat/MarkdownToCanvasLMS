@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import html as html_lib
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
@@ -56,9 +57,12 @@ def canvas_content_url(entry: dict[str, Any], course_id: int) -> str:
 def _to_local_key(href: str, source_file: Path, course_root: Path) -> str | None:
     """Convert a relative href to a course-root-relative key, or None if external/anchor.
 
-    A ``?query``/``#fragment`` suffix is dropped. None also covers any scheme
+    ``href`` is raw attribute text from Pandoc's HTML, so it is HTML-unescaped
+    once (``&amp;`` -> ``&``) before being percent-decoded. A
+    ``?query``/``#fragment`` suffix is dropped. None also covers any scheme
     URL (``https:``, ``tel:``, ``data:``, ...) and paths outside the repo.
     """
+    href = html_lib.unescape(href)
     if href.startswith("#") or has_url_scheme(href):
         return None
     path_part, _suffix = split_suffix(href)
@@ -103,7 +107,7 @@ def _classify_ref(
         if is_relative_path_url(href):
             # Too many `../` segments. Passing it through would publish a
             # link that cannot resolve.
-            return href, _ESCAPES_REPO
+            return html_lib.unescape(href), _ESCAPES_REPO
         return None, None
     local_file = course_root / local_key
     # A directory match almost always means a markdown link with a
@@ -154,11 +158,14 @@ def check_local_links(
 
 
 def _with_fragment(url: str, entry: dict[str, Any], href: str) -> str:
-    """Carry a ``#fragment`` from the local href over to the Canvas URL.
+    """Return the Canvas URL as attribute text, with the local href's ``#fragment``.
 
-    Only for content pages; a file URL may carry its own query, and a module
-    URL already ends in ``#module_<id>``.
+    ``url`` is escaped for an HTML attribute (a file URL's query has ``&``).
+    ``href`` is raw attribute text, so its fragment is appended as is. The
+    fragment is carried over only for content pages; a file URL may carry its
+    own query, and a module URL already ends in ``#module_<id>``.
     """
+    url = html_lib.escape(url)
     _path, suffix = split_suffix(href)
     hash_at = suffix.find("#")
     if hash_at < 0 or entry["canvas_type"] in ("file", "module"):

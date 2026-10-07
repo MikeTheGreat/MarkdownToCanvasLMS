@@ -434,10 +434,10 @@ def test_run_sync_with_duplicate_warns_and_syncs(mock_course, tmp_path, capsys) 
     assert "Aborting" not in out
 
 
-def test_check_all_runs_no_check(mocker, tmp_path) -> None:
+def test_check_as_new_course_runs_no_check(mocker, tmp_path) -> None:
     root, _, _ = _moved_repo(tmp_path)
     spy = mocker.patch("markdown_to_canvas.sync.check_unrecorded_moves")
-    run_sync(_config(), root, check_all=True)
+    run_sync(_config(), root, mode="new_course")
     spy.assert_not_called()
 
 
@@ -450,14 +450,14 @@ def test_targeted_run_checks_whole_repo(mock_course, tmp_path, capsys) -> None:
     mock_course.get_page.assert_not_called()
 
 
-def test_cli_rejects_new_with_check_all(tmp_path) -> None:
+def test_cli_rejects_new_with_check_as_new_course(tmp_path) -> None:
     from markdown_to_canvas.cli import main
 
     root, _, _ = _moved_repo(tmp_path)
     (root / "course_settings" / "canvas.toml").write_text(
         f'base_url = "https://school.instructure.com"\ncourse_id = {COURSE_ID}\n'
     )
-    result = CliRunner().invoke(main, ["update", str(root), "--check-all", "--new", NEW])
+    result = CliRunner().invoke(main, ["update", str(root), "--check-as-new-course", "--new", NEW])
     assert result.exit_code != 0
     assert "--new" in result.output
 

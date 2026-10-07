@@ -723,7 +723,7 @@ class TestCli:
 
 
 class TestEndToEnd:
-    def test_check_all_on_destination_only_reports_links_not_followed(self, src, dest, capsys):
+    def test_check_as_new_course_on_destination_only_reports_links_not_followed(self, src, dest, capsys):
         """The only problem `update` finds after a module copy is the link cp listed."""
         from markdown_to_canvas.config import Config
         from markdown_to_canvas.sync import run_sync
@@ -733,7 +733,7 @@ class TestEndToEnd:
         assert "assignments/hw1.md -> pages/syllabus.md  (MISSING in destination)" in listed
 
         cfg = Config(base_url="https://school.instructure.com", course_id=1, api_token="tok")
-        assert run_sync(cfg, dest, check_all=True) is True
+        assert run_sync(cfg, dest, mode="new_course") is True
         out = capsys.readouterr().out
         errors = out.split("errors occurred during the update")[1].splitlines()[1:]
         errors = [e.strip() for e in errors if e.strip()]
@@ -791,6 +791,17 @@ def test_cp_copies_asset_linked_from_snippet_of_deep_page(tmp_path, dest):
     _cp([src / "pages/week1/intro.md"], dest)
     assert (dest / "assets/logo.png").exists()
     assert (dest / "snippets/policy.md").exists()
+
+
+def test_cp_copies_asset_with_ampersand_in_name(tmp_path, dest, capsys):
+    src = tmp_path / "amp-src"
+    _write(src, "course_settings/course_settings.toml", 'name = "Src"\n')
+    _write(src, "pages/p.md", "[x](../assets/A%20&%20B.pdf)\n")
+    _write(src, "assets/A & B.pdf", "x")
+    make_current(src)
+    _cp([src / "pages/p.md"], dest)
+    assert (dest / "assets/A & B.pdf").exists()
+    assert "&amp;" not in capsys.readouterr().out
 
 
 # ---------------------------------------------------------------------------

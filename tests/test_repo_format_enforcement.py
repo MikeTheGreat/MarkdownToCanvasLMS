@@ -78,7 +78,7 @@ def _snapshot(root: Path) -> dict[str, bytes]:
 
 ENTRY_POINTS = {
     "run_sync": lambda r: run_sync(_cfg(), r),
-    "run_sync_check_all": lambda r: run_sync(_cfg(), r, check_all=True),
+    "run_sync_check_as_new_course": lambda r: run_sync(_cfg(), r, mode="new_course"),
     "run_targeted_sync": lambda r: run_targeted_sync(_cfg(), r, ["pages/a.md"], []),
     "run_prune": lambda r: run_prune(_cfg(), r, "manifest"),
     "check_course": lambda r: check_course(
@@ -125,7 +125,7 @@ def test_commands_do_not_move_tab_configuration(tmp_path, mocker) -> None:
     settings.write_text(NESTED_SETTINGS)
     before = settings.read_bytes()
 
-    run_sync(_cfg(), root, check_all=True)
+    run_sync(_cfg(), root, mode="new_course")
     run_mv(root / "pages" / "a.md", root / "pages" / "b.md")
 
     assert settings.read_bytes() == before
@@ -211,7 +211,7 @@ def _term_file(root: Path) -> Path:
 
 CLI_COMMANDS = {
     "update": lambda r: ["update", str(r)],
-    "update-check-all": lambda r: ["update", str(r), "--check-all"],
+    "update-check-as-new-course": lambda r: ["update", str(r), "--check-as-new-course"],
     "mv": lambda r: ["mv", str(r / "pages" / "a.md"), str(r / "pages" / "b.md")],
     "cp": lambda r: ["cp", str(r / "pages" / "a.md"), str(_current_dest(r))],
     "publish": lambda r: ["publish", str(r)],
@@ -351,4 +351,4 @@ def test_upgrade_an_old_import_end_to_end(tmp_path, mocker) -> None:
     assert repo_format.check_repo_format(root) is None
 
     mocker.patch("markdown_to_canvas.canvas_api.Canvas")
-    run_sync(_cfg(), root, check_all=True)  # no RepoFormatError
+    run_sync(_cfg(), root, mode="new_course")  # no RepoFormatError

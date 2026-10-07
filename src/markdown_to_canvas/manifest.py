@@ -178,7 +178,8 @@ def load(path: Path) -> ManifestDict:
 
 def flush(path: Path | None, manifest: ManifestDict) -> None:
     """Write the manifest to disk. path=None means in-memory only (used by
-    `update --check-all`, which must never touch the manifest file)."""
+    `update --noop` and `update --check-as-new-course`, which must never
+    touch the manifest file)."""
     if path is None:
         return
     if FORMAT_KEY not in manifest:

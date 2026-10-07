@@ -69,7 +69,7 @@ def load(
     path: Path, require_token: bool = True, require_course: bool = True
 ) -> Config:
     """require_token=False is for commands that never contact Canvas
-    (e.g. `update --check-all`) but still need base_url/course_id.
+    (e.g. `update --check-as-new-course`) but still need base_url/course_id.
 
     require_course=False additionally tolerates a canvas.toml with no
     base_url/course_id, for commands that read the file only for its

@@ -44,6 +44,7 @@ def check_course(
     assume_yes: bool = False,
     confirm: Callable[[str], bool] | None = None,
     interactive: Callable[[], bool] = _interactive,
+    noop: bool = False,
 ) -> None:
     """Verify (and if needed record) the course the manifest belongs to.
 
@@ -52,6 +53,10 @@ def check_course(
       written before this check existed.
     - A different course stored: ask, and on yes empty the manifest (every ID in
       it belongs to the other course) and record the new one.
+
+    With ``noop`` (`update --noop`) nothing is asked or written: the messages
+    are printed, a missing record lets the run go on, and a different course
+    stops it with CourseGuardError.
     """
     if confirm is None:
         confirm = lambda prompt: click.confirm(prompt, default=False)  # noqa: E731
@@ -94,6 +99,11 @@ def check_course(
             "  - If canvas.toml is wrong instead, answer no and fix "
             "course_id/base_url."
         )
+        if noop:
+            raise CourseGuardError(
+                f"--noop stopped: {manifest_path.name} belongs to a different "
+                "course. Nothing was changed."
+            )
         ask(f"Change {manifest_path.name} to {configured} and clear its {count} Canvas IDs?")
         plan = clean_manifest.plan_invalidate_all(manifest)
         clean_manifest.apply_clean(manifest, manifest_path, plan, config, course_name)
@@ -118,6 +128,12 @@ def check_course(
             "from this repo and config. Check the course named above before "
             "uploading to it."
         )
+    if noop:
+        print(
+            f"--noop: update would ask to record {configured} as this "
+            "manifest's course; continuing without recording it."
+        )
+        return
     ask(f"Record {configured} as this manifest's course and continue?")
     manifest_lib.set_course_identity(
         manifest, manifest_path, config.base_url, config.course_id, course_name

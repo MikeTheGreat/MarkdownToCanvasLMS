@@ -1,4 +1,4 @@
-"""Group sets/group categories: Canvas calls, update, --check-all, targeted sync."""
+"""Group sets/group categories: Canvas calls, update, --check-as-new-course, targeted sync."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -458,7 +458,7 @@ def test_announcement_ignores_group_category_id(course_root, mock_course, capsys
 
 
 # ---------------------------------------------------------------------------
-# targeted sync and --check-all
+# targeted sync and --check-as-new-course
 # ---------------------------------------------------------------------------
 
 
@@ -471,25 +471,25 @@ def test_targeted_sync_creates_a_listed_group_category_on_demand(course_root, mo
     assert call.kwargs["group_category_id"] == 700
 
 
-def test_check_all_resolves_listed_names_offline(course_root, mocker, capsys) -> None:
+def test_check_as_new_course_resolves_listed_names_offline(course_root, mocker, capsys) -> None:
     mocker.patch(
         "markdown_to_canvas.canvas_api.Canvas",
-        side_effect=AssertionError("check-all must not contact Canvas"),
+        side_effect=AssertionError("check-as-new-course must not contact Canvas"),
     )
     _settings(course_root)
     _discussion(course_root)
-    assert run_sync(_config(), course_root, check_all=True) is False
+    assert run_sync(_config(), course_root, mode="new_course") is False
     assert "Would create group set/group category: Project Groups" in capsys.readouterr().out
 
 
-def test_check_all_reports_an_unlisted_name(course_root, mocker, capsys) -> None:
+def test_check_as_new_course_reports_an_unlisted_name(course_root, mocker, capsys) -> None:
     mocker.patch(
         "markdown_to_canvas.canvas_api.Canvas",
-        side_effect=AssertionError("check-all must not contact Canvas"),
+        side_effect=AssertionError("check-as-new-course must not contact Canvas"),
     )
     _settings(course_root)
     _discussion(course_root, extra='group_category_id: "Lab Partners"\n')
-    assert run_sync(_config(), course_root, check_all=True) is True
+    assert run_sync(_config(), course_root, mode="new_course") is True
     out = capsys.readouterr().out
     assert "'Lab Partners' is not listed" in out
 

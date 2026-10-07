@@ -1,7 +1,7 @@
 """COURSE_DIR resolution through the CLI: path, registry key, walk-up, config, output.
 
 HOME is a temporary directory in every test, so the real registry is never read.
-Canvas is never contacted: `update --check-all` is offline and `prune
+Canvas is never contacted: `update --check-as-new-course` is offline and `prune
 --manifest-only` never calls Canvas.
 """
 from __future__ import annotations
@@ -66,7 +66,7 @@ def first_line(result) -> str:
 def test_update_by_key_from_an_unrelated_directory(home, tmp_path, unrelated):
     course = make_course(tmp_path)
     register(home, f'[courses]\n142 = "{course}"\n')
-    result = run("update", "142", "--check-all")
+    result = run("update", "142", "--check-as-new-course")
     assert result.exit_code == 0, result.output
     assert first_line(result) == f"Course dir: {course.resolve()}  (course 142)"
     assert "Course ID: 111" in result.output
@@ -74,7 +74,7 @@ def test_update_by_key_from_an_unrelated_directory(home, tmp_path, unrelated):
 
 def test_update_by_path_prints_the_absolute_path_without_a_key(home, tmp_path, unrelated):
     course = make_course(tmp_path)
-    result = run("update", str(course), "--check-all")
+    result = run("update", str(course), "--check-as-new-course")
     assert result.exit_code == 0, result.output
     assert first_line(result) == f"Course dir: {course.resolve()}"
 
@@ -82,7 +82,7 @@ def test_update_by_path_prints_the_absolute_path_without_a_key(home, tmp_path, u
 def test_update_walks_up_from_a_subdirectory(home, tmp_path, monkeypatch):
     course = make_course(tmp_path)
     monkeypatch.chdir(course / "pages")
-    result = run("update", "--check-all")
+    result = run("update", "--check-as-new-course")
     assert result.exit_code == 0, result.output
     assert first_line(result) == f"Course dir: {course.resolve()}"
 
@@ -91,7 +91,7 @@ def test_a_directory_named_like_a_key_wins(home, tmp_path, unrelated):
     registered = make_course(tmp_path, "registered", course_id=111)
     register(home, f'[courses]\n142 = "{registered}"\n')
     local = make_course(unrelated, "142", course_id=222)
-    result = run("update", "142", "--check-all")
+    result = run("update", "142", "--check-as-new-course")
     assert result.exit_code == 0, result.output
     assert first_line(result) == f"Course dir: {local.resolve()}"
     assert "Course ID: 222" in result.output
@@ -100,7 +100,7 @@ def test_a_directory_named_like_a_key_wins(home, tmp_path, unrelated):
 def test_unknown_course_lists_keys_and_changes_nothing(home, tmp_path, unrelated):
     course = make_course(tmp_path)
     register(home, f'[courses]\n142 = "{course}"\n143 = "{course}"\n')
-    result = run("update", "999", "--check-all")
+    result = run("update", "999", "--check-as-new-course")
     assert result.exit_code == 1
     assert "'999'" in result.output and "142, 143" in result.output
     assert "Course dir:" not in result.output
@@ -108,7 +108,7 @@ def test_unknown_course_lists_keys_and_changes_nothing(home, tmp_path, unrelated
 
 def test_registered_directory_missing_names_the_key(home, tmp_path, unrelated):
     register(home, f'[courses]\n142 = "{tmp_path / "gone"}"\n')
-    result = run("update", "142", "--check-all")
+    result = run("update", "142", "--check-as-new-course")
     assert result.exit_code == 1
     assert "'142'" in result.output and "gone" in result.output
 
@@ -217,7 +217,7 @@ def test_entry_config_is_used(home, tmp_path, unrelated):
         home,
         f'[courses]\n142a = {{ path = "{course}", config = "course_settings/canvas-sec-a.toml" }}\n',
     )
-    result = run("update", "142a", "--check-all")
+    result = run("update", "142a", "--check-as-new-course")
     assert result.exit_code == 0, result.output
     assert "Course ID: 777" in result.output
 
@@ -229,7 +229,7 @@ def test_command_line_config_beats_the_entry_config(home, tmp_path, unrelated):
         f'[courses]\n142a = {{ path = "{course}", config = "course_settings/canvas-sec-a.toml" }}\n',
     )
     result = run(
-        "update", "142a", "--check-all", "--config", str(course / "course_settings" / "canvas-sec-b.toml")
+        "update", "142a", "--check-as-new-course", "--config", str(course / "course_settings" / "canvas-sec-b.toml")
     )
     assert "Course ID: 888" in result.output
 
@@ -241,7 +241,7 @@ def test_config_option_accepts_a_registry_key(home, tmp_path, unrelated):
         f'[courses]\n142 = "{course}"\n'
         f'142b = {{ path = "{course}", config = "course_settings/canvas-sec-b.toml" }}\n',
     )
-    result = run("update", "142", "--check-all", "--config", "142b")
+    result = run("update", "142", "--check-as-new-course", "--config", "142b")
     assert result.exit_code == 0, result.output
     assert "Course ID: 888" in result.output
 
@@ -253,7 +253,7 @@ def test_config_key_whose_file_is_missing_names_the_key(home, tmp_path, unrelate
         f'[courses]\n142 = "{course}"\n'
         f'142c = {{ path = "{course}", config = "course_settings/nope.toml" }}\n',
     )
-    result = run("update", "142", "--check-all", "--config", "142c")
+    result = run("update", "142", "--check-as-new-course", "--config", "142c")
     assert result.exit_code == 1
     assert "Config file not found" in result.output
     assert "nope.toml" in result.output
@@ -266,7 +266,7 @@ def test_a_path_argument_ignores_the_registry_config(home, tmp_path, unrelated):
         home,
         f'[courses]\n142a = {{ path = "{course}", config = "course_settings/canvas-sec-a.toml" }}\n',
     )
-    result = run("update", str(course), "--check-all")
+    result = run("update", str(course), "--check-as-new-course")
     assert "Course ID: 111" in result.output
 
 

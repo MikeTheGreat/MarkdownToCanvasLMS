@@ -1503,5 +1503,5 @@ def test_example_term_file_is_not_uploaded_or_reported(imported_dir: Path, tmp_p
 
     mocker.patch("markdown_to_canvas.canvas_api.Canvas")
     cfg = Config(base_url="https://s.instructure.com", course_id=1, api_token="t")
-    run_sync(cfg, repo, check_all=True)
+    run_sync(cfg, repo, mode="new_course")
     assert "term_dates" not in capsys.readouterr().out

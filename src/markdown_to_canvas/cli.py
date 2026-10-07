@@ -138,11 +138,13 @@ def _resolve_course(course_dir: str | None, config: Path | None = None) -> tuple
     return resolved.path, config if config is not None else resolved.config
 
 
-def _guard_course(repo: Path, cfg: Config, course, assume_yes: bool) -> None:
+def _guard_course(
+    repo: Path, cfg: Config, course, assume_yes: bool, noop: bool = False
+) -> None:
     """Stop unless the manifest's Canvas IDs belong to the configured course."""
     manifest_path = manifest_lib.manifest_path_for(repo, cfg.config_path)
     try:
-        check_course(manifest_path, cfg, course.name, assume_yes=assume_yes)
+        check_course(manifest_path, cfg, course.name, assume_yes=assume_yes, noop=noop)
     except CourseGuardError as e:
         die(str(e))
 
@@ -1314,8 +1316,8 @@ def _move_check_commands(
     help="Print messages for items that are skipped (up-to-date or newer on Canvas).",
 )
 @click.option(
-    "--check-all",
-    "-ca",
+    "--check-as-new-course",
+    "check_as_new_course",
     is_flag=True,
     default=False,
     help=(
@@ -1324,6 +1326,18 @@ def _move_check_commands(
         "frontmatter, ...). Contacts Canvas for nothing and writes nothing "
         "(no Canvas changes, no manifest changes); no API token "
         "needed. Exits nonzero if any problems are found."
+    ),
+)
+@click.option(
+    "--noop",
+    "-n",
+    is_flag=True,
+    default=False,
+    help=(
+        "Show what this update would do to the course as it is now, without "
+        "doing it: reads Canvas and the manifest, changes nothing in Canvas "
+        "and writes no file. Works with -t, -s and the other options. Exits "
+        "nonzero if any problems are found."
     ),
 )
 @click.option(
@@ -1347,7 +1361,8 @@ def update(
     target_recursively: str | None,
     single_target: str | None,
     verbose: bool,
-    check_all: bool,
+    check_as_new_course: bool,
+    noop: bool,
     new_paths: tuple[str, ...],
     assume_yes: bool,
 ) -> None:
@@ -1366,20 +1381,22 @@ def update(
     config_given = config
     repo, config = _resolve_course(course_dir, config)
     _ensure_pandoc()
-    if check_all and new_paths:
-        die("--check-all ignores the manifest, so there are no orphaned entries for --new to forget; drop --new.")
-    if check_all and (target_recursively or single_target):
-        die("--check-all always checks the whole repo; it cannot be combined with -t/--target-recursively or -s/--single-target.")
-    if check_all and (force_uploads or force_overwrite):
-        die("--check-all already treats every file as new and never consults Canvas; drop --force-uploads/--force-overwrite.")
+    if noop and check_as_new_course:
+        die("--noop and --check-as-new-course cannot be combined: --noop checks the course as it is now, --check-as-new-course an empty one.")
+    if check_as_new_course and new_paths:
+        die("--check-as-new-course ignores the manifest, so there are no orphaned entries for --new to forget; drop --new.")
+    if check_as_new_course and (target_recursively or single_target):
+        die("--check-as-new-course always checks the whole repo; it cannot be combined with -t/--target-recursively or -s/--single-target.")
+    if check_as_new_course and (force_uploads or force_overwrite):
+        die("--check-as-new-course already treats every file as new and never consults Canvas; drop --force-uploads/--force-overwrite.")
     if config is None:
         config = repo / "course_settings" / "canvas.toml"
-    cfg = load_config(config, require_token=not check_all)
+    cfg = load_config(config, require_token=not check_as_new_course)
 
     click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})")
 
-    if check_all:
-        had_errors = run_sync(cfg, repo, verbose=verbose, check_all=True)
+    if check_as_new_course:
+        had_errors = run_sync(cfg, repo, verbose=verbose, mode="new_course")
         if had_errors:
             click.secho(
                 "Check complete; please fix the problems listed above.", fg="yellow"
@@ -1390,8 +1407,9 @@ def update(
 
     course = get_course(cfg)
     click.echo(f"Course:    {course.name}")
-    _guard_course(repo, cfg, course, assume_yes)
+    _guard_course(repo, cfg, course, assume_yes, noop=noop)
     commands = _move_check_commands(repo, course_dir, config_given)
+    mode = "noop" if noop else "real"
 
     if target_recursively or single_target:
         recursive_list = (
@@ -1406,14 +1424,23 @@ def update(
         )
         had_errors = run_targeted_sync(
             cfg, repo, recursive_list, single_list, force_uploads, force_overwrite,
-            verbose=verbose, new_paths=new_paths, commands=commands,
+            verbose=verbose, new_paths=new_paths, commands=commands, mode=mode,
         )
     else:
         had_errors = run_sync(
             cfg, repo, force_uploads=force_uploads, force_overwrite=force_overwrite,
-            verbose=verbose, new_paths=new_paths, commands=commands,
+            verbose=verbose, new_paths=new_paths, commands=commands, mode=mode,
         )
 
+    if noop:
+        if had_errors:
+            click.secho(
+                "Noop complete; please check the problems listed above. Nothing was changed.",
+                fg="yellow",
+            )
+            sys.exit(1)
+        click.secho("Noop complete; no problems found. Nothing was changed.", fg="green")
+        return
     if had_errors:
         click.secho(
             "Update complete; please check errors listed above.", fg="yellow"

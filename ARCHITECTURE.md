@@ -156,6 +156,8 @@ The `assets/` folder hierarchy is mirrored into Canvas Files. `assets/images/fig
 
 `check_local_links()` is the read-only form of the same classification, used by `publish` (see the publish section). A removed `<a>` start tag leaves its `</a>` behind; browsers ignore the stray end tag.
 
+The `src`/`href` values are raw HTML attribute text, so Pandoc writes a `&` in a file name as `&amp;` (and `'` as `&#39;`). `_to_local_key()` runs `html.unescape()` once before `split_suffix()`/`unquote()`, so `A%20&amp;%20B.pdf` resolves to `A & B.pdf`; this covers `extract_local_refs()` (`cp`, `sync`, `local_orphans`), `check_local_links()` and `rewrite_links()`. `rewrite_links()` still substitutes over the original attribute text, and `_with_fragment()` writes the Canvas URL back with `html.escape()` (a Canvas file URL's query contains `&`), appending the local `#fragment` as raw attribute text. Before 2026-10 the value was only percent-decoded, so a link to a file with `&` in its name was reported as `local file not found: … &amp; …` and `cp` did not copy the file. `mv` was unaffected because it edits the Markdown text.
+
 **Stub creation:**
 
 When a linked file has no Canvas ID yet, the tool creates a minimal placeholder in Canvas (title only, empty body, unpublished) purely to obtain the Canvas ID. The stub is overwritten with real content when that file is processed in the main loop. Stubs exist for pages, assignments, discussions, quizzes (title only, unpublished; `_do_quiz()` later edits it by id) and modules. Content type for the stub is derived from the linked file's directory convention (`infer_canvas_type()`).
@@ -200,7 +202,8 @@ It is optional — see [Course-directory resolution](#course-directory-resolutio
 After `get_course()` and before either `run_sync` or `run_targeted_sync`, the CLI runs
 the stored-course check (`cli._guard_course` → `course_guard.check_course`; see
 "Stored course (`_canvas_course`)" under the manifest file). `-y/--yes` answers its prompt
-(needed with no TTY). `--check-all` skips the check.
+(needed with no TTY). `--check-as-new-course` skips the check; `--noop` runs it in
+its no-write mode (see "Stored course").
 
 Before any of that, `run_sync`, `run_targeted_sync` and `course_guard.check_course` call
 `repo_format.check_repo_format()`, which refuses a repo or manifest in a different
@@ -216,8 +219,11 @@ pre-flight check covers all of them: `unrecorded_moves.check_unrecorded_moves`,
 called by `run_sync` after the manifest is loaded and before phase 0
 (`sync_course_settings`), and by `run_targeted_sync` right after its manifest
 load. Nothing has been written to Canvas at either point. A targeted run checks
-the whole repo, because link stubbing can create any file's item. `--check-all`
-skips the check: it starts from an empty manifest, so there are no orphans.
+the whole repo, because link stubbing can create any file's item.
+`--check-as-new-course` skips the check: it starts from an empty manifest, so
+there are no orphans. `--noop` runs it unchanged with `manifest_path=None`, so
+`--new` forgets entries only in the in-memory copy (`check_unrecorded_moves`
+flushes only when `manifest_path` is set) and a move still stops the run.
 
 - **Orphans** come from `unrecorded_moves.find_orphans`, which `run_prune` also
   uses: entries whose file is gone, excluding reserved keys and
@@ -244,7 +250,7 @@ skips the check: it starts from an empty manifest, so there are no orphans.
   are all listed. The tool never picks one.
 - **Existing duplicates** print a warning (not an error) on every run, naming
   both IDs and the `update --new` / `prune` ways to clear it.
-- **`--new PATH`** (repeatable; rejected with `--check-all`) is resolved from
+- **`--new PATH`** (repeatable; rejected with `--check-as-new-course`) is resolved from
   the current directory first, like `-t`/`-s`, then from the repo root. Every
   PATH is validated before anything is removed: it must exist, be a file
   `collect_local_items` returns, and match at least one orphan (as a new or a
@@ -414,27 +420,42 @@ Paths passed to `-t` and `-s` are resolved as follows:
 
 Paths that resolve outside the repo root print a warning and are skipped.
 
-### `--check-all` (offline dry run of a fresh full sync)
+### Sync modes: real, `--noop`, `--check-as-new-course`
 
-Runs the **entire** `run_sync` pipeline as a dry run simulating a first sync
-to a brand-new empty Canvas course. Nothing is uploaded, nothing is written,
-Canvas is never contacted (no API token required — `config.load()` takes
-`require_token=False`). Exits nonzero if any errors/warnings were collected,
-so it can gate a deploy script. Rejected in combination with `-t`/`-s`
-(check-all always checks everything) and with `--force-uploads`/
-`--force-overwrite` (both meaningless: every file is already treated as new
-and Canvas timestamps are never consulted).
+`run_sync` takes `mode` (`sync.SyncMode`): `"real"`, `"noop"` (`update
+--noop`) or `"new_course"` (`update --check-as-new-course`).
+`run_targeted_sync` takes `"real"` or `"noop"` and raises `ValueError` for
+`"new_course"`. `_setup_mode` returns `(api, course, manifest,
+manifest_path)` for the mode and prints the dry-run banner; both dry runs set
+`ctx.check_only`, which is what switches progress lines to "Would ..." (also
+passed as `check_only=` to `sync_course_settings` and `_reorder_modules`,
+which sit outside the ctx graph).
 
-Mechanism (see `run_sync(check_all=True)` in sync.py and `dryrun.py`):
+| | manifest | course | `api` | `manifest_path` |
+| --- | --- | --- | --- | --- |
+| real | loaded from disk | `capi.get_course` | `canvas_api` | the file |
+| noop | loaded from disk | `capi.get_course`, requester wrapped | `dryrun.NoopCanvas` | `None` |
+| new_course | `{}` | `dryrun.DryRunCourse` | `dryrun.DryRunCanvas` | `None` |
+
+`manifest_path=None` makes `manifest_lib.flush()`/`record()` skip the disk
+write, so in both dry runs the in-memory manifest can be updated freely (link
+rewriting, stubs, module items and `annotatable_attachment` read it) and the
+file is byte-identical afterwards.
+
+Shared mechanism (see `sync.py` and `dryrun.py`):
 
 - **API indirection**: all Canvas traffic in the sync pipeline goes through
   `SyncContext.api` (default: the real `canvas_api` module). Functions outside
   the ctx graph (`sync_course_settings`, `_make_stub_creator`,
-  `_canvas_is_newer`, `_reorder_modules`) take an `api=capi` parameter.
-  Invariant: **no direct canvasapi calls in sync.py's run_sync graph** — the
-  one historical exception (syllabus `course.update(...)`) now goes through
-  `capi.update_syllabus_body`. (`course.get_quiz` in `_sync_quiz` is the
-  remaining pass-through; `DryRunCourse` implements it.)
+  `_canvas_is_newer`, `_reorder_modules`) take an `api=capi` parameter, and
+  both `run_sync` and `run_targeted_sync` pass the mode's `api` to them.
+  Invariant: **no direct canvasapi calls in the run_sync or run_targeted_sync
+  graph**. The last two exceptions went through `api` when `--noop` was added:
+  `_sync_quiz`'s `course.get_quiz` is now `api.get_quiz` (`canvas_api.get_quiz`
+  is a one-line wrapper; the dry-run classes return a placeholder, which only
+  their own `sync_quiz_questions`/`finalize_quiz_publish_state` see), and
+  `run_targeted_sync`'s direct `capi.*` calls (reads, `upload_asset`,
+  `apply_assignment_group_rules`) now use its `api`.
 - **`dryrun.DryRunCanvas`** mirrors the canvas_api function signatures and
   return shapes with fake ids. It is lightly stateful — assignment groups and
   rubrics "created" by the settings phase are returned by the corresponding
@@ -442,14 +463,79 @@ Mechanism (see `run_sync(check_all=True)` in sync.py and `dryrun.py`):
   names) behaves exactly like a real first sync. Its `add_module_item`
   replicates the real function's *local* validation (manifest lookup,
   supported-type check) so missing module items still warn. When the pipeline
-  grows a new canvas_api call, add its dry-run twin here; test_check_all's
-  full-fixture run catches a missing one as an AttributeError.
+  grows a new canvas_api call, add its dry-run twin here; the full-fixture
+  runs in `test_check_as_new_course.py` and `test_update_noop.py` catch a
+  missing one as an AttributeError.
+
+#### `--noop` (dry run against the current course)
+
+`update --noop` (`-n`) runs the real pipeline with the manifest from disk and
+the real course, so `needs_sync`, the section and rubric hash caches,
+`_canvas_is_newer` and the unrecorded-move check decide what is reported
+exactly as they decide what a real run does. Accepted with every other
+`update` option except `--check-as-new-course`; needs a token.
+
+- **`dryrun.NoopCanvas(DryRunCanvas)`**: writes are inherited from
+  `DryRunCanvas`. Reads the pipeline uses (`get_canvas_updated_at`,
+  `get_orphan_item`, `get_assignment_group_ids`, `get_rubric_ids`,
+  `get_group_category_ids`, `get_module_ids_by_name`, `find_module_ids_named`)
+  are forwarded to `canvas_api` by name (an explicit list, so a new write
+  function is never forwarded by accident), and the name maps are merged with
+  what the run has simulated, so a group or rubric "created" in phase 0
+  resolves later. Live name maps are fetched once per run. Overrides that
+  depend on the course: `sync_assignment_groups` and `sync_rubrics` create only
+  names the course lacks (rubrics it has are reported as "Would update"),
+  `create_or_update_module` records a created module's name for later lookups,
+  and pages created or stubbed in the run get a `noop-new-page-N` URL.
+- **Fake ids are negative** (counting down from -1). `NoopCanvas` answers a
+  read about a negative id, or a fake page URL, itself
+  (`get_canvas_updated_at` returns `None`), so a fake id never reaches Canvas
+  and can never equal a real id. `DryRunCanvas` keeps 100001 upward.
+- **Request backstop**: `dryrun.block_writes(course)` replaces the course
+  requester's `request` with a wrapper that raises `NoopWriteError` for any
+  method but GET. canvasapi objects fetched from the course share that
+  requester. No read in the pipeline uses another method: GraphQL (always
+  POST) is used only by `update_post_policy`, which is a simulated write.
+- **Course guard**: `check_course(..., noop=True)` (see "Stored course").
+- **Counts**: `SyncContext.counts` (`SyncCounts`: created, updated, skipped)
+  is incremented where the "Would ..." lines are printed. `_count_action`
+  counts an item as created when its manifest entry, before the upload, is
+  missing, has no `canvas_id`, or has a negative one; otherwise as updated.
+  `sync_course_settings` adds one update for the settings file when a section
+  is stale and one per rubric sent; module order and dates-only updates count
+  as updates; group sets/group categories as creates. Skipped counts content
+  files and assets that `needs_sync` found unchanged. `_finish_run` prints the
+  usual end-of-run summaries and then, in noop mode, `_print_noop_summary`
+  (newer-on-Canvas and problems come from `ctx.newer_on_canvas` and
+  `ctx.errors`). The counters are maintained in every mode but printed only
+  under `--noop`. The CLI exits 1 when the run returned errors.
+- **What it cannot report**: anything Canvas decides on a write. That
+  includes the reads some `canvas_api` write functions make before writing
+  (`sync_grading_standards` comparing against account-level schemes, for
+  example), because the whole function is simulated.
+- **Live check** (2026-10-07, sandbox course 2758791): `update --noop` sent 7
+  requests and `--noop --force-uploads` 14, all GET; the manifest's SHA-1 and
+  a snapshot of every page, assignment, discussion, quiz and module were
+  identical before and after.
+
+Other core subcommands: `mv` already had `--noop` and never contacts Canvas;
+`import` and `publish` never write to Canvas, so none of them gained this
+mode. The `emit-workflow` template never used `--check-all`.
+
+#### `--check-as-new-course` (offline dry run of a fresh full sync)
+
+Runs the **entire** `run_sync` pipeline as a dry run simulating a first sync
+to a brand-new empty Canvas course. Nothing is uploaded, nothing is written,
+Canvas is never contacted (no API token required — `config.load()` takes
+`require_token=False`). Exits nonzero if any errors/warnings were collected,
+so it can gate a deploy script. Rejected in combination with `-t`/`-s`
+(it always checks everything), with `--force-uploads`/`--force-overwrite`
+(both meaningless: every file is already treated as new and Canvas timestamps
+are never consulted), with `--new`, and with `--noop`. It was called
+`--check-all` (short form `-ca`) until 2026-10; the old names were removed
+without an alias.
 - **Manifest**: the on-disk manifest is ignored — the run starts from an empty
-  in-memory dict, so every file takes the full first-sync path. The in-memory
-  manifest is still populated with fake entries during the run (link
-  rewriting, `annotatable_attachment` resolution, and module items read it),
-  but `manifest_path=None` makes `manifest_lib.flush()`/`record()` skip the
-  disk write, so the manifest file is byte-identical afterwards.
+  in-memory dict, so every file takes the full first-sync path.
 - **Output**: a `CHECK MODE` banner, then the normal pipeline output with
   action verbs softened via `ctx.check_only` ("Would upload:" instead of
   "Uploading:", `Link:` lines suppressed — the fake URLs mean nothing).
@@ -575,7 +661,7 @@ fresh name lookup, which refreshes the cache. The one `get_modules()` call a
 reorder pass may need is threaded through the loop as `name_index` so several
 unresolved names still cost one request.
 
-Under `--check-all` the simulated course is empty, so `DryRunCanvas`'s
+Under `--check-as-new-course` the simulated course is empty, so `DryRunCanvas`'s
 `get_module_ids_by_name` returns an index in which *every* name resolves —
 otherwise a check would report the real course's Canvas-only modules as
 missing.
@@ -1943,7 +2029,7 @@ Read-only or infrastructure fields (`storage_quota`, `root_account_uuid`, `image
 
 **Rubrics deleted on Canvas — detection and repair.** (Full measured behaviour, including the diagnosis recipes, is in **[todo/RUBRIC_ISSUES.md](todo/RUBRIC_ISSUES.md)**.) Canvas soft-deletes a rubric the moment its **last association is destroyed** (verified 2026-08; the `purpose` of that association is irrelevant, and deleting a rubric from the Manage Rubrics page also destroys its assignment associations). A soft-deleted rubric drops out of `course.get_rubrics()` while assignments that were re-associated with it afterwards keep pointing at it — and the Canvas UI's Rubrics page still lists it, because that page renders the course's rubric *associations*, not the rubric list. The symptom is `rubric 'X' not found on Canvas` for a rubric that is plainly visible in the web UI. Two mechanisms handle this:
 
-- **Detection** (`sync_course_settings`): `rubrics.toml` is loaded on **every** run — even when its mtime is unchanged and the settings phase would otherwise return early — and its titles are compared against the live rubric list. Any title that `rubric_hashes` records as previously synced but Canvas no longer lists is announced (`NOTICE: rubric '…' is in rubrics.toml but no longer on Canvas`) and forced past the hash cache into `stale_rubrics`, so it is re-created in phase 2.5 and `rubric_ids` is correct for the rest of the run. A title Canvas has never seen is *not* treated as deleted — it is simply new (first sync, or `--check-all`, whose simulated course starts empty). Without this the hash cache pinned the broken state in place run after run.
+- **Detection** (`sync_course_settings`): `rubrics.toml` is loaded on **every** run — even when its mtime is unchanged and the settings phase would otherwise return early — and its titles are compared against the live rubric list. Any title that `rubric_hashes` records as previously synced but Canvas no longer lists is announced (`NOTICE: rubric '…' is in rubrics.toml but no longer on Canvas`) and forced past the hash cache into `stale_rubrics`, so it is re-created in phase 2.5 and `rubric_ids` is correct for the rest of the run. A title Canvas has never seen is *not* treated as deleted — it is simply new (first sync, or `--check-as-new-course`, whose simulated course starts empty). Without this the hash cache pinned the broken state in place run after run.
 - **Repair** (`_repair_rubric_associations`, phase 4a): creating the same title again does **not** restore the soft-deleted rubric — Canvas mints a new id and leaves the old one deleted but still attached to its assignments — so every assignment referencing a re-created title has to be re-associated. This cannot ride on the normal upload path: an unchanged `.md` returns from `needs_sync` before its frontmatter is ever parsed, so `_apply_rubric` never runs for it. The pass walks `iter_gradeable_content()` (assignments only — rubrics attach nowhere else), skips files already synced this run, and re-associates from the manifest's `canvas_id`, printing `Re-associated rubric '…': …`. Numeric `rubric:` references are left alone: an id names a Canvas rubric directly and there is nothing to re-resolve it to. Run by both `run_sync` and `run_targeted_sync` (repo-wide in both — a re-created rubric strands assignments outside any target set).
 
 **Course-level rubric association uses `purpose: "bookmark"`, not `"grading"`.** Canvas forks a rubric on edit — creating an orphan copy titled `X (1)` and leaving the real rubric's criteria untouched — once the rubric has more than one *grading* association, and a course-level `grading` association counts toward that total. With `"grading"` a rubric attached to even one assignment forked on every sync (the source of long `Class Notes (1) … (11)` runs of junk rubrics in a course); with `"bookmark"` the same edit applies in place. Verified against Canvas 2026-08. The fork still happens for a rubric attached to **2 or more** assignments — see TODO.md.
@@ -1956,14 +2042,14 @@ Read-only or infrastructure fields (`storage_quota`, `root_account_uuid`, `image
 
 **Group sets/group categories (`group_categories`, `group_category_id`)**. Canvas's UI says "group set", its API and export XML "group category"; docs and comments say "group set/group category". `group_categories` is a top-level array of names in `course_settings.toml`; `load_group_categories(repo_path, settings=None)` (mirrors `load_pinned_resources`) trims them and raises `ValueError` → `die()` for a non-array value, a non-string or empty entry, or a duplicate. `run_sync` loads it before phase 0 alongside the pins; `run_targeted_sync` loads it before processing anything. The key is in `_NON_METADATA_SETTINGS_KEYS`, so editing it never re-sends course metadata. The names go on `SyncContext.group_categories`.
 
-- **Creation.** In a full run, `_ensure_group_categories(ctx)` runs right after `sync_course_settings()` (phase 0.2). With an empty list it makes no request. Otherwise it fetches `api.get_group_category_ids(course)` once (`{trimmed name: [ids]}`, from `course.get_group_categories()`; a list because Canvas can hold duplicate names), stores it in `ctx.group_category_ids`, and calls `api.create_group_category(course, name)` (`course.create_group_category(name)`, empty set) for each listed name the course lacks, printing `Created group set/group category: …` (`Would create …` under `--check-all`). It never renames, edits or deletes, and unlisted Canvas entries are ignored. This runs every full run instead of using a section hash, so one deleted on Canvas is recreated; the cost is that one GET. A failed create is warned into `errors` and the name is added to `ctx.group_category_failures`, so files using it fail without retrying the create. The targeted sync does not call `_ensure_group_categories`; the resolver below fetches the map lazily (`ctx.group_category_ids is None`) and creates a listed name on demand.
+- **Creation.** In a full run, `_ensure_group_categories(ctx)` runs right after `sync_course_settings()` (phase 0.2). With an empty list it makes no request. Otherwise it fetches `api.get_group_category_ids(course)` once (`{trimmed name: [ids]}`, from `course.get_group_categories()`; a list because Canvas can hold duplicate names), stores it in `ctx.group_category_ids`, and calls `api.create_group_category(course, name)` (`course.create_group_category(name)`, empty set) for each listed name the course lacks, printing `Created group set/group category: …` (`Would create …` in either dry run). It never renames, edits or deletes, and unlisted Canvas entries are ignored. This runs every full run instead of using a section hash, so one deleted on Canvas is recreated; the cost is that one GET. A failed create is warned into `errors` and the name is added to `ctx.group_category_failures`, so files using it fail without retrying the create. The targeted sync does not call `_ensure_group_categories`; the resolver below fetches the map lazily (`ctx.group_category_ids is None`) and creates a listed name on demand.
 - **Why IDs are not cached in the manifest.** Resolution already costs one GET per run, not one per file or name, and the fresh list is needed anyway to recreate a deleted group set/group category. A cached ID would go stale when one is deleted or recreated on Canvas, attaching content to a missing set. Assignment group IDs are not cached either.
-- **Resolution** (`_resolve_group_category_id(ctx, value, local_key)`): an int (not bool) passes through with no lookup and no listing requirement. A string must be in `ctx.group_categories`, even if Canvas has it (that keeps `--check-all` exact offline and makes the repo a full description of the course). A listed name missing from the map is created; one with several IDs on Canvas fails with the IDs listed. Every failure is an `ERROR:` in `ctx.errors` and returns `None`. `_upload_discussion` and `_upload_assignment` call it after building their params and **return without any Canvas write** on `None`: skipping only the field (as `assignment_group_id` does) would create a whole-class discussion or individual assignment that Canvas may refuse to convert once students have posted. Link rewriting (and any stub creation for *other* files) has already run by then; a stub of the file itself left by an earlier link stays an empty unpublished stub until a later run succeeds.
+- **Resolution** (`_resolve_group_category_id(ctx, value, local_key)`): an int (not bool) passes through with no lookup and no listing requirement. A string must be in `ctx.group_categories`, even if Canvas has it (that keeps `--check-as-new-course` exact offline and makes the repo a full description of the course). A listed name missing from the map is created; one with several IDs on Canvas fails with the IDs listed. Every failure is an `ERROR:` in `ctx.errors` and returns `None`. `_upload_discussion` and `_upload_assignment` call it after building their params and **return without any Canvas write** on `None`: skipping only the field (as `assignment_group_id` does) would create a whole-class discussion or individual assignment that Canvas may refuse to convert once students have posted. Link rewriting (and any stub creation for *other* files) has already run by then; a stub of the file itself left by an earlier link stays an empty unpublished stub until a later run succeeds.
 - **Sending.** Discussions get a top-level `group_category_id` kwarg to `create_discussion_topic()` / `topic.update()` (not inside the nested `assignment` dict of a graded discussion). Assignments send it in the `assignment` params, as before.
 - **Change safeguard** (`capi._guard_group_category`, called by `_do_discussion` / `_do_assignment` only when `group_category_id` is being sent and the item already exists, using the object they already GET): same ID as Canvas's `group_category_id` → the key is dropped from the update, so an unchanged value is never re-sent under student work; Canvas has none → allowed only when `discussion_subentry_count == 0` / `has_submitted_submissions` is false (a missing field counts as "has work"); Canvas has a different one → refused. Refusal raises `capi.GroupCategoryChangeRefused`, which `_upload_discussion` / `_upload_assignment` catch and turn into an `ERROR:` with no manifest record. The re-create-after-404 path is unguarded (a new item has no student work).
 - **Absent key.** No `group_category_id` in frontmatter means none is sent, so Canvas keeps whatever it has; un-grouping is done in Canvas.
 - **Announcements** need no code: `group_category_id` is not in `ANNOUNCEMENT_SETTABLE_FIELDS`, so the ignored-field warning reports it.
-- **`--check-all`**: `DryRunCanvas.get_group_category_ids` returns the IDs its `create_group_category` fabricated, so listed names resolve after phase 0.2 and unlisted ones fail exactly as in a real run.
+- **`--check-as-new-course`**: `DryRunCanvas.get_group_category_ids` returns the IDs its `create_group_category` fabricated, so listed names resolve after phase 0.2 and unlisted ones fail exactly as in a real run.
 
 Measured on a live course (2026-09-27): listing group categories, `group_category_id` on topic create for ungraded and graded discussions (one call with the nested `assignment`), the topic object's `group_category_id` / `discussion_subentry_count` / `can_unpublish` fields, and group assignments. A graded group discussion's assignment reports `group_category_id = None`; the setting lives on the topic, which is why the discussion safeguard reads the topic. Also measured: creating a group category, adding `group_category_id` to a stub topic created by link rewriting, the safeguard refusing a switch, a re-sync after a student reply keeping the reply, and the unpublish refusal on assignments and discussions with student work. See the archived `group-discussions` OpenSpec change.
 
@@ -2044,11 +2130,13 @@ The tool maintains a manifest in the course repo that maps local file paths to t
 
 **Stored course (`_canvas_course`).** The manifest name tracks the config file, not the course inside it, so editing `course_id` in `canvas.toml` silently keeps every old Canvas ID (observed: 83 assets uploaded to a Spring course kept their Spring ids after `canvas.toml` moved to Fall, so they were never uploaded to Fall and 24 pages kept linking to the Spring copies). The manifest therefore holds a reserved entry `manifest.COURSE_KEY = "_canvas_course"` with `canvas_type = "course_identity"` (`COURSE_TYPE`), `base_url`, `course_id`, `course_name`, `recorded_at`. Helpers in `manifest.py`: `is_reserved_key` (covers this entry and the format stamp below), `get_course_identity`, `set_course_identity` (writes and flushes), `same_course` (base_url compared case-insensitively without trailing slash), `has_content_entries`. Every place that walks the whole manifest skips reserved entries with `is_reserved_key`: `run_prune`, `clean_manifest` (`check_entries`, `plan_invalidate_all`), `pair_manifest._claimed`, `course_guard`, `has_content_entries`, and `mv.compute_manifest_updates` (which passes them through unchanged); `_phase_due_dates` ignores them (no `resolved_dates`).
 
-`course_guard.check_course(manifest_path, config, course_name, assume_yes, confirm, interactive)` is called from `cli._guard_course` after `get_course()` in `update` (full and `-t`/`-s`) and `prune --delete/--unpublish`; not in `update --check-all` or `prune --manifest-only` (no Canvas contact). It lives in the CLI layer, so `run_sync` and friends (and their tests) are unaffected. Outcomes (every prompt defaults to no; the CLI has already printed the repo, course id, base URL and course name, which is what the person is being asked to check):
+`course_guard.check_course(manifest_path, config, course_name, assume_yes, confirm, interactive, noop)` is called from `cli._guard_course` after `get_course()` in `update` (full and `-t`/`-s`, with `noop=True` under `--noop`) and `prune --delete/--unpublish`; not in `update --check-as-new-course` or `prune --manifest-only` (no Canvas contact). It lives in the CLI layer, so `run_sync` and friends (and their tests) are unaffected. Outcomes (every prompt defaults to no; the CLI has already printed the repo, course id, base URL and course name, which is what the person is being asked to check):
 
 - same course → return, silently;
 - nothing stored → explain (first sync, or a manifest from an older version) and ask before recording. Both cases ask, so a wrong `course_id` on a first sync is caught before anything is uploaded;
 - different course stored → print recorded vs requested plus the entry count and the duplicate-content warning, ask, and on yes hand the manifest to `clean_manifest.plan_invalidate_all` + `apply_clean`, which drops every entry and records the new course. The run then continues into the sync, which re-creates the content in the new course. Invalidating without asking Canvas is sound because Canvas object ids are unique per object: nothing in the new course can hold an id recorded against the old one, so a listing could only confirm that every entry is dead.
+
+With `noop` nothing is asked or written: same course returns, nothing stored prints the explanation plus a "--noop: update would ask to record ..." line and returns, and a different course prints the explanation and raises `CourseGuardError` ("--noop stopped ..."), since that almost always means `canvas.toml` is wrong.
 
 `assume_yes` answers any of these; with `interactive()` false and no `assume_yes`, `CourseGuardError` names `--yes`. Declining also raises it. The CLI turns `CourseGuardError` into `die()`. `check_course` calls `check_repo_format` on `manifest_path.parent` before loading the manifest, because the guard can write the manifest and must not do so for a repo in the wrong format.
 
@@ -2171,7 +2259,7 @@ Markdown editors render the include as a normal clickable link, making it easy t
 - Snippet files contain only Markdown body content — no frontmatter
 - Snippets are never uploaded to Canvas and have no manifest entries
 - **Snippets can include snippets** (format version 4), in block or inline form. `preprocess_snippets` is recursive: `_expand_text(text, file, chain)` expands the refs in `text` relative to `file`; `_load_snippet` reads a snippet, applies the course flags, and calls `_expand_text` on its content with the snippet as `file` before returning it, and `_replace` then rebases the (fully expanded) content onto the file it is pasted into. Rebasing therefore composes level by level: an inner snippet's links are first rebased onto the outer snippet, and the outer snippet's pasted text (inner links included) is then rebased onto the includer. `MAX_SNIPPET_DEPTH = 10`: a reference that would open an 11th level is left unexpanded and reported (naming the top-level file and the chain), which is what stops a snippet that includes itself; the error goes through `errors`, so the includer is not uploaded. A candidate ref is skipped unless `links.is_relative_path_url` accepts it (no scheme, `#`, `/`, `$`, or newline); block refs have their title and `<>` stripped first. The old one-level "nested include not supported" check is gone; it misreported `https:`, `mailto:` and `#anchor` links as nested includes because it resolved every link in the snippet. The newline rule matters for passive probes that run without flags: an inline snippet whose `#if` lines are not evaluated pastes multi-line text into a link, which must not be read as a path.
-- **Links inside a snippet are relative to the snippet file** (format version 4). `_replace` in `preprocess_snippets` rebases the pasted text onto the including file with `links.transform_links(content, snippet_dir, includer_dir, {}, rewrite_inline_snippets=False, on_escape=..., url_map=...)`, applied outside fenced code. The forms, and what is skipped (scheme URLs, `#`/`/` links, `$` links), are the ones `mv` rewrites; the shared function lives in `links.py`. The `url_map` callback keeps a link verbatim when it already names the same file from both folders (an includer at the snippet's depth), so such files see no diff. A link that resolves outside the repo from the snippet's folder calls `on_escape`, which records an error through `warn(msg, errors)`: in `sync` that skips the includer's upload (any error added during expansion does), `--check-all` exits 1, and `publish` stops. The includer folder is `source_file.resolve()` relative to `snippets_dir.parent`; an includer outside the repo gets no rebasing. Inline `$...$` content is never rebased (inline refs inside a snippet are expanded relative to that snippet, see the previous bullet). After rebasing, `link_rewrite` (which resolves against the including file) needs no change, and every consumer of `preprocess_snippets` (`sync` content/probes/targeted BFS, `quiz.py`, `publish` staging and reachability, `local_orphans`, `cp`) sees the same links.
+- **Links inside a snippet are relative to the snippet file** (format version 4). `_replace` in `preprocess_snippets` rebases the pasted text onto the including file with `links.transform_links(content, snippet_dir, includer_dir, {}, rewrite_inline_snippets=False, on_escape=..., url_map=...)`, applied outside fenced code. The forms, and what is skipped (scheme URLs, `#`/`/` links, `$` links), are the ones `mv` rewrites; the shared function lives in `links.py`. The `url_map` callback keeps a link verbatim when it already names the same file from both folders (an includer at the snippet's depth), so such files see no diff. A link that resolves outside the repo from the snippet's folder calls `on_escape`, which records an error through `warn(msg, errors)`: in `sync` that skips the includer's upload (any error added during expansion does), `--check-as-new-course` and `--noop` exit 1, and `publish` stops. The includer folder is `source_file.resolve()` relative to `snippets_dir.parent`; an includer outside the repo gets no rebasing. Inline `$...$` content is never rebased (inline refs inside a snippet are expanded relative to that snippet, see the previous bullet). After rebasing, `link_rewrite` (which resolves against the including file) needs no change, and every consumer of `preprocess_snippets` (`sync` content/probes/targeted BFS, `quiz.py`, `publish` staging and reachability, `local_orphans`, `cp`) sees the same links.
 - Links inside a snippet that point to content files (pages, assignments, etc.) are then treated normally by the post-Pandoc link-rewriting step — they will be rewritten to Canvas URLs just like any other link
 - **Editing a snippet automatically re-syncs files that include it, on the next full `update`/`publish` run.** See [Snippet dependency staleness](#snippet-dependency-staleness) below for how.
 - **The course-reference snippet** (format version 8). `convert.COURSE_REFERENCE_RELPATH` (`inline/CANVAS_COURSE_REFERENCE.md` under the snippets dir, compared as a resolved path, so a file with that name elsewhere is ordinary) is intercepted in `_load_snippet` after the existence and depth checks and before the file is read normally: `course_reference_url(path, course_id)` returns the stripped first line, with a `/` added (and a warning printed once per path per process, tracked in the module-level `_warned_no_slash`) when missing, plus `course_id`. Course flags and nested refs are not applied to it, and it applies to block refs as well as inline ones. `preprocess_snippets`, `quiz.parse_quiz_file` and `quiz.parse_question_file` take `course_id: int | None = None`. `sync` passes `ctx.course_id` (the config's) wherever the result is uploaded: syllabus, content files, module bodies, quizzes and bank questions. The passive probes (module staleness, targeted-sync BFS), `local_orphans` and `publish.collect_reachable` only look for local links and pass nothing, so they see the URL without an ID. `publish.stage` passes `config.course_id` when a canvas.toml was loaded and has a nonzero `course_id` (`_flags_config` loads with `require_course=False`, which gives 0 when the key is absent), and otherwise prints a warning if the snippet exists. `COURSE_REFERENCE_COMMENT` is the text `import` (`_write_canvas_course_reference_snippet`, which strips the trailing digits from `https://<domain>/courses/<id>`) and migration 7 -> 8 write after the URL line. It deliberately contains no `$...$` or `[..](..)` reference, because the `mv` link rewriter and the snippet scanners read the whole file.

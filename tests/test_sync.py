@@ -5155,7 +5155,7 @@ def test_first_sync_does_not_report_rubrics_as_deleted(
     """A rubric Canvas has never seen is new, not deleted.
 
     Without this guard every rubric on a first sync (and every rubric under
-    --check-all, whose simulated course starts empty) would be announced as
+    --check-as-new-course, whose simulated course starts empty) would be announced as
     having been deleted on Canvas.
     """
     mocker.patch("markdown_to_canvas.manifest.load", return_value={})
