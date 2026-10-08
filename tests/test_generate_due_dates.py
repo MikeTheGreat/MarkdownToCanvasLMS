@@ -142,7 +142,7 @@ def test_old_repo_is_refused(tmp_path):
     root = _repo(tmp_path)
     _write(
         root / "course_settings" / "course_settings.toml",
-        _settings_text(root).replace("format_version = 10", "format_version = 1"),
+        _settings_text(root).replace("format_version = 13", "format_version = 1"),
     )
     with pytest.raises(RepoFormatError):
         gd.plan_generation(root, _term(tmp_path))
@@ -906,3 +906,279 @@ def test_cli_noop_reports_placeholder_errors(tmp_path):
     assert result.exit_code != 0
     assert "'HW 9'" in result.output
     assert _settings_text(root) == before
+
+
+# --- virtual items ------------------------------------------------------------
+
+VIRTUAL_ITEMS = (
+    '    { name = "Start_of_week_3", virtual = true, relative_to = { type = "START_OF_QUARTER" }, offsets = ["+14 CALENDAR_DAY"] },\n'
+    '    { name = "Start_of_week_2", virtual = true, relative_to = { type = "START_OF_QUARTER" }, offsets = ["+7 CALENDAR_DAY"] },\n'
+    '    { name = "Lab 3", relative_to = { type = "ASSIGNMENT", assignment_name = "Start_of_week_3" }, offsets = ["-1 CALENDAR_DAY", "+2 CLASS_DAY"] },\n'
+    '    { name = "Midterm Quiz", type = "quiz"'
+)
+
+
+def _virtual_repo(tmp_path: Path, settings: str = SETTINGS) -> Path:
+    root = _repo(tmp_path, settings.replace('    { name = "Midterm Quiz", type = "quiz"', VIRTUAL_ITEMS))
+    _write(root / "assignments" / "lab3.md", "---\ntitle: Lab 3\n---\n\nHi\n")
+    return root
+
+
+def test_virtual_name_that_is_a_content_title_is_an_error(tmp_path):
+    root = _virtual_repo(tmp_path)
+    _write(root / "quizzes" / "w3" / "w3.md", "---\ntitle: Start_of_week_3\n---\n")
+    before = _settings_text(root)
+    result = _run(root, _term(tmp_path), "--yes")
+    assert result.exit_code != 0
+    assert "virtual item 'Start_of_week_3' is the title of quizzes/w3/w3.md" in result.output
+    assert "Traceback" not in result.output
+    assert _settings_text(root) == before
+
+
+def test_virtual_name_collision_counts_ignored_titles(tmp_path):
+    root = _virtual_repo(tmp_path)
+    _write(root / "assignments" / "w2.md", "---\ntitle: Start_of_week_2\n---\n\nHi\n")
+    _write(
+        root / "course_settings" / "course_settings.toml",
+        _settings_text(root).replace(
+            "items = [\n    { name = \"Week 1 Problem Set\"",
+            'ignore = ["Start_of_week_2"]\nitems = [\n    { name = "Week 1 Problem Set"',
+        ),
+    )
+    with pytest.raises(rd.RelativeDueDatesError, match="'Start_of_week_2' is the title of assignments/w2.md"):
+        gd.plan_generation(root, _term(tmp_path))
+
+
+W3 = "2026-10-14T23:59:00-07:00"  # Start_of_week_3
+W2 = "2026-10-07T23:59:00-07:00"  # Start_of_week_2
+
+
+def _add_entries(root: Path, *rows: str) -> None:
+    _write(
+        root / "course_settings" / "course_settings.toml",
+        _settings_text(root).replace(
+            '    { name = "Old Item"', "".join(f"    {r},\n" for r in rows) + '    { name = "Old Item"'
+        ),
+    )
+
+
+def test_virtual_items_are_written_as_virtual_entries(tmp_path):
+    root = _virtual_repo(tmp_path)
+    result = _run(root, _term(tmp_path), "--yes")
+    assert result.exit_code == 0, result.output
+    entries = _entries(root)
+    assert entries["Lab 3"]["due_at"] == "2026-10-19T23:59:00-07:00"
+    assert entries["Start_of_week_3"] == {"name": "Start_of_week_3", "virtual": True, "due_at": W3}
+    assert entries["Start_of_week_2"] == {"name": "Start_of_week_2", "virtual": True, "due_at": W2}
+    assert 'name = "Start_of_week_3", virtual = true, due_at = "2026-10-14T23:59:00-07:00"' in (
+        _settings_text(root)
+    )
+
+
+def test_virtual_entries_are_listed_with_the_changes(tmp_path):
+    root = _virtual_repo(tmp_path)
+    result = _run(root, _term(tmp_path), "--noop")
+    assert result.exit_code == 0, result.output
+    assert f"Start_of_week_3 (virtual) (new entry):\n\tdue_at: {W3}\n" in result.output
+    assert "Virtual dates" not in result.output
+
+
+def test_block_style_due_dates_get_a_virtual_table(tmp_path):
+    settings = (
+        'title = "Course"\n\n'
+        '[[due_dates]]\nname = "Week 1 Problem Set"\ndue_at = "NONE"\n\n'
+        + "[relative_due_dates" + SETTINGS.split("[relative_due_dates", 1)[1]
+    )
+    root = _virtual_repo(tmp_path, settings)
+    assert _run(root, _term(tmp_path), "--yes").exit_code == 0
+    assert '[[due_dates]]\nname = "Start_of_week_3"\nvirtual = true\ndue_at = ' in _settings_text(root)
+
+
+def test_virtual_entry_is_updated_and_keeps_only_if(tmp_path):
+    root = _virtual_repo(tmp_path)
+    _add_entries(root, '{ name = "Start_of_week_3", virtual = true, due_at = "2026-01-01T00:00:00-08:00", only_if = "in_person" }')
+    plan = gd.plan_generation(root, _term(tmp_path))
+    change = next(c for c in plan.changes if c.name == "Start_of_week_3")
+    assert (change.kind, change.virtual) == ("changed", True)
+    assert change.fields == {"due_at": ("2026-01-01T00:00:00-08:00", W3)}
+    assert _run(root, _term(tmp_path), "--yes").exit_code == 0
+    assert _entries(root)["Start_of_week_3"] == {
+        "name": "Start_of_week_3", "virtual": True, "due_at": W3, "only_if": "in_person"
+    }
+
+
+def test_virtual_entries_produced_by_the_table_are_not_leftovers(tmp_path):
+    root = _virtual_repo(tmp_path)
+    assert _run(root, _term(tmp_path), "--yes").exit_code == 0
+    plan = gd.plan_generation(root, _term(tmp_path))
+    assert not any("Start_of_week" in w for w in plan.warnings)
+    assert not any("Start_of_week" in n for n in plan.notices)
+
+
+def test_only_a_virtual_entry_changed_asks_to_confirm(tmp_path):
+    root = _virtual_repo(tmp_path)
+    assert _run(root, _term(tmp_path), "--yes").exit_code == 0
+    path = root / "course_settings" / "course_settings.toml"
+    path.write_text(_settings_text(root).replace(
+        f'"Start_of_week_3", virtual = true, due_at = "{W3}"',
+        '"Start_of_week_3", virtual = true, due_at = "2026-10-15T23:59:00-07:00"',
+    ))
+    plan = gd.plan_generation(root, _term(tmp_path))
+    assert plan.has_changes
+    assert [c.name for c in plan.changes if c.kind == "changed"] == ["Start_of_week_3"]
+
+
+def test_nothing_changed_with_virtual_entries(tmp_path):
+    root = _virtual_repo(tmp_path)
+    assert _run(root, _term(tmp_path), "--yes").exit_code == 0
+    before = _settings_text(root)
+    result = _run(root, _term(tmp_path), "-v")  # no --yes and no terminal: would fail if it asked
+    assert result.exit_code == 0, result.output
+    assert "Nothing to change" in result.output
+    assert "Virtual dates" not in result.output
+    assert _settings_text(root) == before
+
+
+def test_virtual_entry_no_longer_in_the_table_is_a_leftover(tmp_path):
+    root = _virtual_repo(tmp_path)
+    _add_entries(root, f'{{ name = "Start_of_week_12", virtual = true, due_at = "{W3}" }}')
+    plan = gd.plan_generation(root, _term(tmp_path))
+    assert any("'Start_of_week_12'" in n and "left unchanged" in n for n in plan.notices)
+    assert _run(root, _term(tmp_path), "--yes").exit_code == 0
+    assert _entries(root)["Start_of_week_12"]["due_at"] == W3
+
+
+def test_entry_left_from_before_the_item_was_virtual_is_an_error(tmp_path):
+    root = _virtual_repo(tmp_path)
+    _add_entries(root, f'{{ name = "Start_of_week_3", due_at = "{W3}", unlock_at = "KEEP", lock_at = "KEEP" }}')
+    before = _settings_text(root)
+    result = _run(root, _term(tmp_path), "--yes")
+    assert result.exit_code != 0
+    assert "'Start_of_week_3' is a virtual item but due_dates has an ordinary entry" in result.output
+    assert _settings_text(root) == before
+
+
+def test_ordinary_item_with_a_virtual_entry_name_is_an_error(tmp_path):
+    root = _virtual_repo(tmp_path)
+    _add_entries(root, f'{{ name = "Lab 3", virtual = true, due_at = "{W3}" }}')
+    root.joinpath("assignments", "lab3.md").unlink()  # else the content-title check fires first
+    with pytest.raises(rd.RelativeDueDatesError, match="'Lab 3' is an ordinary item but due_dates has a virtual entry"):
+        gd.plan_generation(root, _term(tmp_path))
+
+
+def test_invalid_hand_written_virtual_entry_stops_the_command(tmp_path):
+    root = _virtual_repo(tmp_path)
+    _add_entries(root, f'{{ name = "Last day to withdraw", virtual = true, due_at = "{W3}", lock_at = "KEEP" }}')
+    before = _settings_text(root)
+    result = _run(root, _term(tmp_path), "--yes")
+    assert result.exit_code != 0
+    assert "'Last day to withdraw': a virtual entry may not have 'lock_at'" in result.output
+    assert "Traceback" not in result.output
+    assert _settings_text(root) == before
+
+
+def test_cutoff_keeps_a_past_virtual_date(tmp_path):
+    root = _virtual_repo(tmp_path)
+    _add_entries(root, '{ name = "Start_of_week_2", virtual = true, due_at = "2026-10-06T23:59:00-07:00" }')
+    path = root / "course_settings" / "course_settings.toml"
+    path.write_text(_settings_text(root).replace(
+        "[relative_due_dates]\n", '[relative_due_dates]\ndont_reschedule_dates_before = "2026-10-06"\n', 1
+    ))
+    plan = gd.plan_generation(root, _term(tmp_path))
+    change = next(c for c in plan.changes if c.name == "Start_of_week_2")
+    assert change.kind == "unchanged"
+    assert change.kept == {"due_at": ("2026-10-06T23:59:00-07:00", W2)}
+    assert change in plan.not_rescheduled
+
+
+def test_placeholder_naming_a_virtual_item_resolves(tmp_path):
+    root = _virtual_repo(tmp_path)
+    _with_page(root, '[x]{.replace_date_with item="Start_of_week_3"}')
+    plan = gd.plan_generation(root, _term(tmp_path))
+    assert plan.placeholder_errors == []
+
+
+# --- clamp_lock_at_to_last_day_of_term ------------------------------------------
+
+END = "2026-12-18T23:59:00-08:00"
+_LATE = '    { name = "Final Project", relative_to = { type = "START_OF_QUARTER" }, offsets = ["+76 CALENDAR_DAY"] },\n'
+_LATE2 = '    { name = "Final Essay", relative_to = { type = "START_OF_QUARTER" }, offsets = ["+77 CALENDAR_DAY"] },\n'
+_OPEN = '    { name = "Week 10 Discussion", type = "discussion", relative_to = { type = "START_OF_QUARTER" }, offsets = ["+70 CALENDAR_DAY"], lock_offset = "NONE" },\n'
+
+
+def _clamp_plan(tmp_path, extra_items, rows=(), cutoff=None, clamp=True):
+    text = _cutoff_settings(cutoff, list(rows), extra_items)
+    if clamp:
+        text = text.replace(
+            '[relative_due_dates]\n', '[relative_due_dates]\nclamp_lock_at_to_last_day_of_term = true\n', 1
+        )
+    root = _repo(tmp_path, text)
+    return root, gd.plan_generation(root, _term(tmp_path))
+
+
+def _clamp_line(plan, verbose=False):
+    lines = [line for line, _ in gd.render_plan(plan, verbose=verbose)]
+    matching = [i for i, line in enumerate(lines) if "set to the term's last day" in line]
+    return lines, matching
+
+
+def test_clamp_line_counts_both_causes(tmp_path):
+    _, plan = _clamp_plan(tmp_path, _LATE + _LATE2 + _OPEN)
+    assert _change(plan, "Final Project").values["lock_at"] == END
+    assert _change(plan, "Week 10 Discussion").values["lock_at"] == END
+    lines, idx = _clamp_line(plan)
+    assert [lines[i] for i in idx] == [
+        "3 lock dates set to the term's last day (Fri Dec 18, 2026 11:59 PM PST): "
+        "2 were later, 1 was NONE"
+    ]
+
+
+def test_clamp_line_with_one_cause_leaves_out_the_other(tmp_path):
+    _, plan = _clamp_plan(tmp_path, _LATE)
+    lines, idx = _clamp_line(plan)
+    assert len(idx) == 1
+    assert lines[idx[0]].endswith("): 1 was later")
+    assert lines[idx[0]].startswith("1 lock date set to")
+
+
+def test_clamp_verbose_lists_each_resource(tmp_path):
+    _, plan = _clamp_plan(tmp_path, _LATE + _OPEN)
+    lines, idx = _clamp_line(plan, verbose=True)
+    assert lines[idx[0] + 1 : idx[0] + 3] == [
+        "\tFinal Project: later",
+        "\tWeek 10 Discussion (discussion): was NONE",
+    ]
+    lines, idx = _clamp_line(plan)
+    assert not any(line.startswith("\t") for line in lines[idx[0] + 1 :])
+
+
+def test_clamp_line_on_an_unchanged_second_run(tmp_path):
+    root, plan = _clamp_plan(tmp_path, _LATE + _OPEN)
+    gd.apply_plan(plan)
+    plan = gd.plan_generation(root, _term(tmp_path))
+    assert not plan.has_changes
+    _, idx = _clamp_line(plan)
+    assert len(idx) == 1
+
+    result = _run(root, _term(tmp_path), "--noop")
+    assert result.exit_code == 0, result.output
+    assert "2 lock dates set to the term's last day" in result.output
+    assert "Nothing to change" in result.output
+
+
+def test_clamp_not_counted_when_kept_by_the_cutoff(tmp_path):
+    rows = [_row("Week 10 Discussion", "KEEP", _at("12-09"), _at("10-01"), "discussion")]
+    _, plan = _clamp_plan(tmp_path, _OPEN, rows=rows, cutoff="2026-10-01")
+    change = _change(plan, "Week 10 Discussion")
+    assert "lock_at" in change.kept
+    assert plan.clamped == []
+    _, idx = _clamp_line(plan)
+    assert idx == []
+
+
+def test_no_clamp_line_when_the_setting_is_off(tmp_path):
+    _, plan = _clamp_plan(tmp_path, _LATE + _OPEN, clamp=False)
+    assert _change(plan, "Final Project").values["lock_at"] == "2026-12-22T23:59:00-08:00"
+    assert _change(plan, "Week 10 Discussion").values["lock_at"] == "NONE"
+    _, idx = _clamp_line(plan)
+    assert idx == []

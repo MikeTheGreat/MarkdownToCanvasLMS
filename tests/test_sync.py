@@ -2867,7 +2867,7 @@ def test_tab_configuration_misplaced_under_section_is_left_alone(
     (root / "course_settings").mkdir(parents=True)
     settings = root / "course_settings" / "course_settings.toml"
     settings.write_text(
-        'format_version = 10\ntitle = "Intro to CS"\n\n[late_policy]\n'
+        'format_version = 13\ntitle = "Intro to CS"\n\n[late_policy]\n'
         "missing_submission_deduction_enabled = false\n\n"
         'tab_configuration = [\n    { id = "modules" },\n]\n'
     )

@@ -8,7 +8,7 @@ import tomllib
 from collections import defaultdict, deque
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
@@ -400,6 +400,92 @@ def filter_due_dates_by_flags(
     return filtered
 
 
+def is_virtual_entry(entry: Any) -> bool:
+    """True for a ``due_dates`` entry with ``virtual = true``: a named date, not content."""
+    return isinstance(entry, dict) and entry.get("virtual") is True
+
+
+#: Keys a virtual due_dates entry may not have.
+_NOT_FOR_VIRTUAL_ENTRY = ("type", "unlock_at", "lock_at")
+
+
+def _is_date_value(value: Any) -> bool:
+    if isinstance(value, (datetime, date)):
+        return True
+    if not isinstance(value, str) or not value.strip():
+        return False
+    try:
+        datetime.fromisoformat(value.strip())
+    except ValueError:
+        return False
+    return True
+
+
+def check_virtual_due_dates(
+    due_dates: list[Any], repo_path: Path, matcher: IgnoreMatcher | None = None
+) -> None:
+    """Raise ValueError listing every problem with the virtual ``due_dates`` entries.
+
+    Runs on the raw list, before ``only_if`` is applied, so an entry excluded
+    from this run is still checked. A virtual entry may have only ``name``,
+    ``virtual``, ``due_at`` (a date) and ``only_if``; its name may not be the
+    title of an assignment, discussion or quiz, nor the name of an ordinary
+    entry. Two virtual entries may share a name. The CLI reports the error via
+    die(), like other due_dates configuration errors.
+    """
+    problems: list[str] = []
+    virtual: list[dict[str, Any]] = []
+    ordinary_names: set[Any] = set()
+    for entry in due_dates:
+        if not isinstance(entry, dict):
+            continue
+        name = entry.get("name", "?")
+        if "virtual" in entry and not isinstance(entry["virtual"], bool):
+            problems.append(
+                f"due_dates entry {name!r}: 'virtual' must be true or false, "
+                f"got {entry['virtual']!r}"
+            )
+            continue
+        if not is_virtual_entry(entry):
+            ordinary_names.add(entry.get("name"))
+            continue
+        virtual.append(entry)
+        for key in _NOT_FOR_VIRTUAL_ENTRY:
+            if key in entry:
+                problems.append(
+                    f"due_dates entry {name!r}: a virtual entry may not have '{key}' "
+                    f"(it names a date, not content; only due_at is allowed)"
+                )
+        if not _is_date_value(entry.get("due_at")):
+            problems.append(
+                f"due_dates entry {name!r}: a virtual entry needs 'due_at' set to a date, "
+                f"got {entry.get('due_at', '(absent)')!r}"
+            )
+    for entry in virtual:
+        if entry.get("name") in ordinary_names:
+            problems.append(
+                f"due_dates entry {entry.get('name')!r}: a virtual entry may not have the "
+                f"name of an ordinary due_dates entry"
+            )
+    if virtual:
+        names = {e.get("name") for e in virtual}
+        for local_key, md_path, _ctype in iter_gradeable_content(repo_path, matcher):
+            try:
+                fm, _ = parse_frontmatter(md_path.read_text())
+            except Exception:
+                fm = {}
+            title = fm.get("title", md_path.stem)
+            if title in names:
+                problems.append(
+                    f"due_dates entry {title!r}: a virtual entry may not have the title of "
+                    f"{local_key}; rename the entry"
+                )
+    if problems:
+        raise ValueError("Invalid virtual due_dates entries:\n" + "\n".join(
+            f"  {p}" for p in problems
+        ))
+
+
 def _flags_used_for(
     paths: Iterable[Path], snippets_dir: Path, flags: dict[str, bool]
 ) -> dict[str, bool]:
@@ -682,8 +768,10 @@ def _check_due_dates_coverage(
             if resolve_published_if(fm, flags, local_key, quiet=True) is not True:
                 published_if_excluded.add((title, ctype))
 
-    # Check each due_dates entry against all content
+    # Check each due_dates entry against all content (virtual entries name no content)
     for entry in due_dates:
+        if is_virtual_entry(entry):
+            continue
         name = entry.get("name", "")
         entry_type = entry.get("type", "")
         matched = any(
@@ -712,9 +800,12 @@ def _check_due_dates_coverage(
 def find_due_date_override(
     due_dates: list[dict[str, Any]], title: str, canvas_type: str
 ) -> dict[str, Any] | None:
-    """Find the matching centralized due_date entry for a content item."""
+    """Find the matching centralized due_date entry for a content item.
+
+    A virtual entry names a date, not content, so it never matches.
+    """
     for entry in due_dates:
-        if entry.get("name") != title:
+        if entry.get("name") != title or is_virtual_entry(entry):
             continue
         entry_type = entry.get("type")
         if entry_type and entry_type != canvas_type:
@@ -2015,6 +2106,31 @@ def _setup_mode(
     return capi, course, manifest, manifest_path
 
 
+def _print_check_pins_note(
+    pinned: list[str], ignore_pinned: bool, verbose: bool
+) -> None:
+    """The --check-as-new-course note about pinned_resources (none without pins)."""
+    if not pinned:
+        return
+    n = len(pinned)
+    entries = "entry" if n == 1 else "entries"
+    if ignore_pinned:
+        print(
+            f"Note: {n} pinned_resources {entries} temporarily \"unpinned\" for "
+            "this simulated run (--ignore-pinned-resources), so pinned content "
+            "is checked like everything else."
+        )
+        if verbose:
+            for entry in pinned:
+                print(f"  {entry}")
+    else:
+        print(
+            f"Note: {n} pinned_resources {entries} will be skipped; add "
+            "--ignore-pinned-resources to check them too."
+        )
+    print()
+
+
 def _print_noop_summary(ctx: SyncContext) -> None:
     counts = ctx.counts
     rows = [
@@ -2051,6 +2167,7 @@ def run_sync(
     mode: SyncMode = "real",
     new_paths: Iterable[str] = (),
     commands: Commands | None = None,
+    ignore_pinned: bool = False,
 ) -> bool:
     """Main sync pipeline: assets → content → modules. Returns True if any errors occurred.
 
@@ -2071,10 +2188,17 @@ def run_sync(
     ``new_paths`` (``update --new``) and ``commands`` go to the unrecorded-move
     check, which runs before any Canvas change and is skipped in
     new-course mode.
+
+    ``ignore_pinned`` (``update --check-as-new-course
+    --ignore-pinned-resources``; new-course mode only) treats every
+    pinned_resources entry as unpinned for the run. The entries are still
+    validated, and the coverage warning still uses them.
     """
     repo_format.check_repo_format(repo_path)
-    api, course, manifest, manifest_path = _setup_mode(config, repo_path, mode)
     matcher = load_ignore_matcher(repo_path)
+    # Before any Canvas request: an invalid virtual due_dates entry stops the run.
+    check_virtual_due_dates(load_due_dates(repo_path), repo_path, matcher)
+    api, course, manifest, manifest_path = _setup_mode(config, repo_path, mode)
     snippets_dir = repo_path / "snippets"
     newer_on_canvas: list[str] = []
     errors: list[str] = []
@@ -2094,6 +2218,8 @@ def run_sync(
     # error; validate them before phase 0 so nothing is applied to Canvas first.
     pinned = load_pinned_resources(repo_path, _settings_dict)
     group_categories = load_group_categories(repo_path, _settings_dict)
+    if mode == "new_course":
+        _print_check_pins_note(pinned, ignore_pinned, verbose)
 
     # Files moved without `mv` would be created as second Canvas items; stop
     # before anything in Canvas changes (new-course mode has no manifest to
@@ -2141,7 +2267,7 @@ def run_sync(
         due_dates=due_dates,
         date_format=date_format,
         flags=course_flags,
-        pinned=pinned,
+        pinned=[] if ignore_pinned else pinned,
         assignment_group_ids=assignment_group_ids,
         rubric_ids=rubric_ids,
         recreated_rubrics=recreated_rubrics,
@@ -2266,8 +2392,10 @@ def collect_title_items(
     matcher is deliberately not applied.
     """
     repo_format.check_repo_format(repo_path)
+    raw_due_dates = load_due_dates(repo_path)
+    check_virtual_due_dates(raw_due_dates, repo_path, load_ignore_matcher(repo_path))
     due_dates = filter_due_dates_by_flags(
-        load_due_dates(repo_path), load_course_flags(repo_path, config=config)
+        raw_due_dates, load_course_flags(repo_path, config=config)
     )
     items: list[tuple[str | None, str, str]] = []
     for local_key, md_path, ctype in iter_gradeable_content(repo_path, matcher=None):
@@ -3751,6 +3879,7 @@ def run_targeted_sync(
     if mode == "new_course":
         raise ValueError("run_targeted_sync does not support new-course mode")
     repo_format.check_repo_format(repo_path)
+    check_virtual_due_dates(load_due_dates(repo_path), repo_path, load_ignore_matcher(repo_path))
     api, course, manifest, manifest_path = _setup_mode(config, repo_path, mode)
     check_only = mode != "real"
     snippets_dir = repo_path / "snippets"

@@ -1433,6 +1433,31 @@ def test_reschedule_cutoff_is_written_commented_out(imported_dir: Path) -> None:
     assert "dont_reschedule_dates_before" not in tomllib.loads(text)["relative_due_dates"]
 
 
+def test_clamp_setting_is_written_commented_out_and_can_be_enabled(imported_dir: Path) -> None:
+    import tomllib
+
+    from markdown_to_canvas import relative_dates as rd
+
+    text = (imported_dir / "course_settings" / "course_settings.toml").read_text()
+    section = text[text.index("[relative_due_dates]"):]
+    assert "\n# clamp_lock_at_to_last_day_of_term = true\n" in section
+    assert "clamp_lock_at_to_last_day_of_term" not in tomllib.loads(text)["relative_due_dates"]
+
+    enabled = text.replace(
+        "\n# clamp_lock_at_to_last_day_of_term = true\n",
+        "\nclamp_lock_at_to_last_day_of_term = true\n",
+    )
+    table = rd.load_tables(tomllib.loads(enabled))["default"]
+    assert table.settings.clamp_lock_at_to_last_day_of_term is True
+
+
+def test_virtual_items_are_described_in_the_help(imported_dir: Path) -> None:
+    text = (imported_dir / "course_settings" / "course_settings.toml").read_text()
+    section = text[text.index("[relative_due_dates]"):]
+    assert '#   { name = "Start_of_week_3", virtual = true,\n' in section
+    assert "# written to due_dates as { name, virtual = true, due_at }, which date\n" in section
+
+
 def test_default_unlock_and_lock_times_are_written(imported_dir: Path) -> None:
     import tomllib
 

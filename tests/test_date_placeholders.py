@@ -142,6 +142,28 @@ class TestResolve:
         _, _, errors = _expand('[x]{.replace_date_with item="Week 3"}')
         assert "add type=" in errors[0]
 
+    def test_virtual_entry(self):
+        ctx = _ctx(due_dates=[*DUE_DATES, {"name": "Start_of_week_3", "virtual": True,
+                                           "due_at": "2026-10-12T23:59:00-07:00"}])
+        out, records, errors = _expand(
+            'Week 3 begins [x]{.replace_date_with item="Start_of_week_3" format="%A, %B %-d"}', ctx
+        )
+        assert (out, errors) == ("Week 3 begins Monday, October 12", [])
+        assert records[0]["item"] == "Start_of_week_3"
+
+    def test_type_filter_skips_a_virtual_entry(self):
+        ctx = _ctx(due_dates=[{"name": "Start_of_week_3", "virtual": True,
+                               "due_at": "2026-10-12T23:59:00-07:00"}])
+        _, _, errors = _expand(
+            '[x]{.replace_date_with item="Start_of_week_3" type=assignment}', ctx
+        )
+        assert "no due_dates entry named 'Start_of_week_3' with type assignment" in errors[0]
+
+    def test_two_virtual_entries_apply(self):
+        week = {"name": "Week 1", "virtual": True, "due_at": "2026-10-12T23:59:00-07:00"}
+        _, _, errors = _expand('[x]{.replace_date_with item="Week 1"}', _ctx(due_dates=[week, week]))
+        assert "give them only_if conditions" in errors[0]
+
     def test_type_disambiguates(self):
         out, _, errors = _expand('[x]{.replace_date_with item="Week 3" type=quiz format="%-d"}')
         assert (out, errors) == ("12", [])

@@ -56,12 +56,18 @@ _SETTING_KEYS = (
     "lock_relative_default",
     "default_unlock_time",
     "default_lock_time",
+    "clamp_lock_at_to_last_day_of_term",
 )
 _TABLE_KEYS = _SETTING_KEYS + ("items", "ignore")
 #: Section-wide only: a table may not set it (it describes the term, not a schedule).
 CUTOFF_KEY = "dont_reschedule_dates_before"
+CLAMP_KEY = "clamp_lock_at_to_last_day_of_term"
 _SECTION_KEYS = _SETTING_KEYS + ("tables", CUTOFF_KEY)
-_ITEM_KEYS = ("name", "type", "relative_to", "offsets", "unlock_offset", "lock_offset")
+_ITEM_KEYS = (
+    "name", "type", "relative_to", "offsets", "unlock_offset", "lock_offset", "virtual",
+)
+#: Keys a virtual item may not have: it names a date, not content with lock dates.
+_NOT_FOR_VIRTUAL = ("type", "unlock_offset", "lock_offset")
 _TERM_KEYS = (
     "first_day",
     "last_day",
@@ -186,6 +192,8 @@ class RelativeItem:
     lock_offset: tuple[str, ...] | None
     #: The fixed date of an ABSOLUTE_DATE anchor; None for every other anchor.
     anchor_date: date | None = None
+    #: A name for a date that other items count from; never written to due_dates.
+    virtual: bool = False
 
     @property
     def due_time_is_explicit(self) -> bool:
@@ -205,6 +213,9 @@ class TableSettings:
     #: Time of day for unlock / lock dates when nothing sets one explicitly.
     default_unlock_time: time | None = None
     default_lock_time: time | None = None
+    #: Lock dates after the term's last day at 23:59, and NONE lock rules,
+    #: become that time.
+    clamp_lock_at_to_last_day_of_term: bool = False
 
 
 @dataclass(frozen=True)
@@ -233,6 +244,17 @@ def _load_item(raw: Any, table: str, index: int) -> RelativeItem:
     where = f"[{SECTION_KEY}.tables.{table}] item {name!r}"
     _check_keys(raw, _ITEM_KEYS, where)
 
+    virtual = raw.get("virtual", False)
+    if not isinstance(virtual, bool):
+        raise RelativeDueDatesError(f"{where}: virtual must be true or false")
+    if virtual:
+        for key in _NOT_FOR_VIRTUAL:
+            if key in raw:
+                raise RelativeDueDatesError(
+                    f"{where}: a virtual item cannot have {key} (it names a date, "
+                    f"not an assignment, discussion or quiz)"
+                )
+
     item_type = raw.get("type")
     if item_type is not None and item_type not in CONTENT_TYPES:
         raise RelativeDueDatesError(
@@ -250,6 +272,10 @@ def _load_item(raw: Any, table: str, index: int) -> RelativeItem:
     if anchor not in ANCHOR_TYPES:
         raise RelativeDueDatesError(
             f"{where}: relative_to type {anchor!r} must be one of {', '.join(ANCHOR_TYPES)}"
+        )
+    if virtual and anchor == "NO_DUE_DATE":
+        raise RelativeDueDatesError(
+            f"{where}: a virtual item cannot be relative to NO_DUE_DATE; it must have a date"
         )
     anchor_name = relative_to.get("assignment_name")
     if anchor == "ASSIGNMENT" and not isinstance(anchor_name, str):
@@ -292,6 +318,7 @@ def _load_item(raw: Any, table: str, index: int) -> RelativeItem:
         unlock_offset=lock_rule("unlock_offset"),
         lock_offset=lock_rule("lock_offset"),
         anchor_date=anchor_date,
+        virtual=virtual,
     )
 
 
@@ -323,7 +350,14 @@ def _load_settings(raw: dict[str, Any], base: TableSettings | None, where: str) 
         times[key] = getattr(base, key) if base else None
         if key in raw:
             times[key] = _parse_time(raw[key], f"{where} {key}")
-    return TableSettings(days, on_holidays, unlock, lock, **times)
+    clamp = base.clamp_lock_at_to_last_day_of_term if base else False
+    if CLAMP_KEY in raw:
+        clamp = raw[CLAMP_KEY]
+        if not isinstance(clamp, bool):
+            raise RelativeDueDatesError(f"{where}: {CLAMP_KEY} must be true or false")
+    return TableSettings(
+        days, on_holidays, unlock, lock, **times, clamp_lock_at_to_last_day_of_term=clamp
+    )
 
 
 def load_tables(settings: dict[str, Any]) -> dict[str, RelativeTable]:
@@ -496,6 +530,17 @@ DEFAULT_TIMES_HELP = """\
 # keep that time. An ABS_TIME in the unlock or lock rule itself also wins.
 """
 
+#: Time of day of a lock date clamped to the term's last day.
+TERM_END_TIME = time(23, 59)
+
+#: The commented-out clamp setting that `import` writes and migration 12 -> 13 adds.
+CLAMP_HELP = f"""\
+# When true, `generate-due-dates` sets every lock date after the term file's
+# last_day, and every lock rule of "NONE", to last_day at 23:59 (term time zone).
+# Items with no lock rule are left as they are. A table may set it too.
+# {CLAMP_KEY} = true
+"""
+
 _CUTOFF_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?: (\d{2}):(\d{2}))?$")
 
 #: The cutoff for a date given without a time, and the end of the term's last day.
@@ -553,7 +598,7 @@ def cutoff_as_written(cutoff: datetime) -> str:
 
 
 def format_cutoff(cutoff: datetime) -> str:
-    """``Thu Oct 1, 2026 11:59 PM PDT``: the cutoff as the output shows it."""
+    """``Thu Oct 1, 2026 11:59 PM PDT``: the cutoff (or a virtual date) as the output shows it."""
     hour = cutoff.strftime("%I").lstrip("0")
     return (
         f"{cutoff.strftime('%a %b')} {cutoff.day}, {cutoff.year} "
@@ -568,13 +613,26 @@ def format_cutoff(cutoff: datetime) -> str:
 
 @dataclass(frozen=True)
 class ComputedDates:
-    """The three date fields for one item, as ``due_dates`` writes them."""
+    """The three date fields for one item, as ``due_dates`` writes them.
+
+    For a virtual item only ``due_at`` is meaningful; ``unlock_at`` and
+    ``lock_at`` are empty and never written.
+    """
 
     name: str
     type: str | None
     due_at: str
     unlock_at: str
     lock_at: str
+    virtual: bool = False
+    #: Why clamp_lock_at_to_last_day_of_term set lock_at to the end of the
+    #: term: CLAMPED_LATER or CLAMPED_NONE; None when it did not.
+    lock_clamped: str | None = None
+
+
+#: ComputedDates.lock_clamped values.
+CLAMPED_LATER = "later"
+CLAMPED_NONE = "NONE"
 
 
 @dataclass
@@ -731,6 +789,22 @@ class _Calculator:
             result = datetime.combine(result.date(), default_time)
         return self._format(result)
 
+    def _clamped_lock_at(self, item: RelativeItem, due: datetime | None) -> tuple[str, str | None]:
+        """The item's lock_at and, when clamp_lock_at_to_last_day_of_term set it
+        to the term's last day at 23:59, why (CLAMPED_LATER or CLAMPED_NONE).
+
+        Runs after the rule, default_lock_time and ABS_TIME, so it compares the
+        value that would otherwise be written. KEEP is never clamped."""
+        value = self._lock_field(item, "lock_at", due)
+        if not self.table.settings.clamp_lock_at_to_last_day_of_term or value == KEEP:
+            return value, None
+        end = datetime.combine(self.term.last_day, TERM_END_TIME)
+        if value == NONE:
+            return self._format(end), CLAMPED_NONE
+        if datetime.fromisoformat(value).replace(tzinfo=None) > end:
+            return self._format(end), CLAMPED_LATER
+        return value, None
+
     def _format(self, local: datetime) -> str:
         return local.replace(tzinfo=self.term.time_zone).isoformat(timespec="seconds")
 
@@ -747,7 +821,10 @@ class _Calculator:
 
     def _outside_term(self, item: RelativeItem, due: datetime) -> str:
         """The error line for an item whose due date falls outside the term."""
-        line = f"item {item.name!r} is due {due.date().isoformat()}."
+        if item.virtual:
+            line = f"virtual item {item.name!r} falls on {due.date().isoformat()}."
+        else:
+            line = f"item {item.name!r} is due {due.date().isoformat()}."
         root = self._absolute_root(item)
         if root is not None:
             assert root.anchor_date is not None
@@ -769,13 +846,25 @@ class _Calculator:
             due = self.due(item)
             if due is not None and not self.term.first_day <= due.date() <= self.term.last_day:
                 outside.append(self._outside_term(item, due))
+            if item.virtual:
+                # Loading guarantees a date. No lock rule is applied to it.
+                assert due is not None
+                result.dates.append(
+                    ComputedDates(
+                        name=item.name, type=None, due_at=self._format(due),
+                        unlock_at="", lock_at="", virtual=True,
+                    )
+                )
+                continue
+            lock_at, clamped = self._clamped_lock_at(item, due)
             result.dates.append(
                 ComputedDates(
                     name=item.name,
                     type=item.type,
                     due_at=NONE if due is None else self._format(due),
                     unlock_at=self._lock_field(item, "unlock_at", due),
-                    lock_at=self._lock_field(item, "lock_at", due),
+                    lock_at=lock_at,
+                    lock_clamped=clamped,
                 )
             )
         if outside:

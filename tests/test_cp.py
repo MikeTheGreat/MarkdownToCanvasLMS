@@ -556,6 +556,15 @@ class TestWarnings:
         ws = self._warnings(src, dest, "discussions/d1.md")
         assert any("dates for 'D 1'" in w and "relative_due_dates" in w for w in ws)
 
+    def test_virtual_relative_item_is_not_a_date_for_content(self, src, dest):
+        with (src / "course_settings/course_settings.toml").open("a") as fh:
+            fh.write(
+                '\n[relative_due_dates.tables.default]\nitems = [{ name = "D 1", virtual = true, '
+                'relative_to = { type = "START_OF_QUARTER" } }]\n'
+            )
+        ws = self._warnings(src, dest, "discussions/d1.md")
+        assert not any("dates for 'D 1'" in w for w in ws)
+
     def test_title_collision(self, src, dest):
         _write(dest, "assignments/old-hw1.md", "---\ntitle: HW 1\n---\nold\n")
         ws = self._warnings(src, dest, "assignments/hw1.md")
@@ -583,6 +592,19 @@ class TestWarnings:
         _write(src, "pages/dated.md", '[x]{.replace_date_with item="Career Exploration"}\n')
         ws = self._warnings(src, dest, "pages/dated.md")
         assert not any("date placeholder" in w for w in ws)
+
+    def test_date_placeholder_names_a_virtual_entry_in_destination(self, src, dest):
+        _write(
+            dest, "course_settings/course_settings.toml",
+            'name = "Dest"\ndue_dates = [{ name = "Week 3", virtual = true, '
+            'due_at = "2026-10-12T23:59:00-07:00" }]\n',
+        )
+        make_current(dest)
+        _write(src, "pages/dated.md", '[x]{.replace_date_with item="Week 3"}\n')
+        _write(src, "pages/typed.md", '[x]{.replace_date_with item="Week 3" type=assignment}\n')
+        assert not any("date placeholder" in w for w in self._warnings(src, dest, "pages/dated.md"))
+        ws = self._warnings(src, dest, "pages/typed.md")
+        assert any("'Week 3' (type assignment)" in w for w in ws)
 
     def test_date_placeholder_in_included_snippet(self, src, dest):
         _write(src, "snippets/dated.md", '[x]{.replace_date_with item="Snip Item" type=quiz}\n')

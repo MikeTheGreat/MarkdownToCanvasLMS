@@ -259,17 +259,26 @@ def find_entry(
     entry_type: str | None,
 ) -> dict[str, Any]:
     """The single due_dates entry named ``name`` (and matching ``entry_type``
-    when given: an entry with that type or with none)."""
+    when given: an ordinary entry with that type or with none; a virtual entry
+    names no content, so a type never matches it)."""
     matches = [
         e
         for e in due_dates
         if e.get("name") == name
-        and (entry_type is None or not e.get("type") or e.get("type") == entry_type)
+        and (
+            entry_type is None
+            or (e.get("virtual") is not True and (not e.get("type") or e.get("type") == entry_type))
+        )
     ]
     if not matches:
         where = f" with type {entry_type}" if entry_type else ""
         raise PlaceholderError(f"no due_dates entry named {name!r}{where}")
     if len(matches) > 1:
+        if all(e.get("virtual") is True for e in matches):
+            raise PlaceholderError(
+                f"{len(matches)} virtual due_dates entries named {name!r} apply to this "
+                f"run; give them only_if conditions so that one does"
+            )
         if entry_type is None:
             raise PlaceholderError(
                 f"{len(matches)} due_dates entries are named {name!r}; add type= "

@@ -84,7 +84,7 @@ def test_check_as_new_course_ignores_and_preserves_stale_manifest(course_root, n
         'canvas_type = "page"\n'
         'canvas_url = "syllabus"\n'
         'last_synced = "2999-12-31T00:00:00+00:00"\n'
-        "\n[_repo_format]\nformat_version = 10\n"
+        "\n[_repo_format]\nformat_version = 13\n"
     )
     before = manifest_path.read_bytes()
 
@@ -461,3 +461,146 @@ def test_check_as_new_course_accepts_canvas_only_module_order_entry(
     assert had_errors is False
     out = capsys.readouterr().out
     assert "was found on Canvas" not in out
+
+
+# ---------------------------------------------------------------------------
+# --ignore-pinned-resources
+# ---------------------------------------------------------------------------
+
+
+def _pin(course_root: Path, *entries: str) -> None:
+    settings = course_root / "course_settings" / "course_settings.toml"
+    quoted = ", ".join(f'"{e}"' for e in entries)
+    settings.write_text(settings.read_text() + f"pinned_resources = [{quoted}]\n")
+
+
+def _add_quiz_to_module(course_root: Path) -> None:
+    module = course_root / "modules" / "week-1.md"
+    module.write_text(module.read_text() + "  - [Quiz](../quizzes/a-quiz/a-quiz.md)\n")
+
+
+def test_ignore_pinned_checks_pinned_content(course_root, no_canvas, capsys) -> None:
+    """A broken link in a pinned quiz is only found with ignore_pinned, and no
+    pinned warning or summary is printed."""
+    _pin(course_root, "quizzes/a-quiz")
+    quiz = course_root / "quizzes" / "a-quiz" / "a-quiz.md"
+    quiz.write_text(quiz.read_text() + "\nSee [missing](../../pages/no-such-page.md).\n")
+    make_current(course_root)
+
+    assert run_sync(_config(), course_root, mode="new_course") is False
+    capsys.readouterr()
+
+    had_errors = run_sync(_config(), course_root, mode="new_course", ignore_pinned=True)
+
+    assert had_errors is True
+    out = capsys.readouterr().out
+    assert "no-such-page.md" in out
+    assert "NOT uploaded" not in out
+    assert "NOT uploaded because they are pinned" not in out
+
+
+def test_ignore_pinned_module_listing_pinned_quiz(course_root, no_canvas, capsys) -> None:
+    """A module listing a pinned quiz fails the check while pinned, and passes
+    with ignore_pinned."""
+    _pin(course_root, "quizzes/a-quiz")
+    _add_quiz_to_module(course_root)
+    make_current(course_root)
+
+    assert run_sync(_config(), course_root, mode="new_course") is True
+    out = capsys.readouterr().out
+    assert "some items could not be added" in out
+    assert "quizzes/a-quiz/a-quiz.md: pinned" in out
+
+    assert run_sync(_config(), course_root, mode="new_course", ignore_pinned=True) is False
+    out = capsys.readouterr().out
+    assert "Processing quiz: quizzes/a-quiz/a-quiz.md" in out
+    assert "some items could not be added" not in out
+
+
+def test_ignore_pinned_still_validates_entries(course_root, no_canvas) -> None:
+    _pin(course_root, "/abs/path.md")
+    make_current(course_root)
+
+    with pytest.raises(ValueError, match="absolute path"):
+        run_sync(_config(), course_root, mode="new_course", ignore_pinned=True)
+
+
+def test_ignore_pinned_still_warns_about_entries_matching_nothing(
+    course_root, no_canvas, capsys
+) -> None:
+    _pin(course_root, "pages/gone.md")
+    make_current(course_root)
+
+    run_sync(_config(), course_root, mode="new_course", ignore_pinned=True)
+
+    out = capsys.readouterr().out
+    assert "pinned_resources entry 'pages/gone.md' does not match any file" in out
+
+
+def test_pin_note_with_ignore_pinned(course_root, no_canvas, capsys) -> None:
+    _pin(course_root, "pages/syllabus.md", "quizzes/a-quiz")
+    make_current(course_root)
+
+    run_sync(_config(), course_root, mode="new_course", ignore_pinned=True)
+    out = capsys.readouterr().out
+    assert 'Note: 2 pinned_resources entries temporarily "unpinned" for this simulated run' in out
+    assert "\n  quizzes/a-quiz\n" not in out
+
+    run_sync(_config(), course_root, mode="new_course", ignore_pinned=True, verbose=True)
+    out = capsys.readouterr().out
+    note = out.index('temporarily "unpinned"')
+    assert out.index("\n  pages/syllabus.md\n") > note
+    assert out.index("\n  quizzes/a-quiz\n") > note
+
+
+def test_pin_note_hint_without_ignore_pinned(course_root, no_canvas, capsys) -> None:
+    _pin(course_root, "pages/syllabus.md")
+    make_current(course_root)
+
+    run_sync(_config(), course_root, mode="new_course")
+
+    out = capsys.readouterr().out
+    assert (
+        "Note: 1 pinned_resources entry will be skipped; add "
+        "--ignore-pinned-resources to check them too." in out
+    )
+    assert "pages/syllabus.md: pinned" in out
+
+
+def test_no_pin_note_without_pins(course_root, no_canvas, capsys) -> None:
+    make_current(course_root)
+
+    run_sync(_config(), course_root, mode="new_course")
+    run_sync(_config(), course_root, mode="new_course", ignore_pinned=True)
+
+    assert "pinned_resources" not in capsys.readouterr().out
+
+
+def test_cli_ignore_pinned_requires_check_as_new_course(course_root, no_canvas) -> None:
+    from markdown_to_canvas.cli import main
+
+    _write_canvas_toml(course_root)
+    runner = CliRunner()
+    for args in (["--ignore-pinned-resources"], ["--noop", "--ignore-pinned-resources"]):
+        result = runner.invoke(main, ["update", str(course_root), *args])
+        assert result.exit_code != 0
+        assert "only works with --check-as-new-course" in result.output
+
+
+def test_cli_ignore_pinned_with_check_as_new_course(course_root, no_canvas, monkeypatch) -> None:
+    from markdown_to_canvas.cli import main
+
+    _write_canvas_toml(course_root)
+    monkeypatch.delenv("CANVAS_API_TOKEN", raising=False)
+    _pin(course_root, "quizzes/a-quiz")
+    _add_quiz_to_module(course_root)
+
+    runner = CliRunner()
+    result = runner.invoke(main, ["update", str(course_root), "--check-as-new-course"])
+    assert result.exit_code == 1, result.output
+
+    result = runner.invoke(
+        main, ["update", str(course_root), "--check-as-new-course", "--ignore-pinned-resources"]
+    )
+    assert result.exit_code == 0, result.output
+    assert "Check successful" in result.output

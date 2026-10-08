@@ -26,12 +26,14 @@ from tomlkit.items import AoT, Array, InlineTable, Table
 
 from . import manifest as manifest_lib
 from . import toml_write
-from .relative_dates import CUTOFF_HELP, CUTOFF_KEY, DEFAULT_TIMES, DEFAULT_TIMES_HELP
+from .relative_dates import (
+    CLAMP_HELP, CLAMP_KEY, CUTOFF_HELP, CUTOFF_KEY, DEFAULT_TIMES, DEFAULT_TIMES_HELP,
+)
 
 #: The format version this tool reads and writes. Increase it (and add a
 #: migration to MIGRATIONS) whenever a change makes the tool read an existing
 #: repo file differently. See CLAUDE.md.
-FORMAT_VERSION = 10
+FORMAT_VERSION = 13
 
 SETTINGS_RELPATH = Path("course_settings") / "course_settings.toml"
 
@@ -638,18 +640,12 @@ def _with_new_settings(text: str) -> tuple[str | None, list[str], list[str]]:
     ``[relative_due_dates.tables.default]``) gets a ``[relative_due_dates]``
     header, placed before its first subtable.
     """
-    header = _RELATIVE_HEADER_RE.search(text)
-    if header is None:
-        subtable = _RELATIVE_SUBTABLE_RE.search(text)
-        if subtable is None:
-            return None, [
-                f"NOTICE: {SETTINGS_RELPATH.name} has no [{RELATIVE_DUE_DATES_KEY}] section; "
-                f"{CUTOFF_KEY}, {', '.join(DEFAULT_TIMES)} were not added"
-            ], []
-        body = ""
-    else:
-        next_header = _ANY_HEADER_RE.search(text, header.end())
-        body = text[header.end(): next_header.start() if next_header else len(text)]
+    body = _relative_section_body(text)
+    if body is None:
+        return None, [
+            f"NOTICE: {SETTINGS_RELPATH.name} has no [{RELATIVE_DUE_DATES_KEY}] section; "
+            f"{CUTOFF_KEY}, {', '.join(DEFAULT_TIMES)} were not added"
+        ], []
     section = tomllib.loads(text).get(RELATIVE_DUE_DATES_KEY, {})
 
     messages: list[str] = []
@@ -672,16 +668,36 @@ def _with_new_settings(text: str) -> tuple[str | None, list[str], list[str]]:
         blocks.append(DEFAULT_TIMES_HELP + times)
     if not blocks:
         return None, messages, []
-    insert = "\n".join(blocks) + "\n"
-
-    if header is None:
-        at = subtable.start()
+    new_text, header_added = _insert_in_relative_section(text, "\n".join(blocks) + "\n")
+    if header_added:
         messages.insert(0, f"Add a [{RELATIVE_DUE_DATES_KEY}] header")
-        return text[:at] + f"[{RELATIVE_DUE_DATES_KEY}]\n" + insert + text[at:], messages, added
+    return new_text, messages, added
+
+
+def _relative_section_body(text: str) -> str | None:
+    """The text between the ``[relative_due_dates]`` header and the next header;
+    "" when the section exists only through its subtables; None when it is absent."""
+    header = _RELATIVE_HEADER_RE.search(text)
+    if header is None:
+        return "" if _RELATIVE_SUBTABLE_RE.search(text) else None
+    next_header = _ANY_HEADER_RE.search(text, header.end())
+    return text[header.end(): next_header.start() if next_header else len(text)]
+
+
+def _insert_in_relative_section(text: str, insert: str) -> tuple[str, bool]:
+    """``text`` with ``insert`` directly after the ``[relative_due_dates]`` header,
+    and whether a header had to be added (before the first subtable, for a
+    section that exists only through its subtables). The section must exist."""
+    header = _RELATIVE_HEADER_RE.search(text)
+    if header is None:
+        subtable = _RELATIVE_SUBTABLE_RE.search(text)
+        assert subtable is not None
+        at = subtable.start()
+        return text[:at] + f"[{RELATIVE_DUE_DATES_KEY}]\n" + insert + text[at:], True
     # Just after the header line (and its newline, when there is one).
     after = text[: header.end()].rstrip("\r") + "\n"
     rest = text[header.end():].removeprefix("\n")
-    return after + insert + rest, messages, added
+    return after + insert + rest, False
 
 
 def _migrate_8_to_9(state: UpgradeState) -> list[str]:
@@ -797,6 +813,67 @@ def _migrate_9_to_10(state: UpgradeState) -> list[str]:
     return lines
 
 
+def _migrate_10_to_11(state: UpgradeState) -> list[str]:
+    """Format 11 adds ``virtual = true`` on relative-table items; stamp the manifests.
+
+    Older files need no rewriting. The version changes because an older tool
+    rejects the new item key as unknown.
+    """
+    return [f"Record format version 11 in {path.name}" for path in state.manifests]
+
+
+def _migrate_11_to_12(state: UpgradeState) -> list[str]:
+    """Format 12 adds ``virtual = true`` on ``due_dates`` entries; stamp the manifests.
+
+    Older files need no rewriting. The version changes because an older tool
+    would treat a virtual entry as an ordinary one.
+    """
+    return [f"Record format version 12 in {path.name}" for path in state.manifests]
+
+
+def _migrate_12_to_13(state: UpgradeState) -> list[str]:
+    """Add format 13's commented-out clamp setting; stamp the manifests.
+
+    Format 13 adds ``clamp_lock_at_to_last_day_of_term`` to
+    ``[relative_due_dates]`` and its tables; an older tool rejects it as an
+    unknown key. The commented-out line (the block `import` writes) goes
+    directly under the section header, text-level like migration 8 -> 9, and
+    the parsed TOML must come out unchanged.
+    """
+    lines: list[str] = []
+    if settings_path(state.repo).exists() and read_repo_version(state.repo) < 13:
+        text = tomlkit.dumps(state.settings_doc)
+        body = _relative_section_body(text)
+        if body is None:
+            lines.append(
+                f"NOTICE: {SETTINGS_RELPATH.name} has no [{RELATIVE_DUE_DATES_KEY}] section; "
+                f"{CLAMP_KEY} was not added"
+            )
+        elif CLAMP_KEY in body:
+            lines.append(f"[{RELATIVE_DUE_DATES_KEY}] already mentions {CLAMP_KEY}; left as it is")
+        else:
+            new_text, header_added = _insert_in_relative_section(text, CLAMP_HELP + "\n")
+            try:
+                same = tomllib.loads(new_text) == tomllib.loads(text)
+            except tomllib.TOMLDecodeError:
+                same = False
+            if same:
+                state.settings_doc = tomlkit.parse(new_text)
+                if header_added:
+                    lines.append(f"Add a [{RELATIVE_DUE_DATES_KEY}] header")
+                lines.append(
+                    f"Add a commented-out {CLAMP_KEY} line to [{RELATIVE_DUE_DATES_KEY}]"
+                )
+            else:
+                lines.append(
+                    f"NOTICE: could not add {CLAMP_KEY} to [{RELATIVE_DUE_DATES_KEY}] "
+                    f"(unusual layout); left unchanged"
+                )
+    for manifest_path in state.manifests:
+        lines.append(f"Record format version 13 in {manifest_path.name}")
+    return lines
+
+
 #: Ordered migrations, keyed by the version they migrate *from*.
 MIGRATIONS: dict[int, Migration] = {
     0: _migrate_0_to_1,
@@ -809,6 +886,9 @@ MIGRATIONS: dict[int, Migration] = {
     7: _migrate_7_to_8,
     8: _migrate_8_to_9,
     9: _migrate_9_to_10,
+    10: _migrate_10_to_11,
+    11: _migrate_11_to_12,
+    12: _migrate_12_to_13,
 }
 
 

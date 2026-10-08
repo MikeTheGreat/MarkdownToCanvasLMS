@@ -865,3 +865,204 @@ def test_default_time_keeps_the_offset_in_force_on_that_date():
     item = _item("A", offsets=["+10 CLASS_DAY"], lock_offset="+7 CALENDAR_DAY")
     dates = _calc([item], **TIMES)["A"]
     assert dates.lock_at.endswith("T23:59:00-08:00")
+
+
+# --- virtual items -----------------------------------------------------------
+
+
+def _virtual(name, anchor="START_OF_QUARTER", offsets=(), anchor_name=None, **extra) -> dict:
+    return _item(name, anchor, offsets, anchor_name, virtual=True, **extra)
+
+
+def test_virtual_item_is_loaded():
+    table = _table([_virtual("Start_of_week_3", offsets=["+14 CALENDAR_DAY"]), _item("Lab 1")])
+    assert [i.virtual for i in table.items] == [True, False]
+
+
+@pytest.mark.parametrize(
+    "extra, message",
+    [
+        ({"type": "assignment"}, "a virtual item cannot have type"),
+        ({"unlock_offset": "NONE"}, "a virtual item cannot have unlock_offset"),
+        ({"lock_offset": "+7 CALENDAR_DAY"}, "a virtual item cannot have lock_offset"),
+    ],
+)
+def test_virtual_item_rejects_keys_for_content(extra, message):
+    with pytest.raises(RelativeDueDatesError, match=rf"item 'Week 1'.*{message}"):
+        _table([_virtual("Week 1", **extra)])
+
+
+def test_virtual_item_needs_a_date():
+    with pytest.raises(RelativeDueDatesError, match=r"item 'Week 1'.*NO_DUE_DATE"):
+        _table([_virtual("Week 1", "NO_DUE_DATE")])
+
+
+@pytest.mark.parametrize("value", ["yes", 1, "true"])
+def test_virtual_must_be_a_boolean(value):
+    with pytest.raises(RelativeDueDatesError, match=r"item 'Week 1': virtual must be true or false"):
+        _table([_item("Week 1", virtual=value)])
+
+
+def test_virtual_false_is_an_ordinary_item():
+    assert _calc([_item("Lab 1", virtual=False)])["Lab 1"].due_at.startswith("2026-09-30")
+
+
+def test_virtual_item_with_the_name_of_an_ordinary_item_is_a_duplicate():
+    with pytest.raises(RelativeDueDatesError, match=r"more than one item named 'Week 3'"):
+        _table([_item("Week 3", type="assignment"), _virtual("Week 3")])
+
+
+def test_items_count_from_a_virtual_week_anchor():
+    # A holiday in week 2 (Mon Oct 12) does not move a date counted from week 3.
+    term = _term(noninstructional_days={date(2026, 10, 12): "Closure"})
+    result = rd.calculate(
+        _table(
+            [
+                _virtual("Start_of_week_3", offsets=["+14 CALENDAR_DAY"]),
+                _item("Lab 3", "ASSIGNMENT", ["-1 CALENDAR_DAY", "+2 CLASS_DAY"],
+                      anchor_name="Start_of_week_3"),
+            ]
+        ),
+        term,
+    )
+    assert [(d.name, d.virtual) for d in result.dates] == [
+        ("Start_of_week_3", True), ("Lab 3", False)
+    ]
+    assert result.dates[1].due_at == "2026-10-19T23:59:00-07:00"  # Mon of week 3
+    assert result.dates[0] == rd.ComputedDates(
+        "Start_of_week_3", None, "2026-10-14T23:59:00-07:00", "", "", virtual=True
+    )
+
+
+def test_virtual_item_anchored_to_a_virtual_item():
+    result = rd.calculate(
+        _table(
+            [
+                _virtual("Start_of_week_3", offsets=["+14 CALENDAR_DAY"]),
+                _virtual("Start_of_week_4", "ASSIGNMENT", ["+7 CALENDAR_DAY"],
+                         anchor_name="Start_of_week_3"),
+                _item("Lab 4", "ASSIGNMENT", [], anchor_name="Start_of_week_4"),
+            ]
+        ),
+        _term(),
+    )
+    assert [d.name for d in result.dates if d.virtual] == ["Start_of_week_3", "Start_of_week_4"]
+    assert result.dates[1].due_at.startswith("2026-10-21")
+    assert result.dates[2].due_at.startswith("2026-10-21")
+
+
+def test_lock_default_does_not_apply_to_a_virtual_item():
+    result = rd.calculate(
+        _table([_virtual("Week 1")], lock_relative_default="+7 CALENDAR_DAY"), _term()
+    )
+    assert result.warnings == []
+    (row,) = result.dates
+    assert row.virtual and (row.unlock_at, row.lock_at) == ("", "")
+
+
+def test_virtual_date_outside_the_term_is_an_error():
+    table = _table([_virtual("Start_of_week_13", offsets=["+84 CALENDAR_DAY"])])
+    with pytest.raises(RelativeDueDatesError) as excinfo:
+        rd.calculate(table, _term())
+    message = str(excinfo.value)
+    assert message.startswith("1 item is due outside the term")
+    assert "  virtual item 'Start_of_week_13' falls on 2026-12-23.\n" in message
+
+
+# --- clamp_lock_at_to_last_day_of_term ----------------------------------------
+
+END = "2026-12-18T23:59:00-08:00"  # _term()'s last_day at 23:59
+
+
+def _late(name="Late", **extra) -> dict:
+    # Due 2026-12-15 (WED + 76 days) at 23:59; +7 days locks after last_day.
+    return _item(name, offsets=["+76 CALENDAR_DAY"], **extra)
+
+
+def test_clamp_defaults_to_off():
+    assert _table([]).settings.clamp_lock_at_to_last_day_of_term is False
+    dates = _calc([_late(), _item("Open", lock_offset="NONE")],
+                  lock_relative_default="+7 CALENDAR_DAY")
+    assert dates["Late"].lock_at == "2026-12-22T23:59:00-08:00"
+    assert dates["Late"].lock_clamped is None
+    assert dates["Open"].lock_at == "NONE"
+
+
+def test_clamp_sets_a_later_lock_date_to_the_last_day():
+    dates = _calc([_late()], lock_relative_default="+7 CALENDAR_DAY",
+                  clamp_lock_at_to_last_day_of_term=True)
+    assert dates["Late"].due_at == "2026-12-15T23:59:00-08:00"
+    assert dates["Late"].lock_at == END
+    assert dates["Late"].lock_clamped == rd.CLAMPED_LATER
+
+
+def test_clamp_compares_after_default_lock_time_and_abs_time():
+    # Lock on the last day itself, at 08:00 by ABS_TIME: not after 23:59, so kept.
+    item = _item("Early", offsets=["+76 CALENDAR_DAY"],
+                 lock_offset=["+3 CALENDAR_DAY", "08:00 ABS_TIME"])
+    dates = _calc([item], default_lock_time="23:59", clamp_lock_at_to_last_day_of_term=True)
+    assert dates["Early"].lock_at == "2026-12-18T08:00:00-08:00"
+    assert dates["Early"].lock_clamped is None
+
+
+def test_clamp_leaves_lock_dates_inside_the_term():
+    dates = _calc([_item("Mid", offsets=["+7 CALENDAR_DAY"])],
+                  lock_relative_default="+7 CALENDAR_DAY",
+                  clamp_lock_at_to_last_day_of_term=True)
+    assert dates["Mid"].lock_at == "2026-10-14T23:59:00-07:00"
+    assert dates["Mid"].lock_clamped is None
+
+
+def test_clamp_turns_none_into_the_last_day_with_or_without_a_due_date():
+    dates = _calc(
+        [_item("Open", lock_offset="NONE"),
+         _item("Undated", anchor="NO_DUE_DATE", lock_offset="NONE")],
+        clamp_lock_at_to_last_day_of_term=True,
+    )
+    assert dates["Open"].lock_at == END
+    assert dates["Open"].lock_clamped == rd.CLAMPED_NONE
+    assert dates["Undated"].due_at == "NONE"
+    assert dates["Undated"].lock_at == END
+
+
+def test_clamp_leaves_keep_and_unlock_and_due_alone():
+    dates = _calc(
+        [_late("NoRule"), _late("Unlock", unlock_offset="NONE"),
+         _item("Undated", anchor="NO_DUE_DATE", lock_offset="+7 CALENDAR_DAY")],
+        clamp_lock_at_to_last_day_of_term=True,
+    )
+    assert dates["NoRule"].lock_at == "KEEP"
+    assert dates["NoRule"].lock_clamped is None
+    assert dates["Unlock"].unlock_at == "NONE"
+    assert dates["Unlock"].due_at == "2026-12-15T23:59:00-08:00"
+    assert dates["Undated"].lock_at == "KEEP"
+
+
+def test_clamp_table_overrides_the_section():
+    section = {
+        "days_of_week": ["Mon", "Wed"],
+        "lock_relative_default": "+7 CALENDAR_DAY",
+        "clamp_lock_at_to_last_day_of_term": True,
+        "tables": {
+            "default": {"items": [_late()]},
+            "evening": {"items": [_late()], "clamp_lock_at_to_last_day_of_term": False},
+        },
+    }
+    tables = rd.load_tables({"relative_due_dates": section})
+    assert rd.calculate(tables["default"], _term()).dates[0].lock_at == END
+    assert rd.calculate(tables["evening"], _term()).dates[0].lock_at == "2026-12-22T23:59:00-08:00"
+
+
+def test_clamp_must_be_a_boolean():
+    with pytest.raises(RelativeDueDatesError, match="clamp_lock_at_to_last_day_of_term"):
+        _table([], clamp_lock_at_to_last_day_of_term="yes")
+
+
+def test_clamp_help_parses_as_an_empty_document():
+    import tomllib
+
+    assert tomllib.loads(rd.CLAMP_HELP) == {}
+    assert f"# {rd.CLAMP_KEY} = true" in rd.CLAMP_HELP
+    assert tomllib.loads(rd.CLAMP_HELP.replace(f"# {rd.CLAMP_KEY}", rd.CLAMP_KEY)) == {
+        rd.CLAMP_KEY: True
+    }

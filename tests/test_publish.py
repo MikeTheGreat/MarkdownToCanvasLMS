@@ -881,6 +881,23 @@ def test_stage_replaces_date_placeholders(tmp_path):
     assert "replace_date_with" not in text
 
 
+def test_stage_quotes_a_virtual_entry(tmp_path):
+    repo = _dated_repo(
+        tmp_path, 'Week 3 begins [x]{.replace_date_with item="Start_of_week_3" format="%A, %B %-d"}.'
+    )
+    settings = repo / "course_settings" / "course_settings.toml"
+    settings.write_text(settings.read_text().replace(
+        "due_dates = [\n",
+        'due_dates = [\n    {name = "Start_of_week_3", virtual = true, '
+        'due_at = "2026-10-12T23:59:00-07:00"},\n',
+    ))
+    staging = tmp_path / "staging"
+    info = publish.stage(repo, staging)
+    assert info["errors"] == []
+    text = (staging / "docs" / "assignments" / "hw.md").read_text()
+    assert "Week 3 begins Monday, October 12." in text
+
+
 def test_stage_reports_unresolved_date_placeholder(tmp_path):
     repo = _dated_repo(tmp_path, '[x]{.replace_date_with item="Online"}')
     info = publish.stage(repo, tmp_path / "staging")

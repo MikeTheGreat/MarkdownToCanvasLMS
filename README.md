@@ -74,6 +74,7 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
     - [Files moved without `mv`](#files-moved-without-mv)
   - [Seeing what `update` would do (`--noop`)](#seeing-what-update-would-do---noop)
   - [Checking a course before deploying (`--check-as-new-course`)](#checking-a-course-before-deploying---check-as-new-course)
+    - [Checking pinned content (`--ignore-pinned-resources`)](#checking-pinned-content---ignore-pinned-resources)
   - [Selective sync](#selective-sync)
     - [`-t` — recursive (BFS)](#-t--recursive-bfs)
     - [`-s` — single target (no traversal)](#-s--single-target-no-traversal)
@@ -91,6 +92,7 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
   - [Content file format](#content-file-format)
     - [`course_settings.toml`](#course_settingstoml)
       - [Centralized due dates](#centralized-due-dates)
+        - [Virtual entries (named dates)](#virtual-entries-named-dates)
       - [Quoting due dates in text (`replace_date_with`)](#quoting-due-dates-in-text-replace_date_with)
       - [Pinned resources (`pinned_resources`)](#pinned-resources-pinned_resources)
       - [Group sets/group categories (`group_categories`)](#group-setsgroup-categories-group_categories)
@@ -122,6 +124,7 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
     - [The term file](#the-term-file)
     - [The `[relative_due_dates]` section](#the-relative_due_dates-section)
     - [Offsets](#offsets)
+    - [Virtual dates (`virtual = true`)](#virtual-dates-virtual--true)
     - [Running it](#running-it)
     - [Not rescheduling past dates (`dont_reschedule_dates_before`)](#not-rescheduling-past-dates-dont_reschedule_dates_before)
   - [Resolving external-tool labels (`create-tool-aliases`)](#resolving-external-tool-labels-create-tool-aliases)
@@ -580,6 +583,10 @@ Options:
                                   first time to a brand-new empty Canvas course. Contacts
                                   Canvas for nothing and writes nothing. Exits nonzero if any
                                   problems are found.
+  --ignore-pinned-resources       With --check-as-new-course: treat every
+                                  pinned_resources entry as unpinned for this
+                                  simulated run, so pinned content is checked too.
+                                  Only works with --check-as-new-course.
   -n, --noop                      Show what this update would do to the course as it is now,
                                   without doing it: reads Canvas and the manifest, changes
                                   nothing in Canvas and writes no file. Works with -t, -s and
@@ -805,6 +812,33 @@ deploy.
 `-t`/`-s`; `--force-uploads`/`--force-overwrite` are meaningless here (every
 file is already treated as new, and Canvas timestamps are never consulted)
 and are rejected too.
+
+### Checking pinned content (`--ignore-pinned-resources`)
+
+By default the check honors [`pinned_resources`](#pinned-resources-pinned_resources)
+the same way a real `update` does: pinned files are skipped without being
+converted or checked, and a module that lists a pinned item can report
+`some items could not be added`, because the simulated empty course never gets
+that item (unless a link from other content stub-created it). When the course has pins, the check starts with a note saying how
+many entries will be skipped.
+
+Add `--ignore-pinned-resources` to treat every entry as unpinned for that one
+simulated run, so pinned content is checked like everything else:
+
+```bash
+markdown-to-canvas update ./my-course --check-as-new-course --ignore-pinned-resources
+```
+
+The run starts with a note saying how many entries are temporarily unpinned
+(`--verbose` also lists them). `course_settings.toml` is not changed. The entries
+are still validated, so an entry a real `update` would reject still stops the
+check, and an entry matching nothing on disk still produces its warning. The
+option only works together with `--check-as-new-course`; with a plain `update`
+or `--noop` it is an error.
+
+A real `update` to a new, empty course still honors pins, so pinned items are
+not created there. Clear `pinned_resources` before deploying the repo to a new
+course.
 
 ---
 
@@ -1983,12 +2017,49 @@ dates as-is`) so the change is visible.
 During `update`, the tool prints warnings for:
 
 * A `due_dates` entry whose `name` doesn't match any content file (typo or
-  stale entry).
+  stale entry). [Virtual entries](#virtual-entries-named-dates) are not
+  reported.
 * An assignment, discussion, or quiz that has **no** corresponding `due_dates`
   entry (so you know what's not yet tracked centrally).
 
 Use [`list-titles`](#listing-content-titles-list-titles) to see all available
 titles and their current due dates.
+
+##### Virtual entries (named dates)
+
+An entry with `virtual = true` names a date that is not the date of any
+assignment, discussion or quiz, such as the start of a week or the last day to
+withdraw. [Date placeholders](#quoting-due-dates-in-text-replace_date_with) can
+quote it, and `update` never sends it to Canvas or warns that it matches no
+content file. `generate-due-dates` writes one for each
+[virtual item](#virtual-dates-virtual--true) of a relative table; you can also
+write them by hand:
+
+```toml
+due_dates = [
+    { name = "Start_of_week_3", virtual = true, due_at = "2026-10-12T00:00:00-07:00" },
+    { name = "Last day to withdraw", virtual = true, due_at = "2026-11-13T17:00:00-08:00" },
+]
+```
+
+A virtual entry may have only `name`, `virtual`, `due_at` and `only_if`.
+`update`, `publish`, `list-titles` and `generate-due-dates` check every virtual
+entry first (including one whose `only_if` does not apply to this run) and stop,
+listing every problem and changing nothing, when:
+
+* it has `type`, `unlock_at` or `lock_at`;
+* its `due_at` is missing, empty, `NONE`, `KEEP`, `CREATE_NONE_THEN_KEEP` or
+  not a date;
+* `virtual` is not `true` or `false`;
+* its name is the title of an assignment, discussion or quiz (not counting
+  files excluded by `.canvasignore`);
+* its name is also the name of an ordinary `due_dates` entry.
+
+Two virtual entries may share a name when `only_if` picks one of them for each
+course. A hand-written virtual entry that no relative table produces is listed
+by `generate-due-dates` among the entries the table did not produce, like a
+hand-written ordinary entry; add its name to the table's `ignore` list to
+silence that.
 
 If you plan the term as offsets ("due four class days after the start of the
 quarter, locks a week later") rather than as calendar dates, the
@@ -2018,12 +2089,20 @@ emphasis, as in the first line above.
 | Attribute | Meaning |
 | --- | --- |
 | `item` | The `name` of a `due_dates` entry. Leave it out in an assignment, discussion or quiz (including a quiz's question files) to mean that item's own entry, found by its title the way `update` finds it. Pages, announcements, the syllabus and question banks have no entry of their own, so they must give `item`. |
-| `type` | `assignment`, `discussion` or `quiz`. Needed only when two entries share a name; it picks the entry with that type (an entry with no `type` matches any). |
+| `type` | `assignment`, `discussion` or `quiz`. Needed only when two entries share a name; it picks the entry with that type (an entry with no `type` matches any). A placeholder with `type` never matches a [virtual entry](#virtual-entries-named-dates). |
 | `field` | `due_at` (the default), `unlock_at` or `lock_at`. |
 | `format` | A [strftime](https://docs.python.org/3/library/datetime.html#format-codes) format. When left out, the course-wide default is used. |
 
 Only entries in `due_dates` can be quoted, and they are named by title, so
-moving or renaming files with `mv` does not affect placeholders. Renaming an
+moving or renaming files with `mv` does not affect placeholders. That includes
+[virtual entries](#virtual-entries-named-dates), which name dates that belong to
+no assignment. The default format ends in a time ("by 11:59 PM"), so give one
+without it when quoting a date such as the start of a week:
+
+```markdown
+Week 3 begins [Oct 12]{.replace_date_with item="Start_of_week_3" format="%A, %B %-d"}.
+```
+ Renaming an
 item's title does: update the placeholders that name it. Entries removed by
 [`only_if`](#only_if-excluding-a-due_dates-entry-by-flag) for the course being
 updated cannot be quoted.
@@ -2099,6 +2178,8 @@ While a resource is pinned:
   (`prune --manifest`, which never contacts Canvas, is exempt).
 * **`mv` keeps the pin attached**: moving or renaming a pinned resource
   rewrites its `pinned_resources` entry along with the manifest and links.
+* **`update --check-as-new-course` skips it too**, unless you add
+  [`--ignore-pinned-resources`](#checking-pinned-content---ignore-pinned-resources).
 
 A `pinned_resources` entry that matches nothing in the repo produces a warning
 (typo protection); it is not an error, since a pin may deliberately outlive
@@ -3458,8 +3539,8 @@ anything on Canvas. If a version differs from the tool's, the command stops and
 changes nothing:
 
 ```text
-Error: This course repo is format version 0 but this tool (markdown-to-canvas 0.2.1) uses format version 10. Run `markdown-to-canvas upgrade` first.
-Error: course_settings/course_settings.toml is format version 11 but this tool (markdown-to-canvas 0.2.1) only understands format version 10. Update markdown-to-canvas.
+Error: This course repo is format version 0 but this tool (markdown-to-canvas 0.2.1) uses format version 11. Run `markdown-to-canvas upgrade` first.
+Error: course_settings/course_settings.toml is format version 12 but this tool (markdown-to-canvas 0.2.1) only understands format version 11. Update markdown-to-canvas.
 ```
 
 A manifest that is older than the repo is named in the message. This happens
@@ -3632,6 +3713,27 @@ No other file changes, and every manifest records version 10. Nothing in an
 older repo needed rewriting; the version changes so that an older tool refuses
 a repo with placeholders instead of uploading the span text as it is.
 
+Migration 10 to 11 goes with [virtual dates](#virtual-dates-virtual--true) in
+relative tables. It changes no file content; `course_settings.toml` and every
+manifest record version 11. The version changes because an older tool stops
+with "unknown key" on `virtual = true`.
+
+Migration 11 to 12 goes with [virtual entries](#virtual-entries-named-dates) in
+`due_dates`. It changes no file content; `course_settings.toml` and every
+manifest record version 12. The version changes because an older tool would
+treat a virtual entry as the dates of an assignment, warning on every `update`
+that it matches no content.
+
+Migration 12 to 13 goes with
+`clamp_lock_at_to_last_day_of_term` (see "Lock dates and the end of the term"
+under [Offsets](#offsets)). It adds the setting, commented out with a short
+explanation, directly under the `[relative_due_dates]` header, unless a line of
+the section already mentions it. Missing sections are handled as in migration 8
+to 9: a section with only `[relative_due_dates.tables.…]` headers gets a header
+with the line under it, and a file with no section gets a `NOTICE:` and no
+change. Every manifest records version 13. The version changes because an older
+tool stops with "unknown key" once the setting is turned on.
+
 `upgrade` also checks that `tab_configuration` is a top-level key. The tool
 only reads it there, so when it is nested under a section
 (`[default_post_policy]`, for example) `upgrade` moves it to the top level,
@@ -3661,7 +3763,7 @@ This converts pages, assignments, discussions, announcements, quizzes, question 
 
 `import` does not write a manifest. If you will sync the imported repo back to the course it was exported from (or to a copy of it), run `fix-manifest --pair-canvas-with-local` before the first `update`. Otherwise `update` creates a duplicate of every item (see "Checking and repairing the manifest").
 
-`import` also writes an empty `[relative_due_dates.tables.default]` section at the end of `course_settings.toml` (with the shared settings and `dont_reschedule_dates_before` commented out, every allowed value listed, and `default_unlock_time = "00:00"` and `default_lock_time = "23:59"` set) and, unless the file is already there, a fully commented-out `course_settings/term_dates.toml` that shows the [term file](#the-term-file) format. See [Generating due dates from offsets](#generating-due-dates-from-offsets-generate-due-dates).
+`import` also writes an empty `[relative_due_dates.tables.default]` section at the end of `course_settings.toml` (with the shared settings, `dont_reschedule_dates_before` and `clamp_lock_at_to_last_day_of_term` commented out, every allowed value listed, and `default_unlock_time = "00:00"` and `default_lock_time = "23:59"` set) and, unless the file is already there, a fully commented-out `course_settings/term_dates.toml` that shows the [term file](#the-term-file) format. See [Generating due dates from offsets](#generating-due-dates-from-offsets-generate-due-dates).
 
 Every top-level folder the tool recognizes (`pages/`, `assignments/`, `discussions/`, `announcements/`, `quizzes/`, `question_banks/`, `modules/`, `snippets/`, `assets/`, `course_settings/`) is created even if the course has nothing to put in it, so the repo layout always matches [How it works](#how-it-works) and there's an obvious place to add new content later. A starter `.gitignore` and `.canvasignore` are also written — both cover common OS/editor/Office junk files, plus commented-out examples of course-specific patterns (per-term-only material, feedback drafts) you can uncomment or adapt as the course grows. `.canvasignore` also actively excludes `course_definition/**` — instructor reference material (scope-and-sequence docs, curriculum outcome guides) that should never be uploaded to Canvas — and `question_banks/**`, since Canvas's API cannot create or update question banks. If the export contains any question banks, `import` prints a warning saying they cannot be re-uploaded.
 
@@ -3834,6 +3936,7 @@ unlock_relative_default = "NONE"           # see "Lock and unlock dates" below
 lock_relative_default = "+7 CALENDAR_DAY"
 default_unlock_time = "00:00"              # see "Lock and unlock dates" below
 default_lock_time = "23:59"
+clamp_lock_at_to_last_day_of_term = true   # default false; see "Lock dates and the end of the term"
 # Section-wide only (a table may not set it); see "Not rescheduling past dates":
 dont_reschedule_dates_before = "2026-10-21"
 
@@ -3861,6 +3964,7 @@ Each item has:
 | `relative_to` | Where counting starts: `{ type = "START_OF_QUARTER" }` (the term's `first_day`), `{ type = "FIRST_CLASS_OF_QUARTER" }` (the first class day on or after it), `{ type = "NO_DUE_DATE" }` (the item gets `due_at = "NONE"`), or `{ type = "ASSIGNMENT", assignment_name = "Other item" }` (the other item's due *date*; the time of day starts again at `default_due_time`), or `{ type = "ABSOLUTE_DATE", date = "2026-09-28" }` (a fixed date, at `default_due_time`; offsets count from it, and other items may be relative to it). An item can be relative only to another item of the same table that has a due date. |
 | `offsets` | A list of offsets applied in order (below). May be empty. |
 | `unlock_offset`, `lock_offset` | Optional. How far from the item's own due date it unlocks or locks. |
+| `virtual` | Optional, `true` or `false` (the default). `true` makes the item a name for a date rather than an assignment, discussion or quiz; see [Virtual dates](#virtual-dates-virtual--true). |
 
 Tables are named, and one run uses one of them: the one named by `--table`, else
 the table named `default`. If there is no `default` table and none is chosen, the
@@ -3909,6 +4013,86 @@ chosen explicitly wins over them:
 
 Without the two settings, unlock and lock dates keep the due date's time.
 `NONE`, `KEEP` and items with no due date are not affected.
+
+**Lock dates and the end of the term.** An item due near the end of the term
+with `"+7 CALENDAR_DAY"` would lock after the term is over, and a `NONE` lock
+rule leaves an item open for good. With
+`clamp_lock_at_to_last_day_of_term = true` (shared, and a table may set its
+own; default false), `generate-due-dates` writes the term file's `last_day` at
+23:59, in the term's time zone, as `lock_at` for:
+
+* every item whose computed lock date is later than that, and
+* every item whose lock rule is `NONE`, with or without a due date.
+
+The comparison uses the final lock date, after `default_lock_time` and any
+`ABS_TIME`. Earlier lock dates are unchanged. An item with no lock rule
+(`"KEEP"`) is left alone, so a lock date written by hand in `due_dates` stays as
+it is, and unlock and due dates are never changed. `import` writes the setting
+commented out, so removing the `# ` turns it on. The run reports how many lock
+dates were set this way (see [Running it](#running-it)).
+
+### Virtual dates (`virtual = true`)
+
+An item with `virtual = true` gives a name to a date, such as the start of a
+week, so that other items can be relative to it and
+[date placeholders](#quoting-due-dates-in-text-replace_date_with) can quote it.
+Its date is computed like any other item's and written to `due_dates` as a
+[virtual entry](#virtual-entries-named-dates), which `update` never sends to
+Canvas. It does not need to match any content.
+
+This is useful because counting class days from the start of the term is not
+the same as counting calendar weeks. "+5 CLASS_DAY" moves by one whenever a
+non-instructional day falls in the first weeks. To say "due on the second class
+day of week 3", name the start of week 3 and count from it:
+
+```toml
+[relative_due_dates.tables.default]
+items = [
+    { name = "Start_of_week_3", virtual = true, relative_to = { type = "START_OF_QUARTER" }, offsets = ["+14 CALENDAR_DAY"] },
+    { name = "Lab 3", relative_to = { type = "ASSIGNMENT", assignment_name = "Start_of_week_3" }, offsets = ["-1 CALENDAR_DAY", "+2 CLASS_DAY"] },
+]
+```
+
+`"-1 CALENDAR_DAY", "+2 CLASS_DAY"` means "the second class day on or after
+that date". A non-instructional day in week 1 or 2 does not move Lab 3; one in
+week 3 moves it to the next class day, as for any `CLASS_DAY` offset. Items
+refer to a virtual item with the usual `ASSIGNMENT` anchor, and a virtual item
+may itself be relative to another virtual item (for example `Start_of_week_4`
+seven days after `Start_of_week_3`). As with every `ASSIGNMENT` anchor, only
+the date carries over; the time of day starts again at `default_due_time`.
+
+Rules for virtual items, each checked before anything is written:
+
+* A virtual item may not have `type`, `unlock_offset` or `lock_offset`, and may
+  not be relative to `NO_DUE_DATE`: it always has a date and has no lock dates.
+* Its date must fall inside the term, like a due date. A virtual date before
+  `first_day` or after `last_day` is listed in the same out-of-term error.
+* Its name may not be the same as another item's in the table, nor the title of
+  an assignment, discussion or quiz in the repo (titles in the table's `ignore`
+  list count too). The error names the content file.
+
+`generate-due-dates` writes each virtual item to `due_dates` as
+`{ name = "Start_of_week_3", virtual = true, due_at = "2026-10-14T23:59:00-07:00" }`
+and lists it with the other changes, marked as virtual:
+
+```text
+Start_of_week_3 (virtual) (new entry):
+	due_at: 2026-10-14T23:59:00-07:00
+```
+
+A changed virtual date counts as a change like any other: the command asks
+before writing it, and `dont_reschedule_dates_before` keeps a virtual date at or
+before the cutoff as it does a due date. Virtual items are not warned about as
+titles that match no content. A virtual entry the table no longer produces (you
+removed or renamed the item) is left in `due_dates` and listed among the entries
+the table did not produce; delete it by hand if nothing quotes it.
+
+The kind of an item and of its entry must agree. If `due_dates` still has an
+ordinary entry for a name that is now a virtual item (for example one with
+`unlock_at` and `lock_at`, written before you marked the item virtual), the
+command stops with an error naming it and writes nothing: delete the entry, or
+make it `virtual = true` with only `name` and `due_at`. The same error is
+reported for an ordinary item whose name is a virtual entry's.
 
 ### Running it
 
@@ -3966,6 +4150,20 @@ every `#if` branch checked, `only_if` not applied). Each one that will not
 resolve is printed in red with the other errors. The dates are still written
 when you confirm, but the command exits with an error, because `update` would
 refuse to upload those files.
+
+When `clamp_lock_at_to_last_day_of_term` set any lock dates to the end of the
+term, a line counts them and says why, for example:
+
+```text
+4 lock dates set to the term's last day (Fri Dec 18, 2026 11:59 PM PST): 3 were later, 1 was NONE
+```
+
+It is printed on every run where it applies, including runs where nothing
+changes and `--noop` runs, so it explains a lock date that is not where the lock
+rule alone would put it. With `--verbose`, each of those items is listed under
+it with `later` or `was NONE`. A lock date kept by
+[`dont_reschedule_dates_before`](#not-rescheduling-past-dates-dont_reschedule_dates_before)
+is not counted.
 
 Titles in the table's `ignore` list are not reported. A problem in the settings,
 such as an unknown key, an unreadable offset, an item relative to a missing

@@ -1555,7 +1555,7 @@ def test_migration_9_to_10_adds_the_date_format(tmp_path, capsys):
     path = _settings(tmp_path, "format_version = 9\n" + _V9_BODY)
     manifest = _manifest(tmp_path, version=9)
     before = tomllib.loads(path.read_text())
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=10)
     text = path.read_text()
     # Above due_dates and the comment attached to it.
     assert '"Course"\n\n' + _format_block() + "# Due dates for every gradeable item.\ndue_dates" in text
@@ -1570,7 +1570,7 @@ def test_migration_9_to_10_adds_the_date_format(tmp_path, capsys):
 
 def test_migration_9_to_10_without_due_dates_goes_before_first_header(tmp_path):
     path = _settings(tmp_path, 'format_version = 9\ntitle = "Course"\n\n[late_policy]\nx = 1\n')
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=10)
     text = _without_upgraded_by(path.read_text())
     assert text == 'format_version = 10\ntitle = "Course"\n\n' + _format_block() + "[late_policy]\nx = 1\n"
 
@@ -1578,7 +1578,7 @@ def test_migration_9_to_10_without_due_dates_goes_before_first_header(tmp_path):
 def test_migration_9_to_10_keeps_a_format_already_set(tmp_path, capsys):
     body = 'replace_date_with_format = "%b %-d"\n' + _V9_BODY
     path = _settings(tmp_path, "format_version = 9\n" + body)
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=10)
     assert _without_upgraded_by(path.read_text()) == "format_version = 10\n" + body
     assert "already sets replace_date_with_format" in capsys.readouterr().out
 
@@ -1586,7 +1586,7 @@ def test_migration_9_to_10_keeps_a_format_already_set(tmp_path, capsys):
 def test_migration_9_to_10_noop_reports_and_writes_nothing(tmp_path, capsys):
     path = _settings(tmp_path, "format_version = 9\n" + _V9_BODY)
     before = path.read_bytes()
-    rf.run_upgrade(tmp_path, noop=True)
+    rf.run_upgrade(tmp_path, noop=True, target_version=10)
     assert path.read_bytes() == before
     out = capsys.readouterr().out
     assert "Add replace_date_with_format" in out
@@ -1596,7 +1596,7 @@ def test_migration_9_to_10_noop_reports_and_writes_nothing(tmp_path, capsys):
 def test_migration_9_to_10_skips_settings_already_at_10(tmp_path):
     path = _settings(tmp_path, "format_version = 10\n" + _V9_BODY)
     manifest = _manifest(tmp_path, version=9)
-    rf.run_upgrade(tmp_path)
+    rf.run_upgrade(tmp_path, target_version=10)
     assert "replace_date_with_format" not in path.read_text()
     assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 10}
 
@@ -1612,3 +1612,139 @@ def test_upgrade_from_scratch_gets_the_date_format(tmp_path):
     rf.run_upgrade(tmp_path)
     data = tomllib.loads((tmp_path / "course_settings/course_settings.toml").read_text())
     assert data["replace_date_with_format"] == "%A, %B %-d by %-I:%M %p"
+
+
+# --- migration 10 -> 11 ----------------------------------------------------
+
+
+def test_migration_10_to_11_only_records_the_version(tmp_path, capsys):
+    path = _settings(tmp_path, "format_version = 10\n" + _V9_BODY)
+    manifest = _manifest(tmp_path, version=10)
+    rf.run_upgrade(tmp_path, target_version=11)
+    assert _without_upgraded_by(path.read_text()) == "format_version = 11\n" + _V9_BODY
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 11}
+    assert f"Record format version 11 in {manifest.name}" in capsys.readouterr().out
+
+
+def test_migration_10_to_11_noop_writes_nothing(tmp_path, capsys):
+    path = _settings(tmp_path, "format_version = 10\n" + _V9_BODY)
+    manifest = _manifest(tmp_path, version=10)
+    before = (path.read_bytes(), manifest.read_bytes())
+    rf.run_upgrade(tmp_path, noop=True, target_version=11)
+    assert (path.read_bytes(), manifest.read_bytes()) == before
+    out = capsys.readouterr().out
+    assert f"Record format version 11 in {manifest.name}" in out
+    assert "no files were written" in out
+
+
+def test_version_10_tool_refuses_a_version_11_repo(tmp_path, monkeypatch):
+    _settings(tmp_path, "format_version = 11\n")
+    monkeypatch.setattr(rf, "FORMAT_VERSION", 10)
+    with pytest.raises(RepoFormatError, match="Update markdown-to-canvas"):
+        rf.check_repo_format(tmp_path)
+
+
+# --- migration 11 -> 12 ----------------------------------------------------
+
+
+def test_migration_11_to_12_only_records_the_version(tmp_path, capsys):
+    path = _settings(tmp_path, "format_version = 11\n" + _V9_BODY)
+    manifest = _manifest(tmp_path, version=11)
+    rf.run_upgrade(tmp_path, target_version=12)
+    assert _without_upgraded_by(path.read_text()) == "format_version = 12\n" + _V9_BODY
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 12}
+    assert f"Record format version 12 in {manifest.name}" in capsys.readouterr().out
+
+
+def test_migration_11_to_12_noop_writes_nothing(tmp_path, capsys):
+    path = _settings(tmp_path, "format_version = 11\n" + _V9_BODY)
+    manifest = _manifest(tmp_path, version=11)
+    before = (path.read_bytes(), manifest.read_bytes())
+    rf.run_upgrade(tmp_path, noop=True, target_version=12)
+    assert (path.read_bytes(), manifest.read_bytes()) == before
+    out = capsys.readouterr().out
+    assert f"Record format version 12 in {manifest.name}" in out
+    assert "no files were written" in out
+
+
+def test_version_11_tool_refuses_a_version_12_repo(tmp_path, monkeypatch):
+    _settings(tmp_path, "format_version = 12\n")
+    monkeypatch.setattr(rf, "FORMAT_VERSION", 11)
+    with pytest.raises(RepoFormatError, match="Update markdown-to-canvas"):
+        rf.check_repo_format(tmp_path)
+
+
+# --- migration 12 -> 13 ----------------------------------------------------
+
+
+def _clamp_help():
+    from markdown_to_canvas.relative_dates import CLAMP_HELP
+
+    return CLAMP_HELP
+
+
+def test_migration_12_to_13_adds_the_commented_clamp_line(tmp_path, capsys):
+    path = _settings(tmp_path, "format_version = 12\n" + _V8_BODY)
+    manifest = _manifest(tmp_path, version=12)
+    before = tomllib.loads(path.read_text())
+    rf.run_upgrade(tmp_path, target_version=13)
+    text = path.read_text()
+    assert "[relative_due_dates]\n" + _clamp_help() + "\n# --- Relative due dates" in text
+    assert "\n# clamp_lock_at_to_last_day_of_term = true\n" in text
+    after = tomllib.loads(text)
+    assert after.pop("format_version") == 13 and before.pop("format_version") == 12
+    after.pop("upgraded_by")
+    assert after == before
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 13}
+    out = capsys.readouterr().out
+    assert "Add a commented-out clamp_lock_at_to_last_day_of_term line" in out
+    assert f"Record format version 13 in {manifest.name}" in out
+
+
+def test_migration_12_to_13_leaves_a_section_that_mentions_the_key(tmp_path, capsys):
+    body = _V8_BODY.replace(
+        'days_of_week = ["Mon", "Wed"]\n',
+        'days_of_week = ["Mon", "Wed"]\n# clamp_lock_at_to_last_day_of_term = false\n',
+    )
+    path = _settings(tmp_path, "format_version = 12\n" + body)
+    rf.run_upgrade(tmp_path, target_version=13)
+    assert _without_upgraded_by(path.read_text()) == "format_version = 13\n" + body
+    assert "already mentions clamp_lock_at_to_last_day_of_term" in capsys.readouterr().out
+
+
+def test_migration_12_to_13_adds_a_header_when_only_subtables_exist(tmp_path, capsys):
+    body = 'title = "Course"\n\n[relative_due_dates.tables.default]\nitems = []\n'
+    path = _settings(tmp_path, "format_version = 12\n" + body)
+    rf.run_upgrade(tmp_path, target_version=13)
+    assert _without_upgraded_by(path.read_text()) == (
+        'format_version = 13\ntitle = "Course"\n\n[relative_due_dates]\n' + _clamp_help()
+        + "\n[relative_due_dates.tables.default]\nitems = []\n"
+    )
+    assert "Add a [relative_due_dates] header" in capsys.readouterr().out
+
+
+def test_migration_12_to_13_without_a_relative_section(tmp_path, capsys):
+    path = _settings(tmp_path, "format_version = 12\n" + _V9_BODY)
+    rf.run_upgrade(tmp_path, target_version=13)
+    assert _without_upgraded_by(path.read_text()) == "format_version = 13\n" + _V9_BODY
+    out = capsys.readouterr().out
+    assert "NOTICE" in out and "clamp_lock_at_to_last_day_of_term was not added" in out
+
+
+def test_migration_12_to_13_noop_writes_nothing(tmp_path, capsys):
+    path = _settings(tmp_path, "format_version = 12\n" + _V8_BODY)
+    manifest = _manifest(tmp_path, version=12)
+    before = (path.read_bytes(), manifest.read_bytes())
+    rf.run_upgrade(tmp_path, noop=True, target_version=13)
+    assert (path.read_bytes(), manifest.read_bytes()) == before
+    out = capsys.readouterr().out
+    assert "Add a commented-out clamp_lock_at_to_last_day_of_term line" in out
+    assert f"Record format version 13 in {manifest.name}" in out
+    assert "no files were written" in out
+
+
+def test_version_12_tool_refuses_a_version_13_repo(tmp_path, monkeypatch):
+    _settings(tmp_path, "format_version = 13\n")
+    monkeypatch.setattr(rf, "FORMAT_VERSION", 12)
+    with pytest.raises(RepoFormatError, match="Update markdown-to-canvas"):
+        rf.check_repo_format(tmp_path)

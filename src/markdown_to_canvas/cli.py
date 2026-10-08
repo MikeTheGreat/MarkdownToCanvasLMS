@@ -50,6 +50,7 @@ from .course_guard import CourseGuardError, check_course
 from .cp import CpError, run_cp
 from .generate_due_dates import apply_plan, check_term_not_over, plan_generation, render_plan
 from .imscc_import import run_import
+from .ignore import load_ignore_matcher
 from .local_orphans import find_local_orphans
 from .local_orphans import print_report as print_local_orphan_report
 from .mv import run_mv
@@ -58,7 +59,10 @@ from . import pair_manifest
 from .publish import run_publish
 from .relative_dates import RelativeDueDatesError
 from .repo_format import RepoFormatError, run_upgrade
-from .sync import collect_title_items, run_prune, run_sync, run_targeted_sync
+from .sync import (
+    check_virtual_due_dates, collect_title_items, load_due_dates, run_prune, run_sync,
+    run_targeted_sync,
+)
 from .unrecorded_moves import Commands
 
 
@@ -1110,6 +1114,11 @@ def generate_due_dates_cmd(
     error: the command lists every such item and writes nothing. Unlock and lock
     dates are not checked.
 
+    An item with `virtual = true` names a date (for example the start of a week)
+    that other items can be relative to. Its date is computed, checked against
+    the term, and written to due_dates as a `virtual = true` entry, which date
+    placeholders can quote and `update` never sends to Canvas.
+
     The changes are shown first (real changes in yellow) and nothing is written
     until you confirm; --noop shows them and stops. The command never contacts
     Canvas: run `update` afterwards to send the dates.
@@ -1329,6 +1338,17 @@ def _move_check_commands(
     ),
 )
 @click.option(
+    "--ignore-pinned-resources",
+    "ignore_pinned_resources",
+    is_flag=True,
+    default=False,
+    help=(
+        "With --check-as-new-course: treat every pinned_resources entry as "
+        "unpinned for this simulated run, so pinned content is checked too. "
+        "Only works with --check-as-new-course."
+    ),
+)
+@click.option(
     "--noop",
     "-n",
     is_flag=True,
@@ -1362,6 +1382,7 @@ def update(
     single_target: str | None,
     verbose: bool,
     check_as_new_course: bool,
+    ignore_pinned_resources: bool,
     noop: bool,
     new_paths: tuple[str, ...],
     assume_yes: bool,
@@ -1381,6 +1402,8 @@ def update(
     config_given = config
     repo, config = _resolve_course(course_dir, config)
     _ensure_pandoc()
+    if ignore_pinned_resources and not check_as_new_course:
+        die("--ignore-pinned-resources only works with --check-as-new-course for now.")
     if noop and check_as_new_course:
         die("--noop and --check-as-new-course cannot be combined: --noop checks the course as it is now, --check-as-new-course an empty one.")
     if check_as_new_course and new_paths:
@@ -1392,11 +1415,20 @@ def update(
     if config is None:
         config = repo / "course_settings" / "canvas.toml"
     cfg = load_config(config, require_token=not check_as_new_course)
+    # Before get_course(), so an invalid virtual due_dates entry stops the run
+    # before any Canvas request. run_sync checks again for library callers.
+    try:
+        check_virtual_due_dates(load_due_dates(repo), repo, load_ignore_matcher(repo))
+    except ValueError as e:
+        die(str(e))
 
     click.echo(f"Course ID: {cfg.course_id}  ({cfg.base_url})")
 
     if check_as_new_course:
-        had_errors = run_sync(cfg, repo, verbose=verbose, mode="new_course")
+        had_errors = run_sync(
+            cfg, repo, verbose=verbose, mode="new_course",
+            ignore_pinned=ignore_pinned_resources,
+        )
         if had_errors:
             click.secho(
                 "Check complete; please fix the problems listed above.", fg="yellow"

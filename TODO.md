@@ -547,6 +547,8 @@ course. Things to look at once it has been used for a term or two:
   example from the start of the term ("unlock everything on day one" is
   `NONE` today, but "unlock Week 3 on the first Monday of week 3" has to be
   written as an offset from that item's due date).
+  One such case now exists: `clamp_lock_at_to_last_day_of_term` caps lock
+  dates (and `NONE` lock rules) at the term's `last_day` 23:59.
 - A rule for items with no due date (`NO_DUE_DATE`), where a lock rule gives
   `KEEP` and a warning today.
 - Whether a no-rule item should leave an existing `CREATE_NONE_THEN_KEEP` or
@@ -566,6 +568,19 @@ It is read only from `course_settings.toml`. A flag such
 as `--dont-reschedule-before DATETIME` could override it for one run, and
 `--dont-reschedule-before none` could ignore it, without editing the file.
 Deferred until the key has been used for a term.
+
+## `generate-due-dates`: generate week anchors automatically
+
+Builds on virtual relative-table items (`virtual = true`; OpenSpec changes
+`virtual-relative-due-dates` and `virtual-due-dates-entries`), which give names
+to dates such as `Start_of_week_3` that are written to `due_dates` as virtual
+entries for placeholders to quote, but never sent to Canvas. Writing one such item
+per week by hand is tedious for an 11-week term. A setting (for example
+`week_anchors = true` on a table or in `[relative_due_dates]`) could produce
+`Week_1` .. `Week_N` from the term file's `first_day` and `last_day`. Open
+questions: the naming scheme, whether weeks start on `first_day` or on a fixed
+weekday (`"Mon NEAREST_CALENDAR_DAY"`), and what happens when a generated name
+collides with a hand-written item.
 
 ## Announcements: possible follow-ups
 

@@ -16,7 +16,7 @@ import pypandoc
 import tomlkit
 
 from . import date_placeholders, toml_write
-from .relative_dates import CUTOFF_HELP, DEFAULT_TIMES, DEFAULT_TIMES_HELP
+from .relative_dates import CLAMP_HELP, CUTOFF_HELP, DEFAULT_TIMES, DEFAULT_TIMES_HELP
 from .canvas_api import NUMERIC_TAB_IDS, TOOL_TAB_PREFIX
 from .convert import COURSE_REFERENCE_COMMENT, apply_outside_fences
 from .markdown_cleanup import filter_pandoc_attrs, keep_id_and_style, repair_prose
@@ -2726,6 +2726,8 @@ _RELATIVE_DUE_DATES_HELP = """\
 #
 """ + CUTOFF_HELP + """\
 #
+""" + CLAMP_HELP + """\
+#
 # Offsets: "+N CALENDAR_DAY", "-N CALENDAR_DAY", "+N CLASS_DAY", "-N CLASS_DAY",
 #   "Fri NEAREST_CALENDAR_DAY" (any weekday), "23:59 ABS_TIME" (any HH:MM).
 #
@@ -2740,6 +2742,18 @@ _RELATIVE_DUE_DATES_HELP = """\
 #     offsets = ["+1 CLASS_DAY", "23:59 ABS_TIME"],
 #     unlock_offset = "NONE",                           # optional: an offset, a list, or "NONE"
 #     lock_offset = "+7 CALENDAR_DAY" }                 # optional
+#
+# An item with virtual = true names a date instead of content, for other items
+# to be relative to. Its date is computed (and must fall in the term) and
+# written to due_dates as { name, virtual = true, due_at }, which date
+# placeholders can quote and update never sends to Canvas. It may not have
+# type, unlock_offset or lock_offset, or be relative to NO_DUE_DATE, and its
+# name may not be a content title:
+#   { name = "Start_of_week_3", virtual = true,
+#     relative_to = { type = "START_OF_QUARTER" }, offsets = ["+14 CALENDAR_DAY"] }
+#   { name = "Lab 3",                                   # 2nd class day of week 3
+#     relative_to = { type = "ASSIGNMENT", assignment_name = "Start_of_week_3" },
+#     offsets = ["-1 CALENDAR_DAY", "+2 CLASS_DAY"] }
 #
 # relative_to says where counting starts:
 #   { type = "START_OF_QUARTER" }        the term's first_day

@@ -32,11 +32,13 @@ from .convert import (
     markdown_to_html,
     preprocess_snippets,
 )
+from .ignore import load_ignore_matcher
 from .link_rewrite import check_local_links, infer_canvas_type
 from .quiz import parse_question_file, split_quiz_body
 from .sync import (
     _content_default_published,
     check_course_flags_coverage,
+    check_virtual_due_dates,
     filter_due_dates_by_flags,
     load_course_flags,
     load_date_format,
@@ -968,6 +970,7 @@ def run_publish(
     if not repo.is_dir():
         raise ValueError(f"Course directory not found: {course_dir}")
     repo_format.check_repo_format(repo)
+    check_virtual_due_dates(load_due_dates(repo), repo, load_ignore_matcher(repo))
 
     staging_dir = Path(tempfile.mkdtemp(prefix="g2c-publish-"))
     print(f"Staging site in: {staging_dir}")

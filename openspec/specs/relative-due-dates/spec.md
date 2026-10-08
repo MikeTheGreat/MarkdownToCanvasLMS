@@ -50,15 +50,17 @@ table's own setting wins over the shared one. No other top-level key of
 ### Requirement: Items are keyed by content title
 
 Each entry of a table's `items` array SHALL have a `name` (the title of an
-assignment, discussion or quiz, as `due_dates` entries use), MAY have a
+assignment, discussion or quiz, as `due_dates` entries use, or, for a virtual
+item, a name for a date; see "Virtual items"), MAY have a
 `type` (`assignment`, `discussion` or `quiz`) used only to tell apart two
 content items with the same title, SHALL have a `relative_to` table with a
-`type` of `START_OF_QUARTER`, `FIRST_CLASS_OF_QUARTER`, `NO_DUE_DATE` or
-`ASSIGNMENT`, and MAY have `offsets`, `unlock_offset` and `lock_offset`.
+`type` of `START_OF_QUARTER`, `FIRST_CLASS_OF_QUARTER`, `NO_DUE_DATE`,
+`ASSIGNMENT` or `ABSOLUTE_DATE`, and MAY have `offsets`, `unlock_offset`,
+`lock_offset` and `virtual`.
 When `relative_to.type` is `ASSIGNMENT`, `relative_to.assignment_name` SHALL
-name another item of the same table; an anchor never refers to an item of a
-different table. An item with the same `name` and `type` (or, without `type`,
-the same `name`) as another item in the same table is an error.
+name another item of the same table, virtual or not; an anchor never refers to
+an item of a different table. An item with the same `name` and `type` (or,
+without `type`, the same `name`) as another item in the same table is an error.
 
 #### Scenario: Anchored to another item
 - **WHEN** item "Topic Approval" has `relative_to = { type = "ASSIGNMENT", assignment_name = "Find Topics" }` and offsets `["+7 CALENDAR_DAY"]`
@@ -348,3 +350,115 @@ any date is computed or written.
 #### Scenario: Cutoff on the last day of the term
 - **WHEN** `dont_reschedule_dates_before = "2026-12-18"` and the term's `last_day` is 2026-12-18
 - **THEN** the cutoff is accepted
+
+### Requirement: Virtual items
+
+An item with `virtual = true` SHALL be a virtual item: a name for a date that
+other items of the same table can count from. `virtual` SHALL be a boolean;
+`false` or an absent key means an ordinary item, and any other value SHALL be
+an error naming the item. A virtual item's date SHALL be computed from its
+`relative_to` and `offsets` exactly as an ordinary item's due date is, and an
+item anchored to it with `relative_to = { type = "ASSIGNMENT", assignment_name
+= "<virtual name>" }` SHALL count from that date as it would from an ordinary
+item's due date.
+
+A virtual item SHALL NOT have `type`, `unlock_offset` or `lock_offset`, and its
+`relative_to.type` SHALL NOT be `NO_DUE_DATE`; each of these SHALL be an error
+naming the item and the key or anchor, and nothing SHALL be written.
+
+A virtual item's date SHALL be checked against the term in the same way as an
+ordinary item's due date: a date before the term file's `first_day` or after
+its `last_day` SHALL be reported in the same out-of-term error, and nothing
+SHALL be written.
+
+A virtual item SHALL NOT have the same `name` as another item of the same
+table, virtual or not; this is the duplicate-name error above.
+
+#### Scenario: Week anchor
+- **WHEN** the table has a virtual item `Start_of_week_3` with `relative_to = { type = "START_OF_QUARTER" }` and offsets `["+14 CALENDAR_DAY"]`, and an item "Lab 3" with `relative_to = { type = "ASSIGNMENT", assignment_name = "Start_of_week_3" }` and offsets `["-1 CALENDAR_DAY", "+2 CLASS_DAY"]`
+- **THEN** "Lab 3" is due on the second class day on or after the date 14 calendar days after the term's `first_day`, at `default_due_time`
+
+#### Scenario: Virtual anchored to virtual
+- **WHEN** virtual item `Start_of_week_4` is anchored to virtual item `Start_of_week_3` with offsets `["+7 CALENDAR_DAY"]`
+- **THEN** its date is seven calendar days after `Start_of_week_3`'s date, and items anchored to `Start_of_week_4` count from that date
+
+#### Scenario: Virtual item with a lock rule
+- **WHEN** a virtual item has `lock_offset = "+7 CALENDAR_DAY"`
+- **THEN** the command fails with an error naming the item and `lock_offset`, and nothing is written
+
+#### Scenario: Virtual item with a type
+- **WHEN** a virtual item has `type = "assignment"`
+- **THEN** the command fails with an error naming the item and `type`, and nothing is written
+
+#### Scenario: Virtual item with no date
+- **WHEN** a virtual item has `relative_to = { type = "NO_DUE_DATE" }`
+- **THEN** the command fails with an error naming the item and `NO_DUE_DATE`, and nothing is written
+
+#### Scenario: Not a boolean
+- **WHEN** an item has `virtual = "yes"`
+- **THEN** the command fails with an error naming the item and `virtual`, and nothing is written
+
+#### Scenario: Virtual date outside the term
+- **WHEN** a virtual item `Start_of_week_12` computes to a date after the term's `last_day`
+- **THEN** the out-of-term error lists `Start_of_week_12` with its date, and nothing is written
+
+#### Scenario: Same name as an ordinary item
+- **WHEN** a table has an ordinary item "Week 3" and a virtual item "Week 3"
+- **THEN** the command fails with the duplicate-name error, and nothing is written
+
+### Requirement: Lock dates clamped to the term's last day
+
+`clamp_lock_at_to_last_day_of_term` SHALL be an optional boolean setting of
+`[relative_due_dates]`. A table (`[relative_due_dates.tables.NAME]`) MAY set it
+too, and the table's value SHALL override the section's, as for the other
+shared settings. When neither sets it, it SHALL be false. A value that is not
+`true` or `false` SHALL be an error naming the key, and nothing SHALL be
+written.
+
+The end of the term is the term file's `last_day` at 23:59 in the term file's
+time zone. When the setting is true for the selected table, each ordinary
+(not virtual) item's `lock_at` SHALL be decided as follows, after the lock
+rule, `default_lock_time` and any `ABS_TIME` have been applied:
+
+- a computed lock date later than the end of the term SHALL become the end of
+  the term;
+- a computed lock date at or before the end of the term SHALL be unchanged;
+- a `NONE` lock rule SHALL give the end of the term instead of `NONE`, whether
+  or not the item has a due date;
+- `KEEP` (no lock rule applies, or an offset rule on an item with no due date)
+  SHALL be unchanged, so the field in `due_dates` is left as it is.
+
+`unlock_at` and `due_at` SHALL NOT be affected. When the setting is false or
+absent, every lock date SHALL be the same as without this requirement.
+
+#### Scenario: Lock date past the term
+- **WHEN** the setting is true, `last_day = 2026-12-18`, the time zone is `America/Los_Angeles`, and an item due `2026-12-15T23:59:00-08:00` has the lock rule `"+7 CALENDAR_DAY"`
+- **THEN** its `lock_at` is `2026-12-18T23:59:00-08:00`
+
+#### Scenario: Lock date inside the term
+- **WHEN** the setting is true, `last_day = 2026-12-18`, and an item's computed lock date is `2026-12-10T23:59:00-08:00`
+- **THEN** its `lock_at` is `2026-12-10T23:59:00-08:00`
+
+#### Scenario: NONE becomes the last day
+- **WHEN** the setting is true, `last_day = 2026-12-18`, and an item's lock rule is `NONE`
+- **THEN** its `lock_at` is `2026-12-18T23:59:00-08:00`
+
+#### Scenario: NONE on an item with no due date
+- **WHEN** the setting is true and an item anchored to `NO_DUE_DATE` has the lock rule `NONE`
+- **THEN** its `due_at` is `NONE` and its `lock_at` is the end of the term
+
+#### Scenario: KEEP is untouched
+- **WHEN** the setting is true and no lock rule applies to an item
+- **THEN** its `lock_at` is `KEEP`
+
+#### Scenario: Table overrides the section
+- **WHEN** `[relative_due_dates]` sets the key to true, the table `[relative_due_dates.tables.evening]` sets it to false, and `--table evening` is used
+- **THEN** no lock date is clamped
+
+#### Scenario: Setting absent
+- **WHEN** neither the section nor the table sets the key
+- **THEN** an item whose lock rule gives a date after `last_day` keeps that date, and a `NONE` rule gives `NONE`
+
+#### Scenario: Unreadable value
+- **WHEN** `clamp_lock_at_to_last_day_of_term = "yes"`
+- **THEN** the command fails with an error naming `clamp_lock_at_to_last_day_of_term`, and nothing is written

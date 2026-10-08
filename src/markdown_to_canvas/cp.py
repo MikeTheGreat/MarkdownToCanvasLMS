@@ -33,7 +33,7 @@ from .convert import (
 from .ignore import IgnoreMatcher, load_ignore_matcher
 from .local_orphans import _quiet, collect_local_refs
 from .quiz import split_quiz_body
-from .sync import load_course_flags, load_due_dates
+from .sync import is_virtual_entry, load_course_flags, load_due_dates
 
 # Top-level folders that are not plain content folders. Anything else at the
 # repo root holds content (.md files that become Canvas items).
@@ -589,6 +589,7 @@ def _dest_titles(dest: Path) -> dict[tuple[str, str], list[str]]:
 
 
 def _relative_names(settings: dict[str, Any]) -> set[str]:
+    """Item names of every relative table, except virtual items (they name no content)."""
     names: set[str] = set()
     section = settings.get("relative_due_dates")
     tables = section.get("tables", {}) if isinstance(section, dict) else {}
@@ -597,7 +598,10 @@ def _relative_names(settings: dict[str, Any]) -> set[str]:
     for table in tables.values():
         items = table.get("items", []) if isinstance(table, dict) else []
         for item in items if isinstance(items, list) else []:
-            if isinstance(item, dict) and isinstance(item.get("name"), str):
+            if (
+                isinstance(item, dict) and isinstance(item.get("name"), str)
+                and item.get("virtual") is not True
+            ):
                 names.add(item["name"].strip())
     return names
 
@@ -708,7 +712,10 @@ def _warn_unresolvable_placeholders(
             seen.add(key)
             if not any(
                 e.get("name") == ph.item
-                and (ph.type is None or not e.get("type") or e.get("type") == ph.type)
+                and (
+                    ph.type is None
+                    or (not is_virtual_entry(e) and (not e.get("type") or e.get("type") == ph.type))
+                )
                 for e in dest_due_dates
             ):
                 where = f" (type {ph.type})" if ph.type else ""
