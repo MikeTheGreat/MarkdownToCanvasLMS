@@ -1748,3 +1748,62 @@ def test_version_12_tool_refuses_a_version_13_repo(tmp_path, monkeypatch):
     monkeypatch.setattr(rf, "FORMAT_VERSION", 12)
     with pytest.raises(RepoFormatError, match="Update markdown-to-canvas"):
         rf.check_repo_format(tmp_path)
+
+
+# --- migration 13 -> 14 ----------------------------------------------------
+
+
+def _module_entry():
+    return {"canvas_id": 5, "canvas_type": "module", "last_synced": "2026-10-01T00:00:00+00:00"}
+
+
+def test_migration_13_to_14_marks_modules_with_placeholders_for_resync(tmp_path, capsys):
+    path = _settings(tmp_path, "format_version = 13\n")
+    (tmp_path / "modules").mkdir()
+    (tmp_path / "modules" / "w1.md").write_text(
+        '---\ntitle: W1\n---\n## Week 1: [x]{.replace_date_with item="HW 1"}\n'
+    )
+    (tmp_path / "modules" / "w2.md").write_text("---\ntitle: W2\n---\n## Week 2\n")
+    (tmp_path / "modules" / "w3.md").write_text(
+        "---\ntitle: W3\n---\n$../snippets/when.md$\n"
+    )
+    (tmp_path / "snippets").mkdir()
+    (tmp_path / "snippets" / "when.md").write_text(
+        '## Due [x]{.replace_date_with item="HW 1"}\n'
+    )
+    manifest = _manifest(tmp_path, version=13, extra={
+        "modules/w1.md": _module_entry(),
+        "modules/w2.md": _module_entry(),
+        "modules/w3.md": _module_entry(),
+        "modules/gone.md": _module_entry(),
+    })
+    rf.run_upgrade(tmp_path, target_version=14)
+    data = tomllib.loads(manifest.read_text())
+    assert "last_synced" not in data["modules/w1.md"]
+    assert "last_synced" not in data["modules/w3.md"]
+    assert "last_synced" in data["modules/w2.md"]
+    assert "last_synced" in data["modules/gone.md"]
+    assert data["modules/w1.md"]["canvas_id"] == 5
+    assert data["_repo_format"] == {"format_version": 14}
+    assert tomllib.loads(path.read_text())["format_version"] == 14
+    out = capsys.readouterr().out
+    assert f"Mark modules/w1.md for re-sync in {manifest.name}" in out
+    assert f"Record format version 14 in {manifest.name}" in out
+
+
+def test_migration_13_to_14_noop_writes_nothing(tmp_path, capsys):
+    path = _settings(tmp_path, "format_version = 13\n")
+    (tmp_path / "modules").mkdir()
+    (tmp_path / "modules" / "w1.md").write_text("[x]{.replace_date_with item=\"HW 1\"}\n")
+    manifest = _manifest(tmp_path, version=13, extra={"modules/w1.md": _module_entry()})
+    before = (path.read_bytes(), manifest.read_bytes())
+    rf.run_upgrade(tmp_path, noop=True, target_version=14)
+    assert (path.read_bytes(), manifest.read_bytes()) == before
+    assert "Mark modules/w1.md for re-sync" in capsys.readouterr().out
+
+
+def test_version_13_tool_refuses_a_version_14_repo(tmp_path, monkeypatch):
+    _settings(tmp_path, "format_version = 14\n")
+    monkeypatch.setattr(rf, "FORMAT_VERSION", 13)
+    with pytest.raises(RepoFormatError, match="Update markdown-to-canvas"):
+        rf.check_repo_format(tmp_path)

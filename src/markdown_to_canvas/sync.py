@@ -518,16 +518,17 @@ def _expand_dates(
     body: str,
     local_key: str,
     own: tuple[str | None, str | None] = (None, None),
+    escape: bool = True,
 ) -> tuple[str, list[dict[str, str]]] | None:
     """Replace the date placeholders in ``body`` (after snippet expansion).
 
     Returns (body, dates_used records), or None when a placeholder did not
     resolve; the errors are already in ``ctx.errors`` and the caller skips the
-    upload.
+    upload. ``escape`` is passed to ``date_placeholders.expand``.
     """
     before = len(ctx.errors)
     body, records = date_placeholders.expand(
-        body, ctx.date_context.for_file(*own), local_key, ctx.errors
+        body, ctx.date_context.for_file(*own), local_key, ctx.errors, escape=escape
     )
     if len(ctx.errors) > before:
         return None
@@ -3330,7 +3331,7 @@ def _sync_module(
     if not manifest_lib.needs_sync(
         manifest, local_key, md_file, force_this,
         extra_mtime_paths=lambda: _file_referenced_snippets(md_file, snippets_dir),
-        current_flags=ctx.flags, verbose=verbose,
+        current_flags=ctx.flags, verbose=verbose, extra_stale=_dates_stale(ctx),
     ):
         ctx.counts.skipped += 1
         if verbose:
@@ -3363,6 +3364,12 @@ def _sync_module(
     body = preprocess_snippets(
         body, md_file, snippets_dir, flags=ctx.flags, course_id=ctx.course_id
     )
+    # Item titles reach Canvas as plain text, so the dates are not escaped.
+    expanded = _expand_dates(ctx, body, local_key, escape=False)
+    if expanded is None:
+        print(f"  Skipping upload due to errors: {local_key}")
+        return False
+    body, dates_used = expanded
     items = parse_module_body(body, md_file, repo_root)
     for item in items:
         if item.get("type") == "content" and item.get("published") is None:
@@ -3427,9 +3434,7 @@ def _sync_module(
                 had_warnings = True
 
     extra: dict[str, Any] = {"canvas_item_ids": canvas_item_ids}
-    flags_used = _flags_used_for([md_file], snippets_dir, ctx.flags)
-    if flags_used:
-        extra["flags_used"] = flags_used
+    extra.update(_tracking(_flags_used_for([md_file], snippets_dir, ctx.flags), dates_used))
     # On item failures, still record the module's canvas_id (so the next run
     # updates this module rather than creating a duplicate) but leave the
     # entry unstamped so it is retried.

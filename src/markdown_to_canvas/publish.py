@@ -604,19 +604,24 @@ def render_module_overview(
     repo: Path,
     flags: dict[str, bool] | None = None,
     errors: list[str] | None = None,
+    dates: date_placeholders.DatePlaceholderContext | None = None,
 ) -> str | None:
     """Render a module .md file as a clickable overview/index page.
 
     Returns None on a conditional-directive error (reported via ``errors``);
-    the caller must skip the file.
+    the caller must skip the file. When ``dates`` is given, date placeholders
+    are replaced (unescaped, as ``update`` does for module item titles); an
+    unresolved one is reported via ``errors``.
     """
     frontmatter, body = parse_frontmatter(module_md.read_text())
     title = frontmatter.get("title", module_md.stem)
+    source_desc = module_md.relative_to(repo).as_posix() if module_md.is_relative_to(repo) else module_md.name
     if flags is not None:
-        source_desc = module_md.relative_to(repo).as_posix() if module_md.is_relative_to(repo) else module_md.name
         body = apply_conditionals(body, flags, source_desc, errors)
         if body is None:
             return None
+    if dates is not None:
+        body, _ = date_placeholders.expand(body, dates, source_desc, errors, escape=False)
     items = parse_module_body(body, module_md, repo)
 
     out: list[str] = [f"# {title}", ""]
@@ -811,7 +816,7 @@ def stage(
             shutil.copy2(src, dest)
         else:
             if repo_rel.startswith("modules/"):
-                staged = render_module_overview(src, repo, flags, errors)
+                staged = render_module_overview(src, repo, flags, errors, dates)
             else:
                 staged = stage_content_markdown(src, repo, flags, errors, course_id, dates)
             if staged is None:

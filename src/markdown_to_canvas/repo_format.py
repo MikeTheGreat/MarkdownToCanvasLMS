@@ -33,7 +33,7 @@ from .relative_dates import (
 #: The format version this tool reads and writes. Increase it (and add a
 #: migration to MIGRATIONS) whenever a change makes the tool read an existing
 #: repo file differently. See CLAUDE.md.
-FORMAT_VERSION = 13
+FORMAT_VERSION = 14
 
 SETTINGS_RELPATH = Path("course_settings") / "course_settings.toml"
 
@@ -874,6 +874,58 @@ def _migrate_12_to_13(state: UpgradeState) -> list[str]:
     return lines
 
 
+def _uses_date_placeholders(module_md: Path, snippets_dir: Path) -> bool:
+    """Whether a module file, or a snippet it includes, mentions a date
+    placeholder (a plain text search, so a mention in a code block counts)."""
+    from .convert import find_referenced_snippets
+    from .date_placeholders import PLACEHOLDER_CLASS
+
+    try:
+        text = module_md.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    if PLACEHOLDER_CLASS in text:
+        return True
+    for snippet in find_referenced_snippets(text, module_md, snippets_dir):
+        try:
+            if PLACEHOLDER_CLASS in snippet.read_text(encoding="utf-8"):
+                return True
+        except (OSError, UnicodeDecodeError):
+            continue
+    return False
+
+
+def _migrate_13_to_14(state: UpgradeState) -> list[str]:
+    """Format 14 expands date placeholders in module files; stamp the manifests.
+
+    Older files need no rewriting. The version changes because an older tool
+    would upload a module's item titles with the placeholder markup in them.
+    A module whose file (or a snippet it includes) has a placeholder loses its
+    ``last_synced`` so the next ``update`` re-syncs it: an older tool uploaded
+    it with the markup and recorded no ``dates_used`` that would make it stale.
+    Canvas modules have no ``updated_at``, so this drops no Canvas-is-newer
+    protection.
+    """
+    lines: list[str] = []
+    snippets_dir = state.repo / "snippets"
+    for manifest_path, data in state.manifests.items():
+        for key, entry in data.items():
+            if (
+                not isinstance(entry, dict)
+                or entry.get("canvas_type") != "module"
+                or "last_synced" not in entry
+                or not key.startswith("modules/")
+            ):
+                continue
+            if _uses_date_placeholders(state.repo / key, snippets_dir):
+                del entry["last_synced"]
+                lines.append(
+                    f"Mark {key} for re-sync in {manifest_path.name} (it has date placeholders)"
+                )
+        lines.append(f"Record format version 14 in {manifest_path.name}")
+    return lines
+
+
 #: Ordered migrations, keyed by the version they migrate *from*.
 MIGRATIONS: dict[int, Migration] = {
     0: _migrate_0_to_1,
@@ -889,6 +941,7 @@ MIGRATIONS: dict[int, Migration] = {
     10: _migrate_10_to_11,
     11: _migrate_11_to_12,
     12: _migrate_12_to_13,
+    13: _migrate_13_to_14,
 }
 
 

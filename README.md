@@ -2094,18 +2094,17 @@ emphasis, as in the first line above.
 | `format` | A [strftime](https://docs.python.org/3/library/datetime.html#format-codes) format. When left out, the course-wide default is used. |
 
 Only entries in `due_dates` can be quoted, and they are named by title, so
-moving or renaming files with `mv` does not affect placeholders. That includes
-[virtual entries](#virtual-entries-named-dates), which name dates that belong to
-no assignment. The default format ends in a time ("by 11:59 PM"), so give one
-without it when quoting a date such as the start of a week:
+moving or renaming files with `mv` does not affect placeholders. Renaming an
+item's title does: update the placeholders that name it. Entries removed by
+[`only_if`](#only_if-excluding-a-due_dates-entry-by-flag) for the course being
+updated cannot be quoted. [Virtual entries](#virtual-entries-named-dates), which
+name dates that belong to no assignment, can be quoted. The default format ends
+in a time ("by 11:59 PM"), so give one without it when quoting a date such as
+the start of a week:
 
 ```markdown
 Week 3 begins [Oct 12]{.replace_date_with item="Start_of_week_3" format="%A, %B %-d"}.
 ```
- Renaming an
-item's title does: update the placeholders that name it. Entries removed by
-[`only_if`](#only_if-excluding-a-due_dates-entry-by-flag) for the course being
-updated cannot be quoted.
 
 The course-wide default format is the top-level `replace_date_with_format` key
 of `course_settings.toml`, which `import` and `upgrade` write:
@@ -2130,8 +2129,22 @@ upload that file, keeps going with the others, and exits with an error at the
 end. `publish` lists every such error and builds nothing. Placeholders inside
 code (fenced blocks or `` `inline code` ``) are left alone. Placeholders are
 replaced in the bodies of pages, assignments, discussions, announcements, the
-syllabus, quizzes and question files, and in snippets those include. They are
-not replaced in frontmatter or module files.
+syllabus, quizzes and question files, in module files, and in snippets those
+include. They are not replaced in frontmatter.
+
+In a module file a placeholder can go in a heading, a text-header list line, or
+a link's text, and since a module has no `due_dates` entry of its own it must
+give `item`:
+
+```markdown
+## Week 6: [FIRST_DAY]{.replace_date_with item="Academic Skill Lab #1: Reflection" format="%A, %B %-d"}
+```
+
+Module item titles are plain text in Canvas, so the date goes in exactly as the
+format produces it (in other files it is Markdown-escaped first). `publish`
+replaces placeholders written in the module file itself, but not ones that come
+from a snippet the module file includes, because `publish` does not yet expand
+snippets in module files (a known bug).
 
 When a quoted date changes (you edit `due_dates`, run `generate-due-dates`,
 flip a flag that changes which entries apply, or change

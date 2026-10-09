@@ -336,3 +336,101 @@ def test_reupload_respects_newer_on_canvas(tmp_path, course, capsys) -> None:
     run_sync(_config(), root)
     assert "Skipping (Canvas is newer): assignments/hw1.md" in capsys.readouterr().out
     assert _manifest(root)["assignments/hw1.md"]["dates_used"][0]["text"] == "Tuesday, October 27"
+
+
+# ---------------------------------------------------------------------------
+# Module files
+# ---------------------------------------------------------------------------
+
+
+def _module_course(course: MagicMock) -> MagicMock:
+    """Make ``course`` create one module; returns it (its items are recorded)."""
+    module = MagicMock()
+    module.id = 500
+    module.get_module_items.return_value = []
+    module.create_module_item.side_effect = lambda **kw: MagicMock(id=600)
+    course.get_modules.return_value = []
+    course.create_module.return_value = module
+    course.get_module.return_value = module
+    module.edit.return_value = module
+    return module
+
+
+def _item_titles(module: MagicMock) -> list[str]:
+    return [c.kwargs["module_item"]["title"] for c in module.create_module_item.call_args_list]
+
+
+def _week(root: Path, heading: str) -> Path:
+    return _write(
+        root / "modules" / "week-1.md",
+        f"---\ntitle: Week 1\n---\n## {heading}\n\n- [HW 1](../assignments/hw1.md)\n"
+        f"- Due [x]{{.replace_date_with item=\"HW 2\" format=\"%b %-d\"}}\n",
+    )
+
+
+def test_module_placeholders_are_replaced_and_recorded(tmp_path, course) -> None:
+    root = _repo(tmp_path)
+    module = _module_course(course)
+    _week(root, 'Week 1: [A]{.replace_date_with item="HW 1" format="%A, %B %-d"} - '
+                '[B]{.replace_date_with item="Quiz 1" format="%A, %B %-d"}')
+    make_current(root)
+    assert run_sync(_config(), root) is False
+    assert _item_titles(module) == [
+        "Week 1: Tuesday, October 27 - Tuesday, October 20", "HW 1", "Due Nov 3",
+    ]
+    records = _manifest(root)["modules/week-1.md"]["dates_used"]
+    assert [r["item"] for r in records] == ["HW 1", "Quiz 1", "HW 2"]
+
+
+def test_module_dates_are_not_markdown_escaped(tmp_path, course) -> None:
+    root = _repo(tmp_path)
+    module = _module_course(course)
+    _week(root, 'Due [x]{.replace_date_with item="HW 1" format="%-m_%-d"}')
+    make_current(root)
+    run_sync(_config(), root)
+    assert _item_titles(module)[0] == "Due 10_27"
+
+
+def test_module_unresolved_placeholder_skips_module(tmp_path, course, capsys) -> None:
+    root = _repo(tmp_path)
+    module = _module_course(course)
+    _week(root, 'Week 1: [x]{.replace_date_with item="HW 9"}')
+    make_current(root)
+    assert run_sync(_config(), root) is True
+    module.create_module_item.assert_not_called()
+    out = capsys.readouterr().out
+    assert "modules/week-1.md: date placeholder" in out
+    assert "no due_dates entry named 'HW 9'" in out
+    assert "modules/week-1.md" not in _manifest(root)
+
+
+def test_module_placeholder_needs_item(tmp_path, course, capsys) -> None:
+    root = _repo(tmp_path)
+    _module_course(course)
+    _week(root, "Week 1: [x]{.replace_date_with}")
+    make_current(root)
+    assert run_sync(_config(), root) is True
+    assert "needs item=" in capsys.readouterr().out
+
+
+def test_module_due_date_change_resyncs_module(tmp_path, course, capsys) -> None:
+    root = _repo(tmp_path)
+    module = _module_course(course)
+    _week(root, 'Week 1: [x]{.replace_date_with item="HW 2" format="%b %-d"}')
+    make_current(root)
+    assert run_sync(_config(), root) is False
+    _age_everything(root)
+    module.reset_mock()
+    module.get_module_items.return_value = []
+    module.create_module_item.side_effect = lambda **kw: MagicMock(id=600)
+
+    make_current(root)
+    run_sync(_config(), root)  # nothing changed
+    module.create_module_item.assert_not_called()
+
+    _set_due_dates(root, SETTINGS.replace("2026-11-03T23:59", "2026-11-04T23:59"))
+    _age_everything(root)
+    make_current(root)
+    run_sync(_config(), root, verbose=True)
+    assert _item_titles(module)[0] == "Week 1: Nov 4"
+    assert "re-syncing: date for 'HW 2' (due_at) changed 'Nov 3' → 'Nov 4'" in capsys.readouterr().out

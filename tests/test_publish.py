@@ -906,6 +906,34 @@ def test_stage_reports_unresolved_date_placeholder(tmp_path):
     assert "no due_dates entry named 'Online'" in info["errors"][0]
 
 
+def _dated_module(repo, heading):
+    (repo / "modules").mkdir()
+    (repo / "modules" / "week-1.md").write_text(
+        f"---\ntitle: Week 1\npublished: true\n---\n## {heading}\n\n"
+        "- [HW](../assignments/hw.md)\n"
+    )
+
+
+def test_stage_replaces_date_placeholders_in_module_overview(tmp_path):
+    repo = _dated_repo(tmp_path, "Body")
+    _dated_module(repo, 'Week 1: [x]{.replace_date_with item="HW" format="%A_%b %-d"}')
+    staging = tmp_path / "staging"
+    info = publish.stage(repo, staging)
+    assert info["errors"] == []
+    text = (staging / "docs" / publish.staged_path("modules/week-1.md")).read_text()
+    assert "## Week 1: Tuesday_Oct 27\n" in text
+    assert "replace_date_with" not in text
+
+
+def test_stage_reports_unresolved_date_placeholder_in_module(tmp_path):
+    repo = _dated_repo(tmp_path, "Body")
+    _dated_module(repo, 'Week 1: [x]{.replace_date_with item="Online"}')
+    info = publish.stage(repo, tmp_path / "staging")
+    assert len(info["errors"]) == 1
+    assert "modules/week-1.md" in info["errors"][0]
+    assert "no due_dates entry named 'Online'" in info["errors"][0]
+
+
 def test_run_publish_stops_on_unresolved_date_placeholder(tmp_path, monkeypatch):
     import pytest
 

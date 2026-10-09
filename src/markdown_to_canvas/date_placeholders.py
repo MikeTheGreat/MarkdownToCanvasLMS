@@ -1,4 +1,5 @@
-"""Date placeholders: ``[TEXT]{.replace_date_with ...}`` spans in body text.
+"""Date placeholders: ``[TEXT]{.replace_date_with ...}`` spans in body text
+and module files.
 
 A placeholder is replaced, before Pandoc runs, with a date taken from the
 centralized ``due_dates`` table of ``course_settings.toml``. ``TEXT`` is only a
@@ -395,6 +396,7 @@ def expand(
     ctx: DatePlaceholderContext,
     source_desc: str,
     errors: list[str] | None,
+    escape: bool = True,
 ) -> tuple[str, list[dict[str, str]]]:
     """Replace every placeholder outside code with its date.
 
@@ -402,6 +404,9 @@ def expand(
     removed). Each failure is reported via ``warn`` as an ``ERROR:`` naming
     ``source_desc`` and the span, and the span is left in place. A span that
     could not be matched at all (brackets in its text) is reported too.
+
+    The date is Markdown-escaped unless ``escape`` is False; module files pass
+    False because their item titles reach Canvas as plain text.
     """
     records: list[dict[str, str]] = []
 
@@ -419,7 +424,7 @@ def expand(
             return m.group(0)
         if record not in records:
             records.append(record)
-        return _escape(value)
+        return _escape(value) if escape else value
 
     def _segment(segment: str) -> str:
         segment = _SPAN_RE.sub(_replace, segment)
@@ -480,9 +485,10 @@ _CONTENT_FOLDERS = ("pages", "assignments", "discussions", "announcements")
 
 def iter_sources(repo, matcher=None):
     """``(path, own_title, own_type)`` for every file whose body placeholders
-    are expanded: content files, the syllabus, quiz files and question files
-    (a quiz question's own entry is its quiz's), and question-bank question
-    files. Files and folders matched by ``matcher`` are skipped."""
+    are expanded: content files, module files, the syllabus, quiz files and
+    question files (a quiz question's own entry is its quiz's), and
+    question-bank question files. Files and folders matched by ``matcher`` are
+    skipped."""
     from pathlib import Path
 
     from .convert import parse_frontmatter
@@ -505,6 +511,10 @@ def iter_sources(repo, matcher=None):
                 continue
             ctype = folder[:-1]  # pages -> page, ...
             yield (path, *own_entry(ctype, _title(path, path.stem)))
+    modules = repo / "modules"
+    for path in sorted(modules.glob("*.md")) if modules.exists() else []:
+        if not _ignored(path):
+            yield path, None, None
     syllabus = repo / "course_settings" / "syllabus.md"
     if syllabus.exists():
         yield syllabus, None, None

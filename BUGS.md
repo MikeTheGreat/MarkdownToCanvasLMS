@@ -17,6 +17,10 @@ and the item is missing from the published site.
 so the literal `$...$` text is resolved as a local path under `modules/`.
 The sync probes and `local_orphans` already expand snippets first.
 
+The same gap affects date placeholders: `render_module_overview` expands the
+placeholders written in a module file, but one that comes from a snippet the
+module file includes stays in the staged page as raw span markup, with no error.
+
 Found on 2026-09-26 while staging the College 101 repo for the publish
 link-check change; not yet covered by a test.
 

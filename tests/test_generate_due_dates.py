@@ -142,7 +142,7 @@ def test_old_repo_is_refused(tmp_path):
     root = _repo(tmp_path)
     _write(
         root / "course_settings" / "course_settings.toml",
-        _settings_text(root).replace("format_version = 13", "format_version = 1"),
+        _settings_text(root).replace("format_version = 14", "format_version = 1"),
     )
     with pytest.raises(RepoFormatError):
         gd.plan_generation(root, _term(tmp_path))
@@ -853,6 +853,17 @@ def test_placeholder_naming_a_missing_entry_is_reported(tmp_path):
     assert len(plan.placeholder_errors) == 1
     assert "pages/schedule.md" in plan.placeholder_errors[0]
     assert "'HW 9'" in plan.placeholder_errors[0]
+
+
+def test_placeholder_in_a_module_file_is_checked(tmp_path):
+    root = _repo(tmp_path)
+    _write(
+        root / "modules" / "week-1.md",
+        '---\ntitle: Week 1\n---\n## Week 1: [x]{.replace_date_with item="HW 9"}\n',
+    )
+    make_current(root)
+    (err,) = gd.plan_generation(root, _term(tmp_path)).placeholder_errors
+    assert "modules/week-1.md" in err and "'HW 9'" in err
 
 
 def test_placeholder_naming_an_entry_the_plan_adds_is_fine(tmp_path):
