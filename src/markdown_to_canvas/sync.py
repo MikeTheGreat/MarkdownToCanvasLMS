@@ -2218,6 +2218,9 @@ def run_sync(
     # error; validate them before phase 0 so nothing is applied to Canvas first.
     pinned = load_pinned_resources(repo_path, _settings_dict)
     group_categories = load_group_categories(repo_path, _settings_dict)
+    # Loaded here, not after phase 0, so its "Flags:" line prints with the
+    # course header rather than in the middle of the rubric output.
+    course_flags = load_course_flags(repo_path, _settings_dict, config)
     if mode == "new_course":
         _print_check_pins_note(pinned, ignore_pinned, verbose)
 
@@ -2247,7 +2250,6 @@ def run_sync(
 
     assignment_group_ids = api.get_assignment_group_ids(course)
 
-    course_flags = load_course_flags(repo_path, _settings_dict, config)
     due_dates = filter_due_dates_by_flags(load_due_dates(repo_path, _settings_dict), course_flags)
     date_format = load_date_format(repo_path, _settings_dict)
 
