@@ -1,7 +1,6 @@
 """Main sync pipeline."""
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import tomllib
@@ -12,12 +11,14 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
+import click
 import yaml
 
 from . import canvas_api as capi
 from . import date_placeholders
 from . import dryrun
 from . import manifest as manifest_lib
+from . import relative_dates
 from . import repo_format
 from .conditionals import (
     apply_conditionals,
@@ -36,6 +37,7 @@ from .convert import (
     preprocess_snippets,
     warn,
 )
+from .hashing import canonical_hash as _section_hash
 from .ignore import IgnoreMatcher, load_ignore_matcher
 from .link_rewrite import extract_local_refs, infer_canvas_type, rewrite_links
 from .links import LINK_TEXT
@@ -159,6 +161,28 @@ def load_date_format(repo_path: Path, settings: dict | None = None) -> str:
         with settings_path.open("rb") as fh:
             settings = tomllib.load(fh)
     return date_placeholders.load_default_format(settings)
+
+
+def relative_due_dates_warning(repo_path: Path) -> str | None:
+    """The warning about a missing or out-of-date ``last_generated_hash``, or None.
+
+    See relative_dates.stale_warning. An absent or unreadable
+    course_settings.toml gives None: other checks report that.
+    """
+    settings_path = repo_path / "course_settings" / "course_settings.toml"
+    try:
+        with settings_path.open("rb") as fh:
+            settings = tomllib.load(fh)
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    return relative_dates.stale_warning(settings)
+
+
+def print_relative_due_dates_warning(repo_path: Path) -> None:
+    """Print relative_due_dates_warning() in yellow, when there is one."""
+    warning = relative_due_dates_warning(repo_path)
+    if warning:
+        click.secho(warning, fg="yellow")
 
 
 def load_due_dates(repo_path: Path, settings: dict | None = None) -> list[dict[str, Any]]:
@@ -1467,11 +1491,6 @@ _NON_METADATA_SETTINGS_KEYS = _SETTINGS_SECTION_KEYS + (
 )
 
 
-def _section_hash(value: Any) -> str:
-    canonical = json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
-
-
 def compute_settings_section_hashes(settings: dict[str, Any]) -> dict[str, str]:
     """Hash each course_settings.toml section for change detection.
 
@@ -2222,6 +2241,9 @@ def run_sync(
     # Loaded here, not after phase 0, so its "Flags:" line prints with the
     # course header rather than in the middle of the rubric output.
     course_flags = load_course_flags(repo_path, _settings_dict, config)
+    # Right under the header so it is seen before the run's own output; the
+    # CLI repeats it after the final status line.
+    print_relative_due_dates_warning(repo_path)
     if mode == "new_course":
         _print_check_pins_note(pinned, ignore_pinned, verbose)
 
@@ -3909,6 +3931,7 @@ def run_targeted_sync(
     _targeted_order_entries = _load_module_order(repo_path)
     _targeted_position_map = _local_module_positions(_targeted_order_entries)
     course_flags = load_course_flags(repo_path, config=config)
+    print_relative_due_dates_warning(repo_path)
     due_dates = filter_due_dates_by_flags(load_due_dates(repo_path), course_flags)
     date_format = load_date_format(repo_path)
     pinned = load_pinned_resources(repo_path)

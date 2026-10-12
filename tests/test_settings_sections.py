@@ -324,7 +324,7 @@ def test_manifest_without_section_hashes_migrates(tmp_path, mocker) -> None:
     with manifest_path.open("wb") as f:
         tomli_w.dump(
             {
-                "_repo_format": {"format_version": 14},
+                "_repo_format": {"format_version": 15},
                 "course_settings/course_settings.toml": {
                     "canvas_id": 0,
                     "canvas_type": "course_settings",
@@ -353,7 +353,7 @@ def test_mv_preserves_resolved_dates(tmp_path) -> None:
     with manifest_path.open("wb") as f:
         tomli_w.dump(
             {
-                "_repo_format": {"format_version": 14},
+                "_repo_format": {"format_version": 15},
                 "assignments/hw1.md": {
                     "canvas_id": 101,
                     "canvas_type": "assignment",
@@ -415,7 +415,7 @@ def test_version_keys_change_makes_no_course_update(tmp_path, mocker) -> None:
     settings_path = root / "course_settings" / "course_settings.toml"
     text = settings_path.read_text()
     settings_path.write_text(
-        text.replace("format_version = 14\n", 'format_version = 14\ncreated_by = "0.2.0"\n'
+        text.replace("format_version = 15\n", 'format_version = 15\ncreated_by = "0.2.0"\n'
                      'upgraded_by = ["0.2.1 on 2026-09-20: 0 -> 1"]\n', 1)
     )
     assert "upgraded_by" in settings_path.read_text()
@@ -428,7 +428,7 @@ def test_version_keys_change_makes_no_course_update(tmp_path, mocker) -> None:
 def test_version_keys_never_reach_the_metadata_payload(tmp_path, mocker) -> None:
     root = _make_repo(
         tmp_path,
-        'format_version = 14\ncreated_by = "0.2.0"\nupgraded_by = ["x"]\n'
+        'format_version = 15\ncreated_by = "0.2.0"\nupgraded_by = ["x"]\n'
         'title = "Test Course"\n',
     )
     course = _mock_canvas_course(mocker)

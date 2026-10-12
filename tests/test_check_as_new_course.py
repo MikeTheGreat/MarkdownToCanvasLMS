@@ -84,7 +84,7 @@ def test_check_as_new_course_ignores_and_preserves_stale_manifest(course_root, n
         'canvas_type = "page"\n'
         'canvas_url = "syllabus"\n'
         'last_synced = "2999-12-31T00:00:00+00:00"\n'
-        "\n[_repo_format]\nformat_version = 14\n"
+        "\n[_repo_format]\nformat_version = 15\n"
     )
     before = manifest_path.read_bytes()
 

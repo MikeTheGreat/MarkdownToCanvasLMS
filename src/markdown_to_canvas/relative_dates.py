@@ -31,6 +31,8 @@ from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .hashing import canonical_hash
+
 SECTION_KEY = "relative_due_dates"
 
 #: The relative_to types an item may use.
@@ -62,7 +64,9 @@ _TABLE_KEYS = _SETTING_KEYS + ("items", "ignore")
 #: Section-wide only: a table may not set it (it describes the term, not a schedule).
 CUTOFF_KEY = "dont_reschedule_dates_before"
 CLAMP_KEY = "clamp_lock_at_to_last_day_of_term"
-_SECTION_KEYS = _SETTING_KEYS + ("tables", CUTOFF_KEY)
+#: Section-wide only: the fingerprint `generate-due-dates` records (see fingerprint()).
+HASH_KEY = "last_generated_hash"
+_SECTION_KEYS = _SETTING_KEYS + ("tables", CUTOFF_KEY, HASH_KEY)
 _ITEM_KEYS = (
     "name", "type", "relative_to", "offsets", "unlock_offset", "lock_offset", "virtual",
 )
@@ -540,6 +544,67 @@ CLAMP_HELP = f"""\
 # Items with no lock rule are left as they are. A table may set it too.
 # {CLAMP_KEY} = true
 """
+
+# ---------------------------------------------------------------------------
+# Fingerprint (last_generated_hash)
+# ---------------------------------------------------------------------------
+
+#: The comment written above last_generated_hash when it is first added.
+HASH_COMMENT = "Written by generate-due-dates; do not edit."
+
+STALE_WARNING = (
+    f"WARNING: [{SECTION_KEY}] has changed since generate-due-dates last wrote "
+    "due_dates. Run generate-due-dates to update due_dates."
+)
+NO_HASH_WARNING = (
+    f"WARNING: [{SECTION_KEY}] has no fingerprint, so it is assumed to have changed "
+    "since generate-due-dates last wrote due_dates. Run generate-due-dates to update "
+    "due_dates and record a fingerprint."
+)
+
+
+def fingerprint(section: dict[str, Any]) -> str:
+    """The fingerprint of a parsed ``[relative_due_dates]`` section.
+
+    Covers every key and table except ``last_generated_hash`` itself; parsed
+    values only, so comments and layout do not affect it.
+    """
+    return canonical_hash({k: v for k, v in section.items() if k != HASH_KEY})
+
+
+def section_has_items(settings: dict[str, Any]) -> bool:
+    """Whether some table of ``[relative_due_dates]`` has at least one item.
+
+    Tolerates a malformed section (answers False for the parts it cannot read).
+    """
+    section = settings.get(SECTION_KEY)
+    if not isinstance(section, dict):
+        return False
+    tables = section.get("tables")
+    if not isinstance(tables, dict):
+        return False
+    return any(
+        isinstance(table, dict) and isinstance(table.get("items"), list) and table["items"]
+        for table in tables.values()
+    )
+
+
+def stale_warning(settings: dict[str, Any]) -> str | None:
+    """The warning `update` and `publish` print about ``[relative_due_dates]``, or None.
+
+    None when no table has an item (the course does not use relative dates) or
+    when ``last_generated_hash`` matches the section. Never raises.
+    """
+    if not section_has_items(settings):
+        return None
+    section = settings[SECTION_KEY]
+    recorded = section.get(HASH_KEY)
+    if recorded is None:
+        return NO_HASH_WARNING
+    if recorded != fingerprint(section):
+        return STALE_WARNING
+    return None
+
 
 _CUTOFF_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})(?: (\d{2}):(\d{2}))?$")
 

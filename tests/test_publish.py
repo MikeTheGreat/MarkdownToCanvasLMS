@@ -9,6 +9,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 from markdown_to_canvas import publish
@@ -948,3 +949,40 @@ def test_run_publish_stops_on_unresolved_date_placeholder(tmp_path, monkeypatch)
         publish.run_publish(repo, tmp_path / "site")
     assert ran == []
     assert not (tmp_path / "site").exists()
+
+
+@pytest.mark.parametrize("current", [False, True])
+def test_run_publish_warns_about_relative_due_dates(tmp_path, monkeypatch, capsys, current):
+    import shutil
+    import tomllib
+
+    from markdown_to_canvas import relative_dates as rd
+
+    repo = tmp_path / "course"
+    shutil.copytree(FIXTURES, repo)
+    settings = repo / "course_settings" / "course_settings.toml"
+    section = (
+        "\n[relative_due_dates]\n"
+        "[relative_due_dates.tables.default]\n"
+        'items = [{name = "X", relative_to = {type = "NO_DUE_DATE"}}]\n'
+    )
+    text = settings.read_text() + section
+    if current:
+        value = rd.fingerprint(tomllib.loads(text)["relative_due_dates"])
+        text = text.replace(
+            "[relative_due_dates]\n", f'[relative_due_dates]\nlast_generated_hash = "{value}"\n'
+        )
+    settings.write_text(text)
+    monkeypatch.setattr(publish.importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setattr(publish.subprocess, "run", lambda cmd, **kw: None)
+
+    publish.run_publish(repo, tmp_path / "site")
+
+    out = capsys.readouterr().out
+    if current:
+        assert "[relative_due_dates]" not in out
+    else:
+        assert out.count(rd.NO_HASH_WARNING) == 2
+        first = out.index(rd.NO_HASH_WARNING)
+        assert first < out.index("Staging site in:")
+        assert out.index("Built static site:") < out.index(rd.NO_HASH_WARNING, first + 1)

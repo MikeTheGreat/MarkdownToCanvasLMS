@@ -1396,6 +1396,14 @@ def test_course_settings_has_an_empty_default_relative_table(imported_dir: Path)
     assert "format_version" not in data["relative_due_dates"]
 
 
+def test_imported_course_gets_no_relative_due_dates_warning(imported_dir: Path) -> None:
+    # The empty default table has no items, so update and publish stay quiet
+    # (this is the check both of them print from).
+    from markdown_to_canvas.sync import relative_due_dates_warning
+
+    assert relative_due_dates_warning(imported_dir) is None
+
+
 def test_relative_due_dates_settings_are_commented_and_work_when_uncommented(
     imported_dir: Path,
 ) -> None:

@@ -20,7 +20,10 @@ class-day abbreviations `Mon` .. `Sun`), `class_on_noninstructional_days`
 `default_unlock_time` and `default_lock_time` (`"HH:MM"`, see "Default unlock
 and lock times"). It MAY also hold
 `dont_reschedule_dates_before` (see "A cutoff for rescheduling"), which applies
-to every table and which a table SHALL NOT set. It SHALL also hold
+to every table and which a table SHALL NOT set. It MAY also hold
+`last_generated_hash`, written by `generate-due-dates` (see the
+`stale-relative-due-dates-warning` capability), which is not a setting, does not
+affect any calculation, and which a table SHALL NOT set. It SHALL also hold
 named tables under `[relative_due_dates.tables.<name>]`. Each table SHALL have
 an `items` array, MAY have an `ignore` array of content titles, and MAY
 override any of the shared settings except `dont_reschedule_dates_before`. A
@@ -46,6 +49,14 @@ table's own setting wins over the shared one. No other top-level key of
 #### Scenario: Cutoff set on a table
 - **WHEN** the table `summer8` sets `dont_reschedule_dates_before = "2026-07-01"`
 - **THEN** the command fails with an unknown-key error naming `dont_reschedule_dates_before` and the table, and nothing is written
+
+#### Scenario: Fingerprint in the section
+- **WHEN** the section has `last_generated_hash`
+- **THEN** `generate-due-dates` accepts it and computes the same dates as without it
+
+#### Scenario: Fingerprint set on a table
+- **WHEN** the table `summer8` sets `last_generated_hash`
+- **THEN** the command fails with an unknown-key error naming `last_generated_hash` and the table, and nothing is written
 
 ### Requirement: Items are keyed by content title
 

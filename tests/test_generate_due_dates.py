@@ -81,6 +81,14 @@ def _run(root, term, *args, **kwargs):
     return CliRunner().invoke(main, ["generate-due-dates", str(root), "--term", str(term), *args], **kwargs)
 
 
+def _without_hash(text: str) -> str:
+    """``text`` without the last_generated_hash line and the comment above it."""
+    return "".join(
+        line for line in text.splitlines(keepends=True)
+        if not line.lstrip().startswith((rd.HASH_KEY, f"# {rd.HASH_COMMENT}"))
+    )
+
+
 def _entries(root: Path) -> dict[str, dict]:
     data = tomllib.loads(_settings_text(root))
     return {e["name"]: e for e in data["due_dates"]}
@@ -142,7 +150,7 @@ def test_old_repo_is_refused(tmp_path):
     root = _repo(tmp_path)
     _write(
         root / "course_settings" / "course_settings.toml",
-        _settings_text(root).replace("format_version = 14", "format_version = 1"),
+        _settings_text(root).replace("format_version = 15", "format_version = 1"),
     )
     with pytest.raises(RepoFormatError):
         gd.plan_generation(root, _term(tmp_path))
@@ -266,8 +274,11 @@ def test_only_the_changed_rows_differ(tmp_path):
     before = _settings_text(root)
     assert _run(root, _term(tmp_path), "--yes").exit_code == 0
     after = _settings_text(root)
+    hash_value = tomllib.loads(after)["relative_due_dates"].pop(rd.HASH_KEY)
+    assert hash_value == gd.plan_generation(root, _term(tmp_path)).fingerprint
+    after = _without_hash(after)
 
-    # everything outside the due_dates array is byte-for-byte the same
+    # everything outside the due_dates array (and the recorded hash) is byte-for-byte the same
     head, _, tail = before.partition("due_dates = [")
     _, _, tail = tail.partition("]\n")
     assert after.startswith(head) and after.endswith(tail)
@@ -738,7 +749,8 @@ def test_kept_resources_are_counted_when_nothing_else_changes(tmp_path):
     ) in result.output
     assert "Nothing to change" in result.output
     assert "\tWeek 1 Problem Set:" not in result.output  # no list without --verbose
-    assert _settings_text(root) == before
+    # Nothing else changes, but the fingerprint is recorded (see the hash tests).
+    assert _without_hash(_settings_text(root)) == before
 
 
 def test_verbose_lists_kept_resources_and_their_fields(tmp_path):
@@ -1193,3 +1205,176 @@ def test_no_clamp_line_when_the_setting_is_off(tmp_path):
     assert _change(plan, "Week 10 Discussion").values["lock_at"] == "NONE"
     _, idx = _clamp_line(plan)
     assert idx == []
+
+
+# --- last_generated_hash --------------------------------------------------------
+
+
+def _recorded(root: Path) -> str | None:
+    return tomllib.loads(_settings_text(root))["relative_due_dates"].get(rd.HASH_KEY)
+
+
+def _section_fingerprint(root: Path) -> str:
+    return rd.fingerprint(tomllib.loads(_settings_text(root))["relative_due_dates"])
+
+
+def test_confirmed_run_records_the_fingerprint_with_the_dates(tmp_path):
+    root = _repo(tmp_path)
+    result = _run(root, _term(tmp_path), "--yes")
+    assert result.exit_code == 0, result.output
+    assert _entries(root)["Week 1 Discussion"]["due_at"] == "2026-10-07T23:59:00-07:00"
+    assert _recorded(root) == _section_fingerprint(root)
+    assert "Recorded last_generated_hash" not in result.output  # only for hash-only writes
+    text = _settings_text(root)
+    assert text.count(f"# {rd.HASH_COMMENT}") == 1
+    # directly under the section header, before the subtables
+    assert f"[relative_due_dates]\n# {rd.HASH_COMMENT}\n{rd.HASH_KEY} = " in text
+
+
+def test_nothing_to_change_records_a_missing_fingerprint_without_asking(tmp_path):
+    root = _repo(tmp_path)
+    gd.apply_plan(gd.plan_generation(root, _term(tmp_path)))
+    before = _without_hash(_settings_text(root))
+    _write(root / "course_settings" / "course_settings.toml", before)  # as if never recorded
+    assert _recorded(root) is None
+    result = _run(root, _term(tmp_path))  # no terminal, no --yes
+    assert result.exit_code == 0, result.output
+    assert "Nothing to change" in result.output
+    assert (
+        "Recorded last_generated_hash in [relative_due_dates]; due_dates already matches."
+        in result.output
+    )
+    assert _recorded(root) == _section_fingerprint(root)
+    assert _without_hash(_settings_text(root)) == before  # the only change is the key
+
+
+def test_nothing_to_change_replaces_an_out_of_date_fingerprint(tmp_path):
+    root = _repo(tmp_path)
+    gd.apply_plan(gd.plan_generation(root, _term(tmp_path)))
+    # A table edit that changes no date (an explicit setting equal to the default).
+    path = root / "course_settings" / "course_settings.toml"
+    _write(path, _settings_text(root).replace(
+        'lock_relative_default = "+7 CALENDAR_DAY"\n',
+        'lock_relative_default = "+7 CALENDAR_DAY"\nclass_on_noninstructional_days = false\n',
+    ))
+    old = _recorded(root)
+    assert old != _section_fingerprint(root)
+    result = _run(root, _term(tmp_path))
+    assert result.exit_code == 0, result.output
+    assert "Recorded last_generated_hash" in result.output
+    assert _recorded(root) == _section_fingerprint(root)
+    assert _settings_text(root).count(rd.HASH_KEY) == 1  # replaced in place
+    assert _settings_text(root).count(f"# {rd.HASH_COMMENT}") == 1  # comment not repeated
+
+
+def test_nothing_to_change_with_a_current_fingerprint_writes_nothing(tmp_path):
+    root = _repo(tmp_path)
+    assert _run(root, _term(tmp_path), "--yes").exit_code == 0
+    before = (root / "course_settings" / "course_settings.toml").read_bytes()
+    result = _run(root, _term(tmp_path))
+    assert "Recorded last_generated_hash" not in result.output
+    assert (root / "course_settings" / "course_settings.toml").read_bytes() == before
+
+
+@pytest.mark.parametrize("already_generated", [False, True])
+def test_noop_never_records_the_fingerprint(tmp_path, already_generated):
+    root = _repo(tmp_path)
+    if already_generated:  # nothing to change, and no hash yet
+        gd.apply_plan(gd.plan_generation(root, _term(tmp_path)))
+        _write(root / "course_settings" / "course_settings.toml", _without_hash(_settings_text(root)))
+    before = (root / "course_settings" / "course_settings.toml").read_bytes()
+    result = _run(root, _term(tmp_path), "--noop")
+    assert result.exit_code == 0, result.output
+    assert (root / "course_settings" / "course_settings.toml").read_bytes() == before
+
+
+def test_declining_does_not_record_the_fingerprint(tmp_path, mocker):
+    mocker.patch("markdown_to_canvas.cli._stdin_is_terminal", return_value=True)
+    root = _repo(tmp_path)
+    before = (root / "course_settings" / "course_settings.toml").read_bytes()
+    assert _run(root, _term(tmp_path), input="n\n").exit_code == 0
+    assert (root / "course_settings" / "course_settings.toml").read_bytes() == before
+
+
+def test_no_terminal_failure_does_not_record_the_fingerprint(tmp_path):
+    root = _repo(tmp_path)
+    before = (root / "course_settings" / "course_settings.toml").read_bytes()
+    assert _run(root, _term(tmp_path)).exit_code == 1
+    assert (root / "course_settings" / "course_settings.toml").read_bytes() == before
+
+
+def test_out_of_term_error_does_not_record_the_fingerprint(tmp_path):
+    stale = SETTINGS.replace(
+        '    { name = "Midterm Quiz"',
+        '    { name = "Reply", relative_to = { type = "ABSOLUTE_DATE", date = "2026-05-04" } },\n'
+        '    { name = "Midterm Quiz"',
+    )
+    root = _repo(tmp_path, stale)
+    before = (root / "course_settings" / "course_settings.toml").read_bytes()
+    assert _run(root, _term(tmp_path), "--yes").exit_code == 1
+    assert (root / "course_settings" / "course_settings.toml").read_bytes() == before
+
+
+def test_placeholder_errors_write_dates_but_not_the_fingerprint(tmp_path):
+    root = _repo(tmp_path)
+    _with_page(root, '[x]{.replace_date_with item="HW 9"}')
+    result = _run(root, _term(tmp_path), "--yes")
+    assert result.exit_code != 0
+    assert "Week 1 Discussion" in _settings_text(root)
+    assert _recorded(root) is None
+
+
+def test_inconsistent_entry_writes_dates_but_not_the_fingerprint(tmp_path):
+    root, plan = _inconsistent_plan(tmp_path)
+    assert plan.errors and not plan.clean
+    gd.apply_plan(plan)
+    assert _entries(root)[PS]["due_at"] == _at("10-05")
+    assert _recorded(root) is None
+
+
+def test_inconsistent_entry_with_nothing_else_to_change_records_nothing(tmp_path):
+    root, plan = _inconsistent_plan(tmp_path)
+    gd.apply_plan(plan)  # the consistent entries are now current; Early Lab is still skipped
+    before = (root / "course_settings" / "course_settings.toml").read_bytes()
+    result = _run(root, _term(tmp_path))
+    assert result.exit_code == 1
+    assert (root / "course_settings" / "course_settings.toml").read_bytes() == before
+
+
+# --- where the key is written ---------------------------------------------------
+
+IMPLICIT_SECTION = SETTINGS.replace(
+    '[relative_due_dates]\ndays_of_week = ["Mon", "Wed"]\nlock_relative_default = "+7 CALENDAR_DAY"\n\n', ""
+).replace(
+    "[relative_due_dates.tables.default]\n",
+    '[relative_due_dates.tables.default]\ndays_of_week = ["Mon", "Wed"]\n'
+    'lock_relative_default = "+7 CALENDAR_DAY"\n',
+)
+
+
+def test_key_goes_into_an_implicit_section(tmp_path):
+    assert "\n[relative_due_dates]\n" not in IMPLICIT_SECTION
+    root = _repo(tmp_path, IMPLICIT_SECTION)
+    before = tomllib.loads(_settings_text(root))
+    result = _run(root, _term(tmp_path), "--yes")
+    assert result.exit_code == 0, result.output
+    after = tomllib.loads(_settings_text(root))
+    value = after["relative_due_dates"].pop(rd.HASH_KEY)
+    assert value == rd.fingerprint(after["relative_due_dates"])
+    assert after["relative_due_dates"] == before["relative_due_dates"]
+    text = _settings_text(root)
+    assert text.index("[relative_due_dates]\n") < text.index("[relative_due_dates.tables.default]")
+
+
+def test_key_goes_into_an_indented_section_with_subtables(tmp_path):
+    indented = SETTINGS.replace(
+        'days_of_week = ["Mon", "Wed"]\nlock_relative_default',
+        '    days_of_week = ["Mon", "Wed"]\n    lock_relative_default',
+    )
+    root = _repo(tmp_path, indented)
+    before = tomllib.loads(_settings_text(root))
+    assert _run(root, _term(tmp_path), "--yes").exit_code == 0
+    after = tomllib.loads(_settings_text(root))
+    assert after["relative_due_dates"].pop(rd.HASH_KEY)
+    assert after["relative_due_dates"] == before["relative_due_dates"]
+    assert after["course_flags"] == before["course_flags"]

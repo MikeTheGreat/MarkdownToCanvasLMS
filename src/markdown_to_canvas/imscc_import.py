@@ -755,7 +755,9 @@ def _simplify_pandoc_attrs(markdown: str) -> str:
     no bare `[text]` (which renders its brackets) or empty container is left.
     See markdown_cleanup.filter_pandoc_attrs().
     """
-    markdown = filter_pandoc_attrs(markdown, keep_id_and_style, skip_code_blocks=False)
+    markdown = filter_pandoc_attrs(
+        markdown, keep_id_and_style, skip_code_blocks=False, drop_white_text=True
+    )
     return re.sub(r"[ \t]+$", "", markdown, flags=re.MULTILINE)
 
 

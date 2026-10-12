@@ -1,6 +1,7 @@
 """Tests for relative_dates: loading, table selection, and the date arithmetic."""
 from __future__ import annotations
 
+import tomllib
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -1066,3 +1067,111 @@ def test_clamp_help_parses_as_an_empty_document():
     assert tomllib.loads(rd.CLAMP_HELP.replace(f"# {rd.CLAMP_KEY}", rd.CLAMP_KEY)) == {
         rd.CLAMP_KEY: True
     }
+
+
+# --- last_generated_hash: the fingerprint and the stale warning -------------------
+
+
+def test_hash_key_is_allowed_in_the_section_and_changes_no_date():
+    item = _item("HW", offsets=["+1 CALENDAR_DAY"])
+    assert _due(item, **{rd.HASH_KEY: "0123456789abcdef"}) == _due(item)
+
+
+def test_hash_key_on_a_table_is_an_unknown_key():
+    section = {"tables": {"summer8": {"items": [], rd.HASH_KEY: "x"}}}
+    with pytest.raises(RelativeDueDatesError, match=r"summer8.*unknown key 'last_generated_hash'"):
+        rd.load_tables({"relative_due_dates": section})
+
+
+_SECTION_TOML = """\
+[relative_due_dates]
+    days_of_week = ["Mon"]
+    {extra}
+[relative_due_dates.tables.default]
+    items = [
+        {{name = "Midterm", relative_to = {{type = "START_OF_QUARTER"}}, offsets = [{offsets}]}},
+    ]
+[relative_due_dates.tables.summer8]
+    items = [{summer}]
+"""
+
+
+def _section(extra="", offsets='"+1 CLASS_DAY"', summer="", due_dates="") -> dict:
+    text = due_dates + _SECTION_TOML.format(extra=extra, offsets=offsets, summer=summer)
+    return tomllib.loads(text)
+
+
+def _fp(**kw) -> str:
+    return rd.fingerprint(_section(**kw)[rd.SECTION_KEY])
+
+
+def test_fingerprint_ignores_comments_layout_and_order():
+    base = _fp()
+    commented = tomllib.loads(
+        "# a comment\n"
+        + _SECTION_TOML.format(extra="# another", offsets='  "+1 CLASS_DAY"  ', summer="")
+    )
+    assert rd.fingerprint(commented[rd.SECTION_KEY]) == base
+    reordered = _section()[rd.SECTION_KEY]
+    reordered = dict(reversed(list(reordered.items())))
+    assert rd.fingerprint(reordered) == base
+
+
+def test_fingerprint_ignores_the_hash_key_due_dates_and_other_keys():
+    base = _fp()
+    assert _fp(extra=f'{rd.HASH_KEY} = "whatever"') == base
+    other = _section(due_dates='title = "X"\ndue_dates = [{name = "Midterm", due_at = "NONE"}]\n')
+    assert rd.fingerprint(other[rd.SECTION_KEY]) == base
+
+
+def test_fingerprint_changes_with_offsets_unused_tables_and_the_cutoff():
+    base = _fp()
+    assert _fp(offsets='"+1 CLASS_DAY", "13:15 ABS_TIME"') != base
+    assert _fp(summer='{name = "X", relative_to = {type = "NO_DUE_DATE"}}') != base
+    assert _fp(extra=f'{rd.CUTOFF_KEY} = "2026-10-01"') != base
+    assert _fp(extra='default_lock_time = 23:59:00') != _fp(extra='default_lock_time = 23:58:00')
+
+
+def test_stale_warning_cases():
+    settings = _section()
+    section = settings[rd.SECTION_KEY]
+    assert rd.stale_warning(settings) == rd.NO_HASH_WARNING
+    section[rd.HASH_KEY] = rd.fingerprint(section)
+    assert rd.stale_warning(settings) is None
+    section["days_of_week"] = ["Tue"]
+    assert rd.stale_warning(settings) == rd.STALE_WARNING
+
+
+def test_stale_warning_wording():
+    assert rd.STALE_WARNING == (
+        "WARNING: [relative_due_dates] has changed since generate-due-dates last wrote "
+        "due_dates. Run generate-due-dates to update due_dates."
+    )
+    assert rd.NO_HASH_WARNING == (
+        "WARNING: [relative_due_dates] has no fingerprint, so it is assumed to have "
+        "changed since generate-due-dates last wrote due_dates. Run generate-due-dates "
+        "to update due_dates and record a fingerprint."
+    )
+
+
+def test_no_warning_without_items():
+    assert rd.stale_warning({}) is None
+    assert rd.stale_warning({"relative_due_dates": {"tables": {"default": {"items": []}}}}) is None
+    assert rd.stale_warning({"relative_due_dates": {}}) is None
+
+
+def test_virtual_item_counts_as_an_item():
+    settings = {"relative_due_dates": {"tables": {"default": {"items": [
+        {"name": "Start_of_week_3", "virtual": True, "relative_to": {"type": "START_OF_QUARTER"}},
+    ]}}}}
+    assert rd.stale_warning(settings) == rd.NO_HASH_WARNING
+
+
+@pytest.mark.parametrize("settings", [
+    {"relative_due_dates": "oops"},
+    {"relative_due_dates": {"tables": "oops"}},
+    {"relative_due_dates": {"tables": {"default": "oops"}}},
+    {"relative_due_dates": {"tables": {"default": {"items": "oops"}}}},
+])
+def test_malformed_section_gives_no_warning_and_does_not_raise(settings):
+    assert rd.stale_warning(settings) is None

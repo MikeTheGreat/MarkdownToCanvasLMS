@@ -45,6 +45,7 @@ from .sync import (
     load_due_dates,
     parse_frontmatter,
     parse_module_body,
+    print_relative_due_dates_warning,
 )
 
 
@@ -976,6 +977,7 @@ def run_publish(
         raise ValueError(f"Course directory not found: {course_dir}")
     repo_format.check_repo_format(repo)
     check_virtual_due_dates(load_due_dates(repo), repo, load_ignore_matcher(repo))
+    print_relative_due_dates_warning(repo)
 
     staging_dir = Path(tempfile.mkdtemp(prefix="g2c-publish-"))
     print(f"Staging site in: {staging_dir}")
@@ -996,6 +998,7 @@ def run_publish(
         out = Path(output_dir).resolve()
         _run_mkdocs(["build", "--site-dir", str(out)], staging_dir, cwd=repo)
         print(f"Built static site: {out}")
+        print_relative_due_dates_warning(repo)
     finally:
         # The staging tree is a throwaway scaffold for `mkdocs build`; the real
         # output lives in `out`. Remove it so we don't leak a temp dir per run.

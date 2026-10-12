@@ -27,13 +27,14 @@ from tomlkit.items import AoT, Array, InlineTable, Table
 from . import manifest as manifest_lib
 from . import toml_write
 from .relative_dates import (
-    CLAMP_HELP, CLAMP_KEY, CUTOFF_HELP, CUTOFF_KEY, DEFAULT_TIMES, DEFAULT_TIMES_HELP,
+    CLAMP_HELP, CLAMP_KEY, CUTOFF_HELP, CUTOFF_KEY, DEFAULT_TIMES, DEFAULT_TIMES_HELP, HASH_KEY,
+    section_has_items,
 )
 
 #: The format version this tool reads and writes. Increase it (and add a
 #: migration to MIGRATIONS) whenever a change makes the tool read an existing
 #: repo file differently. See CLAUDE.md.
-FORMAT_VERSION = 14
+FORMAT_VERSION = 15
 
 SETTINGS_RELPATH = Path("course_settings") / "course_settings.toml"
 
@@ -926,6 +927,27 @@ def _migrate_13_to_14(state: UpgradeState) -> list[str]:
     return lines
 
 
+def _migrate_14_to_15(state: UpgradeState) -> list[str]:
+    """Format 15 adds ``last_generated_hash`` to [relative_due_dates]; stamp the manifests.
+
+    Older files need no rewriting. The version changes because an older tool
+    rejects the key as unknown. No fingerprint is written: only
+    `generate-due-dates` can vouch that due_dates matches the section, so a
+    repo whose tables have items gets `update`'s "no fingerprint" warning until
+    it runs.
+    """
+    lines: list[str] = []
+    if settings_path(state.repo).exists() and section_has_items(state.settings_doc.unwrap()):
+        lines.append(
+            f"NOTICE: run `generate-due-dates` to record {HASH_KEY} in "
+            f"[{RELATIVE_DUE_DATES_KEY}]; until then `update` and `publish` warn that "
+            f"it is missing"
+        )
+    for manifest_path in state.manifests:
+        lines.append(f"Record format version 15 in {manifest_path.name}")
+    return lines
+
+
 #: Ordered migrations, keyed by the version they migrate *from*.
 MIGRATIONS: dict[int, Migration] = {
     0: _migrate_0_to_1,
@@ -942,6 +964,7 @@ MIGRATIONS: dict[int, Migration] = {
     11: _migrate_11_to_12,
     12: _migrate_12_to_13,
     13: _migrate_13_to_14,
+    14: _migrate_14_to_15,
 }
 
 

@@ -84,10 +84,25 @@ class GenerationPlan:
     placeholder_errors: list[str] = field(default_factory=list)
     #: the term's last day at 23:59, the limit clamped lock dates are set to
     term_end: datetime | None = None
+    #: the fingerprint of [relative_due_dates] as read for this plan
+    fingerprint: str = ""
+    #: the last_generated_hash the file had, or None when it had none
+    recorded_hash: str | None = None
 
     @property
     def has_changes(self) -> bool:
         return any(c.kind in ("added", "changed") for c in self.changes)
+
+    @property
+    def clean(self) -> bool:
+        """No skipped entries and no unresolved placeholders: writing the plan
+        brings due_dates in line with the section, so the fingerprint may be
+        recorded."""
+        return not self.errors and not self.placeholder_errors
+
+    @property
+    def hash_current(self) -> bool:
+        return self.recorded_hash == self.fingerprint
 
     @property
     def not_rescheduled(self) -> list[EntryChange]:
@@ -452,6 +467,7 @@ def plan_generation(repo: Path, term_path: Path, table_name: str | None = None) 
         changes.append(change)
 
     warnings, notices = title_warnings(table, due_dates, content)
+    section = settings.get(rd.SECTION_KEY, {})
     return GenerationPlan(
         table_name=table.name,
         changes=changes,
@@ -463,6 +479,8 @@ def plan_generation(repo: Path, term_path: Path, table_name: str | None = None) 
         errors=errors,
         placeholder_errors=_placeholder_errors(repo, settings, due_dates, changes),
         term_end=datetime.combine(term.last_day, rd.TERM_END_TIME, tzinfo=term.time_zone),
+        fingerprint=rd.fingerprint(section),
+        recorded_hash=section.get(rd.HASH_KEY),
     )
 
 
@@ -580,15 +598,63 @@ def _first_table_position(doc: tomlkit.TOMLDocument) -> int:
     return len(doc.body)
 
 
-def apply_plan(plan: GenerationPlan) -> None:
-    """Write the plan's added and changed entries into ``due_dates``.
+def _with_hash(text: str, value: str) -> str:
+    """``text`` with ``last_generated_hash = value`` at the top level of
+    ``[relative_due_dates]``.
 
-    Everything else in course_settings.toml is left as it is. Raises
-    RelativeDueDatesError if the file changed since the plan was made.
+    An existing key is replaced in place. A new one goes directly under the
+    section header, with HASH_COMMENT above it, text-level like migration
+    8 -> 9 so it cannot land inside a subtable; a section that exists only
+    through its subtables gets a header. Raises RelativeDueDatesError if the
+    parsed result is anything other than the old parse plus the key.
     """
+    doc = tomlkit.parse(text)
+    section = doc.get(rd.SECTION_KEY)
+    if section is not None and rd.HASH_KEY in section:
+        section[rd.HASH_KEY] = value
+        new_text = tomlkit.dumps(doc)
+    else:
+        line = f"# {rd.HASH_COMMENT}\n{rd.HASH_KEY} = {tomlkit.string(value).as_string()}\n"
+        new_text, _header_added = repo_format._insert_in_relative_section(text, line)
+    expected = tomllib.loads(text)
+    expected.setdefault(rd.SECTION_KEY, {})[rd.HASH_KEY] = value
+    try:
+        same = tomllib.loads(new_text) == expected
+    except tomllib.TOMLDecodeError:
+        same = False
+    if not same:
+        raise RelativeDueDatesError(
+            f"could not add {rd.HASH_KEY} to [{rd.SECTION_KEY}] (unusual layout); "
+            "nothing was written"
+        )
+    return new_text
+
+
+def _check_unchanged(plan: GenerationPlan) -> None:
     path = plan.settings_path
     if path.read_text(encoding="utf-8") != plan.source_text:
         raise RelativeDueDatesError(f"{path} changed while generating; nothing was written")
+
+
+def record_fingerprint(plan: GenerationPlan) -> None:
+    """Write only ``last_generated_hash`` (a clean plan with nothing to change).
+
+    Raises RelativeDueDatesError if the file changed since the plan was made.
+    """
+    _check_unchanged(plan)
+    new_text = _with_hash(plan.source_text, plan.fingerprint)
+    plan.settings_path.write_text(new_text, encoding="utf-8")
+
+
+def apply_plan(plan: GenerationPlan) -> None:
+    """Write the plan's added and changed entries into ``due_dates``.
+
+    When the plan is clean, ``last_generated_hash`` is written in the same
+    write. Everything else in course_settings.toml is left as it is. Raises
+    RelativeDueDatesError if the file changed since the plan was made.
+    """
+    path = plan.settings_path
+    _check_unchanged(plan)
     doc = tomlkit.parse(plan.source_text)
     due_dates = doc.get("due_dates")
 
@@ -615,4 +681,7 @@ def apply_plan(plan: GenerationPlan) -> None:
                 due_dates.append(toml_write._inline_value(row))
         else:
             raise RelativeDueDatesError(f"{path}: due_dates must be an array of tables")
-    path.write_text(tomlkit.dumps(doc), encoding="utf-8")
+    new_text = tomlkit.dumps(doc)
+    if plan.clean:
+        new_text = _with_hash(new_text, plan.fingerprint)
+    path.write_text(new_text, encoding="utf-8")

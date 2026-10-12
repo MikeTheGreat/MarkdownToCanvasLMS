@@ -48,7 +48,9 @@ from .config import Config, find_repo_root
 from .config import load as load_config
 from .course_guard import CourseGuardError, check_course
 from .cp import CpError, run_cp
-from .generate_due_dates import apply_plan, check_term_not_over, plan_generation, render_plan
+from .generate_due_dates import (
+    apply_plan, check_term_not_over, plan_generation, record_fingerprint, render_plan,
+)
 from .imscc_import import run_import
 from .ignore import load_ignore_matcher
 from .local_orphans import find_local_orphans
@@ -60,8 +62,8 @@ from .publish import run_publish
 from .relative_dates import RelativeDueDatesError
 from .repo_format import RepoFormatError, run_upgrade
 from .sync import (
-    check_virtual_due_dates, collect_title_items, load_due_dates, run_prune, run_sync,
-    run_targeted_sync,
+    check_virtual_due_dates, collect_title_items, load_due_dates,
+    print_relative_due_dates_warning, run_prune, run_sync, run_targeted_sync,
 )
 from .unrecorded_moves import Commands
 
@@ -667,6 +669,9 @@ def fix_markdown_cmd(course_dir: str | None, apply: bool) -> None:
     \b
     - removes Word Online attribute blocks ({.EOP .SCXW123 ccp-props=...}),
       keeping any id and style, and unwraps spans left with no attributes;
+    - removes a white text colour from a style with no background, unless
+      the text sits inside a span, heading or fenced div that has one (white
+      text on Canvas's white page is invisible);
     - removes stray brackets in paragraphs showing the "][" seams earlier
       imports left ("C[heck out our ][Finding Data](url)[ and ]"); brackets
       in inline code, links, images, footnotes, task boxes, reference links
@@ -685,6 +690,10 @@ def fix_markdown_cmd(course_dir: str | None, apply: bool) -> None:
       targets, HTML tags and $math$ (they then render as curly quotes).
 
     import applies the same repairs to newly imported content.
+
+    It also lists styled text whose colour against its background is below
+    WCAG AA contrast (4.5:1; 3:1 in headings), checked on the cleaned files.
+    It does not change these.
 
     Without --apply this lists every changed line; --apply writes the files.
     Run update afterwards to upload the changes.
@@ -715,6 +724,18 @@ def fix_markdown_cmd(course_dir: str | None, apply: bool) -> None:
         click.echo()
     for path, err in plan.errors:
         click.secho(f"Could not read {path.relative_to(repo)}: {err}", fg="yellow")
+    if plan.contrast:
+        click.secho(
+            f"Low-contrast text ({len(plan.contrast)}, below WCAG AA; not changed):",
+            fg="yellow",
+            bold=True,
+        )
+        for path, w in plan.contrast:
+            click.echo(
+                f"  {path.relative_to(repo)}:{w.line}  {w.ratio:.1f}:1, needs "
+                f"{w.required:g}:1  {w.color} on {w.background}  \"{w.text}\""
+            )
+        click.echo()
 
     n = len(plan.fixes)
     if not n:
@@ -1123,6 +1144,11 @@ def generate_due_dates_cmd(
     until you confirm; --noop shows them and stops. The command never contacts
     Canvas: run `update` afterwards to send the dates.
 
+    A run that finishes without errors also records last_generated_hash, a
+    fingerprint of [relative_due_dates], in that section; with nothing else to
+    change it writes only that, without asking. `update` and `publish` warn
+    when the section no longer matches it, or when it is missing.
+
     COURSE_DIR is the course content directory: a path or a registered course
     key. If omitted, the enclosing course is found by walking up from the
     current directory.
@@ -1176,6 +1202,16 @@ def _write_generated_dates(plan, noop: bool, assume_yes: bool) -> None:
             "Nothing to change: every date already matches"
             + (" or was kept." if plan.not_rescheduled else ".")
         )
+        # due_dates already matches the section: record that, without asking.
+        if not noop and plan.clean and not plan.hash_current:
+            try:
+                record_fingerprint(plan)
+            except RelativeDueDatesError as e:
+                die(str(e))
+            click.echo(
+                "Recorded last_generated_hash in [relative_due_dates]; "
+                "due_dates already matches."
+            )
         return
     if noop:
         click.echo("--noop: no file was written.")
@@ -1433,8 +1469,10 @@ def update(
             click.secho(
                 "Check complete; please fix the problems listed above.", fg="yellow"
             )
+            print_relative_due_dates_warning(repo)
             sys.exit(1)
         click.secho("Check successful — no problems found (nothing uploaded)", fg="green")
+        print_relative_due_dates_warning(repo)
         return
 
     course = get_course(cfg)
@@ -1470,8 +1508,10 @@ def update(
                 "Noop complete; please check the problems listed above. Nothing was changed.",
                 fg="yellow",
             )
+            print_relative_due_dates_warning(repo)
             sys.exit(1)
         click.secho("Noop complete; no problems found. Nothing was changed.", fg="green")
+        print_relative_due_dates_warning(repo)
         return
     if had_errors:
         click.secho(
@@ -1479,3 +1519,4 @@ def update(
         )
     else:
         click.secho("Update successful", fg="green")
+    print_relative_due_dates_warning(repo)

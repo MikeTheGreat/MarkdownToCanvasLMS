@@ -126,6 +126,7 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
     - [Offsets](#offsets)
     - [Virtual dates (`virtual = true`)](#virtual-dates-virtual--true)
     - [Running it](#running-it)
+    - [Noticing an edited table (`last_generated_hash`)](#noticing-an-edited-table-last_generated_hash)
     - [Not rescheduling past dates (`dont_reschedule_dates_before`)](#not-rescheduling-past-dates-dont_reschedule_dates_before)
   - [Resolving external-tool labels (`create-tool-aliases`)](#resolving-external-tool-labels-create-tool-aliases)
     - [Workflow](#workflow)
@@ -1188,6 +1189,17 @@ below). What it changes:
     `[text]{style="background-color: #ecff00;"}`
 
   Import removes the same settings.
+- **White text with no background.** A white text colour (`color: #ffffff`,
+  `#fff`, `white`, `rgb(255, 255, 255)`) is removed from a style that has no
+  `background-color` (or `background`), because white text on Canvas's white
+  page is invisible. It is kept when the text sits inside a span, heading or
+  `:::` div that has a background, so white text in a coloured heading banner
+  stays white:
+  - `[**Tasks**]{style="color: #ffffff;"}` → `**Tasks**`
+  - `## [Telephone]{style="color: #ffffff;"} {#telephone style="background-color: #008fc5;"}`
+    is unchanged
+
+  Import removes white text the same way.
 - **Stray brackets.** In a paragraph that shows the `][` seams above, brackets
   that are not part of a link, image, styled span, footnote, task box
   (`- [ ]`) or reference link are removed. Paragraphs without such a seam are
@@ -1222,6 +1234,25 @@ below). What it changes:
 - **Horizontal rules.** The 72-dash lines pandoc writes for a horizontal rule
   become `---`. A dash line directly under text (a heading underline) or
   touching a table is left alone.
+
+After the changes, `fix-markdown` lists styled text whose colour against its
+background is below the WCAG AA contrast minimum (4.5:1 for ordinary text,
+3:1 for headings). It does not change these; pick a darker banner or text
+colour by hand. The check uses the cleaned files, with and without `--apply`,
+so text it is about to fix is not listed:
+
+```text
+Low-contrast text (2, below WCAG AA; not changed):
+  quizzes/self-care/questions/part-1.md:19  1.1:1, needs 3:1  #ffffff on #faf8f6  "Reflect"
+  pages/welcome.md:12  3.5:1, needs 4.5:1  #888888 on white page  "Note"
+```
+
+Only spans, headings and `:::` divs that set a text colour or a background
+are checked. A colour inherited from an enclosing span, heading or div is
+used; where nothing sets one, the text is Canvas's text colour (`#2d3b45`) on a
+white page. Colours the check cannot read (`hsl()`, translucent `rgba()`,
+named colours beyond the basic ones, background images) are skipped, as are
+links and images.
 
 A few things are still left for hand editing, for example a bold heading whose
 closing `**` got separated from it by a literal `\*`. The dry-run output is a
@@ -3747,6 +3778,15 @@ with the line under it, and a file with no section gets a `NOTICE:` and no
 change. Every manifest records version 13. The version changes because an older
 tool stops with "unknown key" once the setting is turned on.
 
+Migration 14 to 15 goes with
+[`last_generated_hash`](#noticing-an-edited-table-last_generated_hash). It
+changes no file content and does not record a fingerprint, because only
+`generate-due-dates` can tell whether `due_dates` matches the table. Every
+manifest records version 15. When a table in `[relative_due_dates]` has items,
+it prints a `NOTICE:` saying to run `generate-due-dates`; until you do, `update`
+and `publish` warn that the fingerprint is missing. The version changes because
+an older tool stops with "unknown key" on `last_generated_hash`.
+
 `upgrade` also checks that `tab_configuration` is a top-level key. The tool
 only reads it there, so when it is nested under a section
 (`[default_post_policy]`, for example) `upgrade` moves it to the top level,
@@ -3952,6 +3992,8 @@ default_lock_time = "23:59"
 clamp_lock_at_to_last_day_of_term = true   # default false; see "Lock dates and the end of the term"
 # Section-wide only (a table may not set it); see "Not rescheduling past dates":
 dont_reschedule_dates_before = "2026-10-21"
+# Written by generate-due-dates; do not edit. See "Noticing an edited table":
+last_generated_hash = "27353b3807b597fe"
 
 [relative_due_dates.tables.quarter11]      # one table per schedule
 ignore = ["Week 10 Problem Set"]           # optional: titles that don't exist in this schedule
@@ -4133,7 +4175,9 @@ Write these dates into due_dates? [y/N]:
 Nothing is written until you answer yes. With `--noop` it shows the changes and
 stops. Without a terminal (a script) it refuses unless you pass `--yes`, which
 skips the question but still prints the changes. If nothing would change it says
-so and does not ask.
+so and does not ask. A run that finishes without errors also records
+`last_generated_hash` (see
+[Noticing an edited table](#noticing-an-edited-table-last_generated_hash)).
 
 For each item of the table, an existing `due_dates` entry with the same `name`
 (and `type`, when both give one) gets its `due_at`, `unlock_at` and `lock_at`
@@ -4222,6 +4266,69 @@ holidays) to save as `course_settings/term_dates.toml`. The script needs only
 [`uv`](https://docs.astral.sh/uv/) (it declares its one dependency inline), so
 you can copy it anywhere on your `PATH`, run `chmod +x` on it, and run it by
 name.
+
+### Noticing an edited table (`last_generated_hash`)
+
+`update` and `publish` read only `due_dates`. If you edit `[relative_due_dates]`
+and forget to run `generate-due-dates`, they keep using the old dates. To catch
+this, `generate-due-dates` records a fingerprint of the section when it brings
+`due_dates` in line with it:
+
+```toml
+[relative_due_dates]
+# Written by generate-due-dates; do not edit.
+last_generated_hash = "27353b3807b597fe"
+```
+
+The fingerprint covers every setting and every table in `[relative_due_dates]`
+(tables you did not generate from and `dont_reschedule_dates_before` included),
+except `last_generated_hash` itself. Comments and formatting do not affect it.
+`due_dates` and the term file are not part of it.
+
+`generate-due-dates` writes it on every run that finishes without errors:
+
+* When you confirm the changes, it is written together with the dates.
+* When nothing would change, and the fingerprint is missing or out of date, it
+  writes only `last_generated_hash`, without asking (also without a terminal or
+  `--yes`), and prints
+  `Recorded last_generated_hash in [relative_due_dates]; due_dates already matches.`
+
+It is not written with `--noop`, when you answer no, or when the run ends with an
+error: a due date outside the term, an entry left unchanged because of
+[`dont_reschedule_dates_before`](#not-rescheduling-past-dates-dont_reschedule_dates_before),
+or a date placeholder that does not resolve. In the last two cases the other
+dates are still written, but the fingerprint is not, so the warning below stays
+until the problem is fixed and the command is run again.
+
+`update` (including `-t`/`-s`, `--noop` and `--check-as-new-course`) and
+`publish` compare the fingerprint with the section. When they differ they print,
+in yellow:
+
+```text
+WARNING: [relative_due_dates] has changed since generate-due-dates last wrote due_dates. Run generate-due-dates to update due_dates.
+```
+
+When there is no `last_generated_hash` at all they print:
+
+```text
+WARNING: [relative_due_dates] has no fingerprint, so it is assumed to have changed since generate-due-dates last wrote due_dates. Run generate-due-dates to update due_dates and record a fingerprint.
+```
+
+The warning is printed twice: near the start (for `update`, right under the
+course header and any `Flags:` lines; for `publish`, before staging) and again
+after the command's last line ("Update successful" and the like, or "Built
+static site: ..."). It does not stop the command or change its exit status, and
+the dates in `due_dates` are used as they are. Nothing is printed when no table
+in the section has an item, so a course that does not use relative due dates
+(such as one with only the empty table `import` writes) never sees it.
+
+An edit that changes no date, such as one to a table you do not use or to the
+cutoff, still triggers the warning. Running `generate-due-dates` then finds
+nothing to change, records the new fingerprint, and the warning goes away.
+
+Two kinds of change are not noticed: edits to the term file (a new holiday, a
+different `last_day`), and hand edits to `due_dates`. Run `generate-due-dates`
+yourself after editing the term file.
 
 ### Not rescheduling past dates (`dont_reschedule_dates_before`)
 

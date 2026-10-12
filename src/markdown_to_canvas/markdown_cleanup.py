@@ -89,9 +89,12 @@ def _is_noise_declaration(decl: str) -> bool:
     return prop == "color" and bool(_BLACK_RE.match(value))
 
 
-def _clean_style_token(token: str) -> str | None:
-    """Remove noise declarations from a ``style=`` token; None if none are
-    left. Other tokens are returned unchanged."""
+def _clean_style_token(
+    token: str, is_removed: Callable[[str], bool] = _is_noise_declaration
+) -> str | None:
+    """Remove the declarations is_removed picks (by default the noise ones)
+    from a ``style=`` token; None if none are left. Other tokens are returned
+    unchanged."""
     key, _, value = token.partition("=")
     if key.lower() != "style":
         return token
@@ -99,7 +102,7 @@ def _clean_style_token(token: str) -> str | None:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
         quote, value = value[0], value[1:-1]
     decls = [d.strip() for d in value.split(";") if d.strip()]
-    kept = [d for d in decls if not _is_noise_declaration(d)]
+    kept = [d for d in decls if not is_removed(d)]
     if len(kept) == len(decls):
         return token
     if not kept:
@@ -117,6 +120,131 @@ def drop_noise_styles(tokens: list[str]) -> list[str]:
         cleaned = _clean_style_token(t)
         if cleaned is not None:
             out.append(cleaned)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Text colour: white text without a background, and contrast
+# ---------------------------------------------------------------------------
+
+# Canvas's body text colour, assumed where nothing sets one;
+# var(--ic-brand-font-color-dark) is the theme variable that holds it.
+CANVAS_TEXT_RGB = (0x2D, 0x3B, 0x45)
+PAGE_BACKGROUND_RGB = (0xFF, 0xFF, 0xFF)
+_WHITE_RGB = (0xFF, 0xFF, 0xFF)
+
+_NAMED_COLORS = {
+    "black": (0, 0, 0),
+    "white": (255, 255, 255),
+    "red": (255, 0, 0),
+    "green": (0, 128, 0),
+    "blue": (0, 0, 255),
+    "yellow": (255, 255, 0),
+    "orange": (255, 165, 0),
+    "purple": (128, 0, 128),
+    "gray": (128, 128, 128),
+    "grey": (128, 128, 128),
+    "silver": (192, 192, 192),
+    "navy": (0, 0, 128),
+    "maroon": (128, 0, 0),
+    "teal": (0, 128, 128),
+    "olive": (128, 128, 0),
+    "lime": (0, 255, 0),
+    "aqua": (0, 255, 255),
+    "cyan": (0, 255, 255),
+    "fuchsia": (255, 0, 255),
+    "magenta": (255, 0, 255),
+}
+_HEX_COLOR_RE = re.compile(r"^#([0-9a-f]{3}|[0-9a-f]{6})$")
+_RGB_COLOR_RE = re.compile(
+    r"^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,\s*([\d.]+%?)\s*)?\)$"
+)
+# Background values that paint nothing.
+_NO_BACKGROUND = {"", "transparent", "none", "inherit", "initial", "unset"}
+
+
+def parse_css_color(value: str) -> tuple[int, int, int] | None:
+    """(r, g, b) for a hex, rgb()/rgba() (opaque only), basic named colour or
+    Canvas's text-colour variable; None for anything else."""
+    v = value.strip().lower()
+    v = re.sub(r"\s*!important$", "", v)
+    if v.startswith("var(--ic-brand-font-color-dark"):
+        return CANVAS_TEXT_RGB
+    if v in _NAMED_COLORS:
+        return _NAMED_COLORS[v]
+    m = _HEX_COLOR_RE.match(v)
+    if m:
+        h = m.group(1)
+        if len(h) == 3:
+            h = "".join(c * 2 for c in h)
+        return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+    m = _RGB_COLOR_RE.match(v)
+    if m:
+        alpha = m.group(4)
+        if alpha is not None and alpha not in ("1", "1.0", "100%"):
+            return None
+        rgb = tuple(int(m.group(i)) for i in (1, 2, 3))
+        return rgb if all(c <= 255 for c in rgb) else None  # type: ignore[return-value]
+    return None
+
+
+def style_declarations(tokens: list[str]) -> dict[str, str]:
+    """Property → value for the ``style=`` tokens among tokens (later wins)."""
+    decls: dict[str, str] = {}
+    for token in tokens:
+        key, _, value = token.partition("=")
+        if key.lower() != "style":
+            continue
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        for decl in value.split(";"):
+            prop, sep, val = decl.partition(":")
+            if sep:
+                decls[prop.strip().lower()] = val.strip()
+    return decls
+
+
+def _background_value(decls: dict[str, str]) -> str | None:
+    for prop in ("background-color", "background"):
+        value = decls.get(prop)
+        if value is not None and value.strip().lower() not in _NO_BACKGROUND:
+            return value
+    return None
+
+
+def _parse_background(value: str) -> tuple[int, int, int] | None:
+    """The colour in a background value; the ``background`` shorthand may hold
+    other words (an image, a position), so each word is tried."""
+    rgb = parse_css_color(value)
+    if rgb is not None:
+        return rgb
+    for word in re.findall(r"rgba?\([^)]*\)|\S+", value):
+        rgb = parse_css_color(word)
+        if rgb is not None:
+            return rgb
+    return None
+
+
+def _is_white_declaration(decl: str) -> bool:
+    prop, _, value = decl.partition(":")
+    return prop.strip().lower() == "color" and parse_css_color(value) == _WHITE_RGB
+
+
+def drop_unbacked_white(tokens: list[str]) -> list[str]:
+    """Remove a white text colour from a style that sets no background.
+
+    White text on Canvas's white page is invisible. Callers apply this only to
+    blocks that do not sit inside a span, heading or fenced div with a
+    background (see `filter_pandoc_attrs`), where white is the banner text.
+    """
+    out = []
+    for t in tokens:
+        if _background_value(style_declarations([t])) is None:
+            cleaned = _clean_style_token(t, _is_white_declaration)
+            if cleaned is None:
+                continue
+            t = cleaned
+        out.append(t)
     return out
 
 
@@ -243,8 +371,15 @@ def _is_attr_context(text: str, brace_pos: int) -> bool:
     return bool(prev) and prev[-1] in ")]`"
 
 
-def _filter_blocks(text: str, policy: TokenPolicy) -> str:
+def _filter_blocks(
+    text: str,
+    policy: TokenPolicy,
+    bg_ranges: list[tuple[int, int]] | None = None,
+) -> str:
     """Rewrite every attribute block in text by policy.
+
+    With bg_ranges (the spans of text that sit on a background), a block
+    outside all of them first loses any white text colour (drop_unbacked_white).
 
     A span (``[text]{...}``) whose block is emptied is unwrapped to ``text``;
     leaving ``[text]`` behind would render the brackets.
@@ -259,7 +394,10 @@ def _filter_blocks(text: str, policy: TokenPolicy) -> str:
         tokens = attr_tokens(content)
         if tokens is None:
             continue
-        kept = policy(tokens)
+        if bg_ranges is not None and not any(s <= brace_pos < e for s, e in bg_ranges):
+            kept = policy(drop_unbacked_white(tokens))
+        else:
+            kept = policy(tokens)
         if kept == tokens:
             continue
         if kept:
@@ -280,31 +418,25 @@ def _filter_blocks(text: str, policy: TokenPolicy) -> str:
     return _apply_edits(text, edits)
 
 
-def filter_pandoc_attrs(
-    markdown: str, policy: TokenPolicy, skip_code_blocks: bool = True
-) -> str:
-    """Rewrite pandoc's curly-brace attribute blocks according to policy.
-
-    Pandoc attaches ``{#id .class key="val"}`` blocks to headings, links,
-    images, spans, code and fenced divs (``:::``). policy maps a block's tokens
-    to the ones to keep. A span or fenced div left with no attributes is
-    unwrapped (a bare ``[text]`` renders its brackets; a bare div is a
-    meaningless container). With skip_code_blocks, fenced code blocks are left
-    untouched.
-    """
-    lines = markdown.split("\n")
+def _fenced_code_lines(markdown: str) -> set[int]:
+    """Indices of the lines that belong to fenced code blocks."""
     fenced_lines: set[int] = set()
-    if skip_code_blocks:
-        idx = 0
-        for is_fenced, seg in split_fenced_segments(markdown):
-            n = seg.count("\n")
-            if is_fenced:
-                fenced_lines.update(range(idx, idx + n + (0 if seg.endswith("\n") else 1)))
-            idx += n
+    idx = 0
+    for is_fenced, seg in split_fenced_segments(markdown):
+        n = seg.count("\n")
+        if is_fenced:
+            fenced_lines.update(range(idx, idx + n + (0 if seg.endswith("\n") else 1)))
+        idx += n
+    return fenced_lines
 
-    # Only fenced-div opens carry attributes (pandoc writes an attribute-less
-    # div as raw HTML), so pairing opens (trailing content) with closes (none)
-    # is unambiguous.
+
+def _fenced_div_pairs(lines: list[str], fenced_lines: set[int]) -> dict[int, int]:
+    """Open line → close line of every fenced div (``:::``).
+
+    Only fenced-div opens carry attributes (pandoc writes an attribute-less
+    div as raw HTML), so pairing opens (trailing content) with closes (none)
+    is unambiguous.
+    """
     stack: list[int] = []
     pairs: dict[int, int] = {}
     for i, line in enumerate(lines):
@@ -317,11 +449,67 @@ def filter_pandoc_attrs(
             stack.append(i)
         elif stack:
             pairs[stack.pop()] = i
+    return pairs
 
-    if skip_code_blocks:
-        markdown = apply_outside_fences(markdown, lambda s: _filter_blocks(s, policy))
-    else:
-        markdown = _filter_blocks(markdown, policy)
+
+def _plain_segments(markdown: str, skip_code_blocks: bool) -> list[tuple[int, bool, str]]:
+    """(offset, is_fenced, segment) for the whole text, or for each stretch
+    between fenced code blocks and each code block."""
+    if not skip_code_blocks:
+        return [(0, False, markdown)]
+    out = []
+    offset = 0
+    for is_fenced, seg in split_fenced_segments(markdown):
+        out.append((offset, is_fenced, seg))
+        offset += len(seg)
+    return out
+
+
+def filter_pandoc_attrs(
+    markdown: str,
+    policy: TokenPolicy,
+    skip_code_blocks: bool = True,
+    drop_white_text: bool = False,
+) -> str:
+    """Rewrite pandoc's curly-brace attribute blocks according to policy.
+
+    Pandoc attaches ``{#id .class key="val"}`` blocks to headings, links,
+    images, spans, code and fenced divs (``:::``). policy maps a block's tokens
+    to the ones to keep. A span or fenced div left with no attributes is
+    unwrapped (a bare ``[text]`` renders its brackets; a bare div is a
+    meaningless container). With skip_code_blocks, fenced code blocks are left
+    untouched.
+
+    With drop_white_text, a white text colour is removed from every block that
+    has no background of its own and is not inside a span, heading or fenced
+    div that has one (white heading-banner text is kept).
+    """
+    lines = markdown.split("\n")
+    fenced_lines = _fenced_code_lines(markdown) if skip_code_blocks else set()
+    pairs = _fenced_div_pairs(lines, fenced_lines)
+
+    bg_ranges = None
+    if drop_white_text:
+        bg_ranges = [
+            (el.start, el.end)
+            for el in styled_elements(markdown, skip_code_blocks)
+            if _background_value(el.decls) is not None
+        ]
+
+    parts = []
+    for offset, is_fenced, seg in _plain_segments(markdown, skip_code_blocks):
+        if is_fenced:
+            parts.append(seg)
+            continue
+        seg_ranges = None
+        if bg_ranges is not None:
+            seg_ranges = [
+                (s - offset, e - offset)
+                for s, e in bg_ranges
+                if s < offset + len(seg) and e > offset
+            ]
+        parts.append(_filter_blocks(seg, policy, seg_ranges))
+    markdown = "".join(parts)
 
     lines = markdown.split("\n")
     for i, line in enumerate(lines):
@@ -338,6 +526,186 @@ def filter_pandoc_attrs(
         for idx in (open_idx, close_idx)
     }
     return "\n".join(line for i, line in enumerate(lines) if i not in to_remove)
+
+
+# ---------------------------------------------------------------------------
+# Styled spans, headings and divs; contrast
+# ---------------------------------------------------------------------------
+
+_HEADING_LINE_RE = re.compile(r"^[ ]{0,3}#{1,6}[ \t]")
+
+
+@dataclass
+class StyledElement:
+    """A span, ATX heading or fenced div whose attribute block has a style.
+
+    start/end is the stretch of the text it covers: the span from ``[`` to
+    its closing ``}``, the heading's whole line, the div from its opening
+    ``:::`` line through its closing one.
+    """
+
+    start: int
+    end: int
+    decls: dict[str, str]
+    heading: bool
+    text: str
+
+
+def styled_elements(markdown: str, skip_code_blocks: bool = True) -> list[StyledElement]:
+    """Every styled span, heading and fenced div, in document order. Links,
+    images and code are not included; inline code and (with
+    skip_code_blocks) fenced code blocks are skipped."""
+    found: list[StyledElement] = []
+    for offset, is_fenced, seg in _plain_segments(markdown, skip_code_blocks):
+        if is_fenced:
+            continue
+        mask = _code_mask(seg)
+        for m in ATTR_BLOCK_RE.finditer(seg):
+            ws, content = m.group(1), m.group(2)
+            brace_pos = m.start() + len(ws)
+            if mask[brace_pos] or not _is_attr_context(seg, brace_pos):
+                continue
+            tokens = attr_tokens(content)
+            if tokens is None:
+                continue
+            decls = style_declarations(tokens)
+            if not decls:
+                continue
+            line_start = seg.rfind("\n", 0, brace_pos) + 1
+            line_end = seg.find("\n", brace_pos)
+            line_end = len(seg) if line_end == -1 else line_end
+            on_heading = bool(_HEADING_LINE_RE.match(seg[line_start:line_end]))
+            prev = seg[m.start() - 1] if m.start() else ""
+            if not ws and prev == "]" and _is_bracket(seg, m.start() - 1, mask):
+                opener = _find_opener(seg, m.start() - 1, mask)
+                if opener is None or (opener > 0 and seg[opener - 1] == "!"):
+                    continue
+                found.append(
+                    StyledElement(
+                        offset + opener,
+                        offset + m.end(),
+                        decls,
+                        on_heading,
+                        seg[opener + 1 : m.start() - 1],
+                    )
+                )
+            elif on_heading and (ws or prev not in ")]`"):
+                title = re.sub(r"^[ ]{0,3}#{1,6}[ \t]+", "", seg[line_start : m.start()])
+                found.append(
+                    StyledElement(offset + line_start, offset + line_end, decls, True, title)
+                )
+
+    lines = markdown.split("\n")
+    starts = [0]
+    for line in lines:
+        starts.append(starts[-1] + len(line) + 1)
+    fenced_lines = _fenced_code_lines(markdown) if skip_code_blocks else set()
+    for open_idx, close_idx in _fenced_div_pairs(lines, fenced_lines).items():
+        attrs = _FENCE_LINE_RE.match(lines[open_idx]).group(3)
+        if not (attrs.startswith("{") and attrs.endswith("}")):
+            continue
+        tokens = attr_tokens(attrs[1:-1])
+        decls = style_declarations(tokens) if tokens else {}
+        if not decls:
+            continue
+        body = next((ln.strip() for ln in lines[open_idx + 1 : close_idx] if ln.strip()), "")
+        found.append(
+            StyledElement(
+                starts[open_idx], starts[close_idx] + len(lines[close_idx]), decls, False, body
+            )
+        )
+    found.sort(key=lambda el: (el.start, -el.end))
+    return found
+
+
+def _relative_luminance(rgb: tuple[int, int, int]) -> float:
+    def channel(c: int) -> float:
+        s = c / 255
+        return s / 12.92 if s <= 0.04045 else ((s + 0.055) / 1.055) ** 2.4
+
+    r, g, b = (channel(c) for c in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast_ratio(a: tuple[int, int, int], b: tuple[int, int, int]) -> float:
+    """WCAG 2 contrast ratio, from 1 (same colour) to 21 (black on white)."""
+    la, lb = sorted((_relative_luminance(a), _relative_luminance(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+# WCAG 2 AA minimums. Headings count as large text; the font sizes that
+# would make other text large are removed as noise, so they are not used.
+MIN_CONTRAST_TEXT = 4.5
+MIN_CONTRAST_LARGE = 3.0
+
+
+@dataclass
+class ContrastWarning:
+    line: int
+    text: str
+    color: str
+    background: str
+    ratio: float
+    required: float
+
+
+def _effective(
+    el: StyledElement, elements: list[StyledElement], prop: str
+) -> tuple[str | None, tuple[int, int, int] | None] | None:
+    """(value, rgb) of the text colour (prop "color") or background (prop
+    "background") el shows: its own, else the innermost enclosing element's.
+    None if nothing sets it; rgb None if the value cannot be parsed."""
+    enclosing = [o for o in elements if o.start <= el.start and el.end <= o.end]
+    enclosing.sort(key=lambda o: (o is not el, o.end - o.start))
+    for o in enclosing:
+        if prop == "color":
+            value = o.decls.get("color")
+            if value is not None:
+                return value, parse_css_color(value)
+        else:
+            value = _background_value(o.decls)
+            if value is not None:
+                return value, _parse_background(value)
+    return None
+
+
+def find_low_contrast(markdown: str) -> list[ContrastWarning]:
+    """Styled spans, headings and divs whose text colour against their
+    background is below WCAG AA (4.5:1, or 3:1 for headings).
+
+    Only elements that set a text colour or a background are checked. A
+    colour not set anywhere is Canvas's text colour on a white page. Elements
+    with an unrecognised colour value, or no visible text, are skipped. A
+    nested element that repeats an outer one's colours on the same line is
+    reported once.
+    """
+    elements = styled_elements(markdown)
+    warnings: list[ContrastWarning] = []
+    seen: set[tuple[int, str, str]] = set()
+    for el in elements:
+        if "color" not in el.decls and _background_value(el.decls) is None:
+            continue
+        text = re.sub(r"(?<!\\)[\[\]*_`]|\{[^{}]*\}", "", el.text)
+        text = " ".join(re.sub(r"\\(.)", r"\1", text).split())
+        if not text:
+            continue
+        fg = _effective(el, elements, "color") or ("Canvas text colour", CANVAS_TEXT_RGB)
+        bg = _effective(el, elements, "background") or ("white page", PAGE_BACKGROUND_RGB)
+        if fg[1] is None or bg[1] is None:
+            continue
+        ratio = contrast_ratio(fg[1], bg[1])
+        required = MIN_CONTRAST_LARGE if el.heading else MIN_CONTRAST_TEXT
+        if ratio >= required:
+            continue
+        line = markdown.count("\n", 0, el.start) + 1
+        key = (line, fg[0], bg[0])
+        if key in seen:
+            continue
+        seen.add(key)
+        if len(text) > 60:
+            text = text[:57] + "..."
+        warnings.append(ContrastWarning(line, text, fg[0], bg[0], ratio, required))
+    return warnings
 
 
 # ---------------------------------------------------------------------------
@@ -886,7 +1254,7 @@ def clean_markdown_body(body: str) -> str:
     # Strays first: the Word attribute blocks still anchor their spans, so a
     # "[ ][ ]{.EOP}" tail is recognised as a seam before the block goes.
     cleaned = remove_stray_brackets(cleaned, labels)
-    cleaned = filter_pandoc_attrs(cleaned, strip_word_attrs)
+    cleaned = filter_pandoc_attrs(cleaned, strip_word_attrs, drop_white_text=True)
     if cleaned != body:
         cleaned = _tidy_changed_lines(body, cleaned)
     # The prose repairs add blank lines on purpose, so they are tidied without
@@ -960,6 +1328,7 @@ class FileFix:
 class FixMarkdownPlan:
     fixes: list[FileFix] = field(default_factory=list)
     errors: list[tuple[Path, str]] = field(default_factory=list)
+    contrast: list[tuple[Path, ContrastWarning]] = field(default_factory=list)
     scanned: int = 0
 
 
@@ -975,6 +1344,12 @@ def plan_fix_markdown(files: list[Path]) -> FixMarkdownPlan:
         cleaned = clean_markdown_file_text(text)
         if cleaned != text:
             plan.fixes.append(FileFix(path, text, cleaned))
+        # Checked after cleaning: that is what the page will show.
+        front, body = split_frontmatter_raw(cleaned)
+        front_lines = front.count("\n")
+        for w in find_low_contrast(body):
+            w.line += front_lines
+            plan.contrast.append((path, w))
     return plan
 
 

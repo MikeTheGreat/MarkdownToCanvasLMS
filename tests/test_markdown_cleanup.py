@@ -13,8 +13,11 @@ from markdown_to_canvas.markdown_cleanup import (
     clean_markdown_body,
     clean_markdown_file_text,
     collect_markdown_files,
+    contrast_ratio,
     drop_final_hard_breaks,
+    find_low_contrast,
     fix_emphasis_spaces,
+    parse_css_color,
     shorten_horizontal_rules,
     flatten_stacked_list_markers,
     split_empty_break_paragraphs,
@@ -135,6 +138,112 @@ def test_black_text_spans_are_unwrapped_and_banners_kept() -> None:
         '#66b5c9; text-align: left; padding: 5px;"}\n'
         'a b c [d]{style="color: #333333"}\n'
     )
+
+
+def test_white_text_without_a_background_is_removed() -> None:
+    md = (
+        '[**Tasks**]{style="color: #ffffff;"}\n'
+        '[a]{style="color: white; text-align: left"} [b]{style="color: #FFF"} '
+        '[c]{style="color: rgb(255, 255, 255)"}\n'
+    )
+    assert clean_markdown_body(md) == (
+        '**Tasks**\n[a]{style="text-align: left"} b c\n'
+    )
+
+
+def test_white_text_with_its_own_background_is_kept() -> None:
+    md = '[x]{style="color: #ffffff; background-color: #333333"}\n'
+    assert clean_markdown_body(md) == md
+
+
+def test_white_span_inside_a_heading_banner_is_kept() -> None:
+    # The heading sets the background but no colour: the span's white is
+    # what makes the banner text white.
+    md = (
+        '## [Telephone]{style="color: #ffffff;"} {#telephone style="text-align: '
+        'center; background-color: #008fc5;"}\n'
+    )
+    assert clean_markdown_body(md) == md
+
+
+def test_white_text_inside_a_background_span_or_div_is_kept() -> None:
+    md = (
+        '[[inner]{style="color: #fff"} rest]{style="background: #222"}\n'
+        "\n"
+        '::: {style="background-color: navy"}\n'
+        '[x]{style="color: white"}\n'
+        ":::\n"
+        "\n"
+        '[y]{style="color: white"}\n'
+    )
+    assert clean_markdown_body(md) == md.replace('[y]{style="color: white"}', "y")
+
+
+def test_white_heading_without_a_background_loses_its_colour() -> None:
+    md = '## Title {#title style="color: #ffffff; text-align: center"}\n'
+    assert clean_markdown_body(md) == '## Title {#title style="text-align: center"}\n'
+
+
+def test_import_removes_white_text_without_a_background() -> None:
+    md = _html_to_markdown(
+        '<p><span style="color: #ffffff;">gone</span> '
+        '<span style="color: #ffffff; background-color: #000000;">kept</span></p>'
+    )
+    assert "gone [kept]{style=" in md
+
+
+def test_parse_css_color() -> None:
+    assert parse_css_color("#FfF") == (255, 255, 255)
+    assert parse_css_color("rgb(1, 2, 3)") == (1, 2, 3)
+    assert parse_css_color("rgba(1, 2, 3, 0.5)") is None
+    assert parse_css_color("yellow !important") == (255, 255, 0)
+    assert parse_css_color("var(--ic-brand-font-color-dark)") is not None
+    assert parse_css_color("hsl(0, 0%, 0%)") is None
+
+
+def test_contrast_ratio_matches_wcag() -> None:
+    assert round(contrast_ratio((0, 0, 0), (255, 255, 255)), 1) == 21.0
+    assert round(contrast_ratio((0x77, 0x77, 0x77), (255, 255, 255)), 2) == 4.48
+
+
+def test_low_contrast_heading_banner_is_reported_once() -> None:
+    md = (
+        "intro\n\n"
+        '## [**Reflect**]{style="color: #ffffff;"} {#reflect style="color: '
+        '#ffffff; background-color: #faf8f6; padding: 5px;"}\n'
+    )
+    [w] = find_low_contrast(md)
+    assert (w.line, w.text, w.color, w.background) == (3, "Reflect", "#ffffff", "#faf8f6")
+    assert w.required == 3.0 and w.ratio < 1.1
+
+
+def test_contrast_uses_body_threshold_and_inherited_colours() -> None:
+    md = (
+        '[ok]{style="background-color: #fff500"} '
+        '[grey]{style="color: #888888"} '
+        '[[dark]{style="background-color: #222222"}]{style="color: #333333"} '
+        '[unknown]{style="color: hsl(0, 0%, 50%)"} '
+        '[ ]{style="color: #eeeeee"}\n'
+    )
+    found = {w.text: w for w in find_low_contrast(md)}
+    assert set(found) == {"grey", "dark"}
+    assert found["grey"].required == 4.5
+    assert found["grey"].background == "white page"
+    assert found["dark"].color == "#333333"
+
+
+def test_fix_markdown_cli_lists_low_contrast_text(tmp_path: Path) -> None:
+    repo = tmp_path / "course"
+    make_current(repo)
+    page = repo / "pages" / "p.md"
+    page.parent.mkdir()
+    page.write_text(
+        '---\ntitle: P\n---\n\n[faint]{style="color: #cccccc"}\n', encoding="utf-8"
+    )
+    result = CliRunner().invoke(main, ["fix-markdown", str(repo)])
+    assert result.exit_code == 0, result.output
+    assert "Low-contrast text (1" in result.output
+    assert "pages/p.md:5" in result.output and '"faint"' in result.output
 
 
 def test_centering_style_on_image_is_kept() -> None:

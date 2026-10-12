@@ -1807,3 +1807,46 @@ def test_version_13_tool_refuses_a_version_14_repo(tmp_path, monkeypatch):
     monkeypatch.setattr(rf, "FORMAT_VERSION", 13)
     with pytest.raises(RepoFormatError, match="Update markdown-to-canvas"):
         rf.check_repo_format(tmp_path)
+
+
+_RELATIVE_WITH_ITEM = (
+    '\n[relative_due_dates]\n    days_of_week = ["Mon"]\n'
+    "[relative_due_dates.tables.default]\n"
+    '    items = [{name = "HW", relative_to = {type = "START_OF_QUARTER"}, offsets = []}]\n'
+)
+
+
+def test_migration_14_to_15_writes_no_fingerprint(tmp_path, capsys):
+    path = _settings(tmp_path, "format_version = 14\n" + _RELATIVE_WITH_ITEM)
+    manifest = _manifest(tmp_path, version=14)
+    before = tomllib.loads(path.read_text())
+    rf.run_upgrade(tmp_path, target_version=15)
+    after = tomllib.loads(path.read_text())
+    assert after.pop("format_version") == 15
+    after.pop("upgraded_by", None)
+    before.pop("format_version")
+    assert after == before
+    assert "last_generated_hash" not in after["relative_due_dates"]
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 15}
+    out = capsys.readouterr().out
+    assert f"Record format version 15 in {manifest.name}" in out
+    assert "NOTICE: run `generate-due-dates` to record last_generated_hash" in out
+
+
+def test_migration_14_to_15_no_notice_without_items(tmp_path, capsys):
+    _settings(
+        tmp_path,
+        "format_version = 14\n\n[relative_due_dates]\n"
+        "[relative_due_dates.tables.default]\n    items = []\n",
+    )
+    rf.run_upgrade(tmp_path, target_version=15)
+    assert "generate-due-dates" not in capsys.readouterr().out
+
+
+def test_version_14_tool_refuses_a_version_15_repo(tmp_path, monkeypatch):
+    _settings(tmp_path, "format_version = 15\n" + _RELATIVE_WITH_ITEM.replace(
+        "[relative_due_dates]\n", '[relative_due_dates]\n    last_generated_hash = "x"\n'
+    ))
+    monkeypatch.setattr(rf, "FORMAT_VERSION", 14)
+    with pytest.raises(RepoFormatError, match="Update markdown-to-canvas"):
+        rf.check_repo_format(tmp_path)
