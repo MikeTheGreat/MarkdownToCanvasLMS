@@ -430,6 +430,87 @@ def _fenced_code_lines(markdown: str) -> set[int]:
     return fenced_lines
 
 
+_ITEM_START_RE = re.compile(r"^([ \t]*(?:[-*+]|\d+[.)])[ \t]+)\S")
+# Lines after which an indented line starts a new block rather than
+# continuing a paragraph.
+_BLOCK_END_RE = re.compile(r"^[ ]{0,3}(?:#|:::)")
+
+
+def _indent_width(line: str) -> int:
+    expanded = line.expandtabs(4)
+    return len(expanded) - len(expanded.lstrip(" "))
+
+
+def _indented_code_lines(lines: list[str], fenced_lines: set[int]) -> set[int]:
+    """Indices of the lines that belong to indented (4-space) code blocks.
+
+    A heuristic, not a full parser: a block starts at a line indented at
+    least 4 columns past the enclosing list item's content (or 4 outside a
+    list) whose previous line is blank, a heading, a ``:::`` line, a fenced
+    code line or the start of the text, and runs while lines stay that
+    indented or blank. A list ends at a blank line followed by a line that is
+    neither indented nor a list item. Blockquotes are not handled.
+    """
+    code: set[int] = set()
+    list_content: int | None = None
+    in_code = False
+    prev_breaks = True  # whether the previous line ends a block
+    prev_blank = True
+    for i, line in enumerate(lines):
+        if i in fenced_lines:
+            in_code = False
+            prev_breaks = prev_blank = True
+            continue
+        if not line.strip():
+            if in_code:
+                code.add(i)
+            prev_breaks = prev_blank = True
+            continue
+        indent = _indent_width(line)
+        threshold = (list_content or 0) + 4
+        if indent >= threshold and (in_code or prev_breaks):
+            code.add(i)
+            in_code = True
+            prev_blank = prev_breaks = False
+            continue
+        in_code = False
+        m = _ITEM_START_RE.match(line)
+        if m:
+            list_content = len(m.group(1).expandtabs(4))
+        elif prev_blank and indent < 4:
+            list_content = None
+        prev_breaks = bool(_BLOCK_END_RE.match(line))
+        prev_blank = False
+    # A run of blank lines at the end of a block is not part of it.
+    for i in sorted(code, reverse=True):
+        if lines[i].strip() or (i + 1 < len(lines) and i + 1 in code):
+            continue
+        code.discard(i)
+    return code
+
+
+def code_block_lines(markdown: str) -> set[int]:
+    """Indices of the lines in fenced or indented code blocks."""
+    fenced = _fenced_code_lines(markdown)
+    return fenced | _indented_code_lines(markdown.split("\n"), fenced)
+
+
+def apply_outside_code_blocks(markdown: str, transform: Callable[[str], str]) -> str:
+    """Like ``apply_outside_fences``, but indented code blocks are left
+    intact as well."""
+    code = code_block_lines(markdown)
+    lines = markdown.split("\n")
+    out: list[str] = []
+    start = 0
+    for i in range(1, len(lines) + 1):
+        if i < len(lines) and (i in code) == (start in code):
+            continue
+        run = "\n".join(lines[start:i])
+        out.append(run if start in code else transform(run))
+        start = i
+    return "\n".join(out)
+
+
 def _fenced_div_pairs(lines: list[str], fenced_lines: set[int]) -> dict[int, int]:
     """Open line → close line of every fenced div (``:::``).
 
@@ -893,7 +974,47 @@ def unescape_quotes(markdown: str) -> str:
         ]
         return _apply_edits(seg, edits)
 
-    return apply_outside_fences(markdown, _segment)
+    # In a code block a backslash is literal, so nothing there is an escape.
+    return apply_outside_code_blocks(markdown, _segment)
+
+
+# ---------------------------------------------------------------------------
+# Bare <div> tags
+# ---------------------------------------------------------------------------
+
+_DIV_TAG_RE = re.compile(r"<(/?)div(\s[^<>]*)?>", re.IGNORECASE)
+
+
+def remove_bare_divs(markdown: str) -> str:
+    """Remove ``<div>`` tags that carry no attributes, with their ``</div>``.
+
+    A ``<div>`` with attributes and its matching ``</div>`` are kept. A
+    ``</div>`` with no opener is removed. Tags in code blocks and inline code
+    are left alone.
+    """
+    lines = markdown.split("\n")
+    code = code_block_lines(markdown)
+    # Code-block lines are blanked so the inline-code scan cannot pair a
+    # backtick in prose with one inside a block.
+    scan = "\n".join(" " * len(line) if i in code else line for i, line in enumerate(lines))
+    mask = _code_mask(scan)
+    line_of = [i for i, line in enumerate(lines) for _ in range(len(line) + 1)]
+    edits: list[tuple[int, int, str]] = []
+    stack: list[tuple[int, int, bool]] = []  # (start, end, is_bare)
+    for m in _DIV_TAG_RE.finditer(markdown):
+        if mask[m.start()] or line_of[m.start()] in code:
+            continue
+        if not m.group(1):
+            stack.append((m.start(), m.end(), not (m.group(2) or "").strip()))
+            continue
+        if stack:
+            start, end, bare = stack.pop()
+            if not bare:
+                continue
+            edits.append((start, end, ""))
+        edits.append((m.start(), m.end(), ""))
+    edits.extend((start, end, "") for start, end, bare in stack if bare)
+    return _apply_edits(markdown, edits)
 
 
 _LONE_IMAGE_RE = re.compile(
@@ -1255,6 +1376,7 @@ def clean_markdown_body(body: str) -> str:
     # "[ ][ ]{.EOP}" tail is recognised as a seam before the block goes.
     cleaned = remove_stray_brackets(cleaned, labels)
     cleaned = filter_pandoc_attrs(cleaned, strip_word_attrs, drop_white_text=True)
+    cleaned = remove_bare_divs(cleaned)
     if cleaned != body:
         cleaned = _tidy_changed_lines(body, cleaned)
     # The prose repairs add blank lines on purpose, so they are tidied without

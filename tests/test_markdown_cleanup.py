@@ -18,6 +18,7 @@ from markdown_to_canvas.markdown_cleanup import (
     find_low_contrast,
     fix_emphasis_spaces,
     parse_css_color,
+    remove_bare_divs,
     shorten_horizontal_rules,
     flatten_stacked_list_markers,
     split_empty_break_paragraphs,
@@ -346,6 +347,59 @@ def test_escaped_quotes_are_kept_where_the_backslash_matters() -> None:
         "[s]{style=\"font-family: \\\"Arial\\\"\"} <b title=\"\\'\"> $\\'{e}$ \\\\'\n"
     )
     assert unescape_quotes(md) == md
+
+
+def test_escaped_quotes_in_code_blocks_are_kept() -> None:
+    md = (
+        "Text \\'a\\'.\n\n"
+        "    print(\\'x\\')\n\n"
+        "    more \\\"code\\\"\n\n"
+        "```\nfenced \\'y\\'\n```\n\n"
+        "after `inline \\'z\\'` and \\'w\\'\n"
+    )
+    assert unescape_quotes(md) == (
+        "Text 'a'.\n\n"
+        "    print(\\'x\\')\n\n"
+        "    more \\\"code\\\"\n\n"
+        "```\nfenced \\'y\\'\n```\n\n"
+        "after `inline \\'z\\'` and 'w'\n"
+    )
+
+
+def test_indented_list_continuation_is_not_a_code_block() -> None:
+    md = "- item\n\n    continued \\'here\\'\n\n        code \\'kept\\'\n"
+    assert unescape_quotes(md) == (
+        "- item\n\n    continued 'here'\n\n        code \\'kept\\'\n"
+    )
+
+
+def test_indented_line_inside_a_paragraph_is_not_a_code_block() -> None:
+    md = "one\n    two \\'x\\'\n"
+    assert unescape_quotes(md) == "one\n    two 'x'\n"
+
+
+def test_bare_divs_are_removed() -> None:
+    md = "<div>\nSome text\n</div>\n\nInline <DIV>a</div > b\n"
+    assert remove_bare_divs(md) == "\nSome text\n\n\nInline a b\n"
+
+
+def test_div_with_attributes_keeps_its_close_tag() -> None:
+    md = '<div class="box">\n<div>\nx\n</div>\n</div>\n'
+    assert remove_bare_divs(md) == '<div class="box">\n\nx\n\n</div>\n'
+
+
+def test_unmatched_close_div_is_removed() -> None:
+    assert remove_bare_divs("x</div>\n") == "x\n"
+
+
+def test_divs_in_code_are_kept() -> None:
+    md = "`<div>` and\n\n    <div>\n    </div>\n\n```\n<div>\n```\n"
+    assert remove_bare_divs(md) == md
+
+
+def test_fix_markdown_deletes_lines_that_held_only_a_div() -> None:
+    md = "<div>\nSome text\n</div>\n\nmore\n"
+    assert clean_markdown_body(md) == "Some text\n\nmore\n"
 
 
 def test_final_hard_break_is_removed() -> None:

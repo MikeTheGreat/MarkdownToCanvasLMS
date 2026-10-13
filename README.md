@@ -1158,7 +1158,8 @@ in green) and writes nothing. With `--apply` it rewrites the files; run
 It looks at every content file, module, snippet, quiz and question-bank file
 (including question files) and `course_settings/syllabus.md`. Fenced code
 blocks are never changed, and neither are brackets or quotes inside
-`inline code`. Frontmatter is changed in one way only (see the first item
+`inline code`. The escaped-quote and `<div>` changes also leave indented
+(4-space) code blocks alone. Frontmatter is changed in one way only (see the first item
 below). What it changes:
 
 - **Frontmatter comment lines.** A frontmatter line that starts with `#` (such
@@ -1206,8 +1207,12 @@ below). What it changes:
   not touched, so `a[i][j]` or `[sic]` in ordinary prose stays.
 - **Swapped links.** `[Label][https://url]( and )` becomes
   `[Label](https://url) and `.
-- **Escaped quotes.** `\'` and `\"` become `'` and `"`, except in code,
-  attribute blocks, link targets and titles, HTML tags and `$math$`. This
+- **Bare `<div>` tags.** `<div>` and its matching `</div>` are removed, and
+  so is a `</div>` with no `<div>` before it. A line left empty is deleted. A
+  `<div>` with attributes (`<div class="box">`) is kept along with its
+  `</div>`.
+- **Escaped quotes.** `\'` and `\"` become `'` and `"`, except in code
+  (fenced, indented and inline), attribute blocks, link targets and titles, HTML tags and `$math$`. This
   changes how they look in Canvas: the escaped form renders as a straight quote,
   the plain form as a curly one (’ “ ”).
 - **Line breaks that do nothing.** A backslash at the end of a line is a line
