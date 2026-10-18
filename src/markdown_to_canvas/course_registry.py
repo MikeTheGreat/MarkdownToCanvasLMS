@@ -14,18 +14,20 @@ time (``config`` and everything that imports it), because ``cli`` calls
 """
 from __future__ import annotations
 
+import os
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import tomlkit
-from dotenv import find_dotenv, load_dotenv
+from dotenv import dotenv_values, find_dotenv, load_dotenv
 
 CONFIG_DIR_NAME = "markdown-to-canvas"
 REGISTRY_NAME = "course_registry.toml"
 TERMS_DIR_NAME = "terms"
 ENV_NAME = ".env"
+TOKEN_VAR = "CANVAS_API_TOKEN"
 COURSES_KEY = "courses"
 CURRENT_TERM_KEY = "current_term"
 _ENTRY_KEYS = ("path", "config")
@@ -75,10 +77,28 @@ def load_env_files() -> None:
     environment, then ``~/.config/markdown-to-canvas/.env``. The first load
     overrides the shell (as it always has); the fallback never overrides.
     """
-    load_dotenv(find_dotenv(usecwd=True), override=True, verbose=True)
+    global token_source
+    shell_has_token = bool(os.environ.get(TOKEN_VAR))
+    local = find_dotenv(usecwd=True)
+    load_dotenv(local, override=True, verbose=True)
     fallback = config_dir() / ENV_NAME
     if fallback.is_file():
         load_dotenv(fallback, override=False)
+
+    if local and dotenv_values(local).get(TOKEN_VAR):
+        token_source = local
+    elif shell_has_token:
+        token_source = "the shell environment"
+    elif fallback.is_file() and dotenv_values(fallback).get(TOKEN_VAR):
+        token_source = str(fallback)
+    else:
+        token_source = None
+
+
+#: Where load_env_files() got CANVAS_API_TOKEN from: a .env path, "the shell
+#: environment", or None when none of them set it. Reported by the CLI when
+#: Canvas rejects the token, since a stale .env in the cwd silently wins.
+token_source: str | None = None
 
 
 # ---------------------------------------------------------------------------

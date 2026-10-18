@@ -353,6 +353,34 @@ def test_missing_fallback_is_not_an_error(home, tmp_path, monkeypatch):
     reg.load_env_files()
 
 
+def test_token_source_names_the_local_env(home, tmp_path, monkeypatch):
+    monkeypatch.setattr(reg, "TOKEN_VAR", VAR)
+    monkeypatch.setenv(VAR, "shell")
+    work = tmp_path / "work"
+    _write_env(work, "local")
+    monkeypatch.chdir(work)
+    reg.load_env_files()
+    assert reg.token_source == str(work / ".env")
+
+
+def test_token_source_names_the_shell(home, tmp_path, monkeypatch):
+    monkeypatch.setattr(reg, "TOKEN_VAR", VAR)
+    _write_env(home / ".config" / "markdown-to-canvas", "fallback")
+    monkeypatch.setenv(VAR, "shell")
+    monkeypatch.chdir(tmp_path)
+    reg.load_env_files()
+    assert reg.token_source == "the shell environment"
+
+
+def test_token_source_names_the_fallback(home, tmp_path, monkeypatch):
+    monkeypatch.setattr(reg, "TOKEN_VAR", VAR)
+    _clean_var(monkeypatch)
+    _write_env(home / ".config" / "markdown-to-canvas", "fallback")
+    monkeypatch.chdir(tmp_path)
+    reg.load_env_files()
+    assert reg.token_source == str(home / ".config" / "markdown-to-canvas" / ".env")
+
+
 # ---------------------------------------------------------------------------
 # Completion
 # ---------------------------------------------------------------------------

@@ -552,7 +552,12 @@ Because a course can now be named from any directory, there is also a fallback
 file, `~/.config/markdown-to-canvas/.env`, in the same format. For each
 variable the tool uses the first of these that sets it: the `.env` in the
 current directory (or the nearest parent that has one), then the shell
-environment, then the fallback file.
+environment, then the fallback file. A `.env` in the current directory
+therefore overrides a token you set with `export` or `env -f FILE`.
+
+If Canvas rejects the token (expired or unknown), the tool prints the stack
+trace, the full token it sent, and where that token came from (which `.env`
+file, the shell, or a canvas.toml `[auth]` block).
 
 Or put it in the `[auth]` block of `course_settings/canvas.toml` for local-only use (add `course_settings/canvas.toml` to `.gitignore` if you do this).
 

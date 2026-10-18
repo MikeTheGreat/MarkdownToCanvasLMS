@@ -359,7 +359,13 @@ because `cli` calls `load_env_files()` before those imports.
 - **`.env`.** `load_env_files()` keeps the old call (`find_dotenv(usecwd=True)`, `override=True`,
   so a `.env` from the cwd or a parent beats the shell) and then loads the fallback with
   `override=False`. Precedence: cwd `.env`, then the shell, then the fallback. The fallback load
-  is skipped silently when the file is absent.
+  is skipped silently when the file is absent. It also sets `course_registry.token_source` to
+  the place `CANVAS_API_TOKEN` came from (the `.env` path, "the shell environment", or None),
+  and `config.load()` sets `config.last_token` to the token it returned and whether it came
+  from the environment or a canvas.toml `[auth]` block. `_handle_cli_errors` catches
+  canvasapi's `InvalidAccessToken` (expired or unknown token), prints the traceback, and dies
+  with the full token and its source. This exists because a cwd `.env` overrides the shell,
+  including `env -f FILE`, so a stale token in the directory you run from wins without notice.
 - **`import --register KEY`.** `check_key_free()` runs before `run_import` (so a taken key
   stops before anything is written); `add_entry()` runs only after the import succeeded. It
   edits the registry with `tomlkit` (comments and other entries survive) and never overwrites a

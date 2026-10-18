@@ -3,6 +3,7 @@ import shlex
 import subprocess
 import sys
 import tomllib
+import traceback
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
@@ -10,12 +11,14 @@ from pathlib import Path
 import click
 import pypandoc
 import requests
+from canvasapi.exceptions import InvalidAccessToken
 
 # load_env_files() must run before the local package imports below, because .config
 # (imported transitively by canvas_api/sync/etc.) reads CANVAS_API_TOKEN from the
 # environment at import time. That is why those imports deliberately come after
 # this call rather than at the top of the file — ruff's E402 is ignored for this
 # file in pyproject.toml for exactly this reason.
+from . import course_registry
 from .course_registry import (  # noqa: E402  (safe: imports nothing that reads the token)
     RegistryError,
     ResolvedCourse,
@@ -44,6 +47,7 @@ from .clean_manifest import (
     plan_clean,
     print_plan,
 )
+from . import config as config_lib
 from .config import Config, find_repo_root
 from .config import load as load_config
 from .course_guard import CourseGuardError, check_course
@@ -185,7 +189,29 @@ def _handle_cli_errors(func):
             die("KeyError or ValueError:" + str(e))
         except requests.exceptions.ConnectionError:
             die("could not connect to Canvas - are you offline?")
+        except InvalidAccessToken as e:
+            traceback.print_exc()
+            die(_rejected_token_message(e))
     return wrapper
+
+
+def _rejected_token_message(e: InvalidAccessToken) -> str:
+    """Canvas's complaint plus the token that was sent and where it came from."""
+    if config_lib.last_token is not None:
+        token, source = config_lib.last_token
+    else:
+        # Commands that build Config straight from the environment (import).
+        token = os.environ.get("CANVAS_API_TOKEN", "")
+        source = "the CANVAS_API_TOKEN environment variable"
+    if source.startswith("the CANVAS_API_TOKEN") and course_registry.token_source:
+        source += f", set from {course_registry.token_source}"
+    return (
+        f"Canvas rejected the API token: {e}\n"
+        f"  Token used: {token}\n"
+        f"  Taken from: {source}\n"
+        "  A .env in the current directory (or a parent) overrides the shell "
+        "environment, including `env -f`."
+    )
 
 
 class _FullHelpGroup(click.Group):

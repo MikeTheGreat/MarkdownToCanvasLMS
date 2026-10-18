@@ -65,6 +65,11 @@ class Config:
     course_flags: dict[str, bool] = field(default_factory=dict)
 
 
+#: The token the last load() returned and where it came from, so the CLI can
+#: show both when Canvas rejects the token.
+last_token: tuple[str, str] | None = None
+
+
 def load(
     path: Path, require_token: bool = True, require_course: bool = True
 ) -> Config:
@@ -79,7 +84,12 @@ def load(
     with open(path, "rb") as f:
         data = tomllib.load(f)
 
+    global last_token
     api_token = os.environ.get("CANVAS_API_TOKEN") or data.get("auth", {}).get("api_token", "")
+    if os.environ.get("CANVAS_API_TOKEN"):
+        last_token = (api_token, "the CANVAS_API_TOKEN environment variable")
+    elif api_token:
+        last_token = (api_token, f"[auth] api_token in {path}")
     if not api_token and require_token:
         raise ValueError("Canvas API token not set. Use CANVAS_API_TOKEN env var or canvas.toml [auth] api_token.")
 

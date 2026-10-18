@@ -195,6 +195,31 @@ def test_prune_delete_shows_the_directory_before_contacting_canvas(
     assert first_line(result).startswith("Course dir:")
 
 
+def test_rejected_token_shows_traceback_token_and_source(
+    home, tmp_path, unrelated, mocker, monkeypatch
+):
+    from canvasapi.exceptions import InvalidAccessToken
+
+    from markdown_to_canvas import course_registry
+
+    course = make_course(tmp_path)
+    register(home, f'[courses]\n142 = "{course}"\n')
+    monkeypatch.setenv("CANVAS_API_TOKEN", "9~oldtoken")
+    monkeypatch.setattr(course_registry, "token_source", "/work/.env")
+    mocker.patch(
+        "markdown_to_canvas.cli.get_course",
+        side_effect=InvalidAccessToken([{"message": "Expired access token."}]),
+    )
+    result = run("update", "142")
+    assert result.exit_code == 1
+    assert "Traceback (most recent call last)" in result.output
+    assert "Token used: 9~oldtoken" in result.output
+    assert (
+        "Taken from: the CANVAS_API_TOKEN environment variable, set from /work/.env"
+        in result.output
+    )
+
+
 # ---------------------------------------------------------------------------
 # Registry config
 # ---------------------------------------------------------------------------
