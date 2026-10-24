@@ -1472,10 +1472,6 @@ rubric by title, `cp` checks the destination's `course_settings/rubrics.toml`:
 * A numeric rubric ID only produces a warning, since the ID belongs to the
   source course.
 
-`update` does not attach rubrics to discussions yet (only to assignments), so a
-copied discussion's rubric is added to `rubrics.toml` but not associated on
-Canvas.
-
 **Group sets/group categories.** For each copied assignment or discussion whose
 `group_category_id` is a name, `cp` adds that name to the destination's
 `group_categories` list in `course_settings.toml` if it is not already there
@@ -2378,9 +2374,9 @@ Repairing rubric associations...
 ```
 
 The re-created rubric gets a **new** Canvas id (Canvas does not restore the deleted
-one), so every assignment whose frontmatter names that rubric is re-associated with
-it — including assignments whose own `.md` files were up to date and therefore
-skipped. Assignments referencing a rubric by numeric id instead of title are left
+one), so every assignment and graded discussion whose frontmatter names that rubric
+is re-associated with it — including files that were up to date and therefore
+skipped. Files referencing a rubric by numeric id instead of title are left
 alone; there is no title to re-resolve, so fix those by hand.
 
 ```toml
@@ -2631,7 +2627,8 @@ peer reviews** are all settable from the frontmatter above. A few caveats:
 * **Rubric:** `rubric` accepts either a rubric title (string) or numeric Canvas
   rubric ID. When a title is given the tool resolves it to the Canvas ID using
   rubrics defined in `course_settings/rubrics.toml`. A rubric association is
-  created (or updated) on each assignment sync. `use_for_grading` defaults to
+  created (or updated) on each assignment sync. Graded discussions accept the
+  same two keys (see [Discussion](#discussion-discussions)). `use_for_grading` defaults to
   `true`; set it to `false` for advisory-only (feedback without grade impact)
   rubrics.
 * **Group set/group category:** `group_category_id` names a group set/group
@@ -2676,6 +2673,10 @@ lock_at:   "2025-02-08T23:59:00-05:00"
 assignment_group_id: "Labs"  # name of an assignment group defined in
                              #   course_settings.toml, or a numeric Canvas ID
 omit_from_final_grade: true  # true = do not count towards the final grade
+rubric: "Discussion Rubric"  # graded discussions only: title of a rubric in
+                             #   course_settings/rubrics.toml, or a numeric
+                             #   Canvas rubric ID
+use_for_grading: true        # use the rubric score as the grade (default: true)
 
 # Group discussion — include this to give each student group its own copy:
 group_category_id: "Project Groups"  # a group set/group category listed in
@@ -2684,6 +2685,14 @@ group_category_id: "Project Groups"  # a group set/group category listed in
 
 Post your initial response by Wednesday, then reply to two classmates.
 ```
+
+**Rubrics.** `rubric` and `use_for_grading` work as they do on an
+[assignment](#assignment-assignments): Canvas keeps a graded discussion's rubric
+on the discussion's underlying assignment, and `update` attaches it there.
+Removing the `rubric` line removes the rubric from the discussion on the next
+upload. An ungraded discussion cannot have a rubric, so a `rubric` line on one
+is not uploaded and `update` prints a warning; add `points_possible` to make the
+discussion graded.
 
 **Group discussions.** With `group_category_id`, Canvas splits the discussion
 into one copy per group in that group set/group category, and each student sees

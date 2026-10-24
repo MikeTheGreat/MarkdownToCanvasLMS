@@ -127,17 +127,36 @@ freshly-created one `false`), which would make the flag not settable via the API
 at all. Worth confirming before spending more effort on it, since these two
 fields are accepted by `rubrics.toml` and silently do nothing.
 
-## Add discussion rubric support
+## Repo-wide scans miss gradeable files that use `canvas_type:` outside the usual folders
 
-`rubric:` / `use_for_grading:` frontmatter only works on assignments:
-`sync._apply_rubric` is called from `_upload_assignment` but not from
-`_upload_discussion`, so a `rubric:` key on a discussion is ignored. A graded
-discussion has an underlying Canvas assignment (`assignment_id` on the
-discussion topic), so the rubric association would go on that assignment.
-Things to handle: ungraded discussions (no assignment — warn), removal when the
-key is dropped (`rubric_settings` on the discussion's assignment), and
-`_repair_rubric_associations` re-associating discussions as well as
-assignments. See `todo/RUBRIC_ISSUES.md` before starting.
+A file outside `assignments/` and `discussions/` can become a Canvas assignment
+or discussion through `canvas_type: assignment` / `canvas_type: discussion` in
+its frontmatter. The upload path honors that, so due dates, assignment group
+and rubric are all applied when the file itself is uploaded. But
+`sync.iter_gradeable_content()` finds gradeable files by folder only
+(`assignments/`, `discussions/`, `quizzes/`) and never reads `canvas_type:`,
+so every repo-wide scan skips such a file:
+
+- `_repair_rubric_associations`: after a rubric deleted on Canvas is
+  re-created, the file stays attached to the deleted copy until it is
+  uploaded again.
+- `_apply_due_dates_only`: a date changed in `course_settings.toml` is not
+  sent until the file is uploaded for some other reason.
+- `_check_due_dates_coverage`: the file's `due_dates` entry is reported as
+  unmatched, and a missing entry for it is not reported.
+- The virtual-due-date name check in `sync.py`: a clash between a virtual
+  entry's name and this file's title is not caught.
+- `list-titles` (`collect_title_items`) and `generate-due-dates`
+  (`_content_titles`): the file is missing from their output.
+
+Fix: have `iter_gradeable_content()` also yield files in other content folders
+whose `canvas_type:` (after `expand_frontmatter_snippets()`, since a snippet
+can set it) makes them gradeable. That means parsing the frontmatter of every
+`.md` file on each scan, not only the three folders.
+
+No current course repo is affected: as of 2026-10-23 none under
+`~/Dropbox/Work/Courses` sets `canvas_type: assignment` or `discussion`
+outside those folders.
 
 ## Implement the dropped course settings as real settings
 

@@ -173,7 +173,8 @@ signature failure — §1.3.
 | --- | --- |
 | Course-level association created with `purpose: "bookmark"`, so a rubric on one assignment updates in place instead of forking (§1.6) | `canvas_api.sync_rubrics` |
 | Every run compares `rubrics.toml` against the live rubric list; a previously-synced title Canvas no longer lists is announced and re-created, bypassing the per-rubric hash cache | `sync.sync_course_settings` |
-| Assignments referencing a re-created title are re-associated with the new id — including assignments whose own `.md` is unchanged and therefore never reaches `_apply_rubric` | `sync._repair_rubric_associations` (phase 4a) |
+| Assignments and graded discussions referencing a re-created title are re-associated with the new id — including files whose own `.md` is unchanged and therefore never reaches `_apply_rubric` | `sync._repair_rubric_associations` (phase 4a) |
+| A graded discussion's rubric is attached to the discussion's underlying assignment (`assignment_id` on the topic); an ungraded discussion with `rubric:` gets a warning | `sync._apply_discussion_rubric` |
 
 The detection deliberately treats a title Canvas has *never* seen as new rather than
 deleted; otherwise every first sync (and every `--check-all`, whose simulated course

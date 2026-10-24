@@ -730,16 +730,20 @@ def _repair_rubric_associations(ctx: SyncContext) -> None:
     for local_key, md_path, ctype in iter_gradeable_content(
         ctx.repo_path, ctx.matcher
     ):
-        # Only assignments carry rubrics (see _upload_assignment).
-        if ctype != "assignment" or local_key in ctx.synced_keys:
+        # Assignments and graded discussions carry rubrics (see
+        # _upload_assignment and _apply_discussion_rubric); quizzes don't.
+        if ctype not in ("assignment", "discussion") or local_key in ctx.synced_keys:
             continue
         existing = ctx.manifest.get(local_key)
         if not existing or "canvas_id" not in existing:
             continue
         try:
-            fm, _ = parse_frontmatter(md_path.read_text())
+            fm, body = parse_frontmatter(md_path.read_text())
         except Exception:
             continue
+        # The upload path expands frontmatter snippets, so a shared
+        # `rubric:` may live in one rather than in the file itself.
+        fm, _ = expand_frontmatter_snippets(fm, body, md_path, ctx.snippets_dir)
         rubric_ref = fm.get("rubric")
         # Numeric references name a canvas id directly and are left alone: if
         # that id is the deleted rubric there is nothing to resolve it to.
@@ -751,10 +755,19 @@ def _repair_rubric_associations(ctx: SyncContext) -> None:
         if _skip_if_pinned(ctx, local_key):
             continue
         try:
+            assignment_id = existing["canvas_id"]
+            if ctype == "discussion":
+                # The manifest holds the topic id; the rubric is on its
+                # assignment. An ungraded one was already warned about on upload.
+                assignment_id = ctx.api.get_discussion_assignment_id(
+                    ctx.course, existing["canvas_id"]
+                )
+                if assignment_id is None:
+                    continue
             ctx.api.associate_rubric_with_assignment(
                 ctx.course,
                 rubric_canvas_id,
-                existing["canvas_id"],
+                assignment_id,
                 fm.get("use_for_grading", True),
             )
             print(f"  Re-associated rubric '{rubric_ref}': {local_key}")
@@ -2606,12 +2619,19 @@ def _validate_annotatable_attachment(
 
 
 def _apply_rubric(
-    ctx: SyncContext, entry: dict, frontmatter: dict, local_key: str
+    ctx: SyncContext, entry: dict, frontmatter: dict, local_key: str,
+    assignment_id: int | None = None,
 ) -> None:
-    """Handle rubric association or removal."""
+    """Handle rubric association or removal.
+
+    ``assignment_id`` is the Canvas assignment the rubric goes on; it defaults
+    to ``entry["canvas_id"]`` (an assignment's own id). Discussions pass their
+    underlying assignment's id.
+    """
     course = ctx.course
     errors = ctx.errors
     rubric_ids = ctx.rubric_ids
+    target_id = entry["canvas_id"] if assignment_id is None else assignment_id
     rubric_ref = frontmatter.get("rubric")
     if rubric_ref is not None:
         rubric_canvas_id: int | None = None
@@ -2632,7 +2652,7 @@ def _apply_rubric(
             use_for_grading = frontmatter.get("use_for_grading", True)
             try:
                 ctx.api.associate_rubric_with_assignment(
-                    course, rubric_canvas_id, entry["canvas_id"], use_for_grading
+                    course, rubric_canvas_id, target_id, use_for_grading
                 )
             except Exception as exc:
                 msg = f"WARNING: {local_key}: rubric association failed: {exc}"
@@ -2646,13 +2666,35 @@ def _apply_rubric(
         )
         try:
             removed = ctx.api.remove_rubric_from_assignment(
-                course, entry["canvas_id"], rubric_id
+                course, target_id, rubric_id
             )
             if removed:
                 print(f"  Removed rubric association: {local_key}")
         except Exception as exc:
             msg = f"WARNING: {local_key}: rubric removal failed: {exc}"
             warn(msg, errors)
+
+
+def _apply_discussion_rubric(
+    ctx: SyncContext, entry: dict, frontmatter: dict, local_key: str
+) -> None:
+    """Attach or remove a discussion's rubric via its underlying assignment.
+
+    Only a graded discussion has an assignment, so a ``rubric:`` key on an
+    ungraded one cannot be honored and is reported instead of dropped.
+    """
+    assignment_id = entry.get("assignment_id")
+    if assignment_id is None:
+        rubric_ref = frontmatter.get("rubric")
+        if rubric_ref is not None:
+            warn(
+                f"WARNING: {local_key}: rubric '{rubric_ref}' not attached: this "
+                f"discussion is not graded on Canvas, and only a graded discussion "
+                f"can have a rubric. Add points_possible to make it graded",
+                ctx.errors,
+            )
+        return
+    _apply_rubric(ctx, entry, frontmatter, local_key, assignment_id=assignment_id)
 
 
 def _upload_page(
@@ -2925,6 +2967,7 @@ def _upload_discussion(
         manifest, manifest_path, local_key, entry["canvas_id"], "discussion",
         extra=extra_record or None, mark_synced=not unpublish_refused,
     )
+    _apply_discussion_rubric(ctx, entry, frontmatter, local_key)
     if synced_keys is not None:
         synced_keys.add(local_key)
 

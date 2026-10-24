@@ -192,7 +192,13 @@ class DryRunCanvas:
             "canvas_type": "discussion",
             "canvas_id": new_id,
             "html_url": _fake_html_url("discussion", new_id),
+            # Grading parameters make Canvas create the underlying assignment.
+            "assignment_id": self._new_id() if kwargs.get("assignment") else None,
+            "rubric_settings": None,
         }
+
+    def get_discussion_assignment_id(self, course, topic_id) -> int | None:
+        return self._new_id()
 
     def create_or_update_announcement(
         self, course, canvas_id, title, body, **kwargs

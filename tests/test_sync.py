@@ -69,7 +69,19 @@ def _mock_discussion(canvas_id: int) -> MagicMock:
     d = MagicMock()
     d.id = canvas_id
     d.html_url = f"https://school.instructure.com/courses/1/discussion_topics/{canvas_id}"
+    # Ungraded unless a test says otherwise (see _mock_graded_discussion).
+    d.assignment_id = None
+    d.assignment = None
     d.update.return_value = d
+    return d
+
+
+def _mock_graded_discussion(
+    canvas_id: int, assignment_id: int, rubric_settings=None
+) -> MagicMock:
+    d = _mock_discussion(canvas_id)
+    d.assignment_id = assignment_id
+    d.assignment = {"id": assignment_id, "rubric_settings": rubric_settings}
     return d
 
 
@@ -5214,6 +5226,183 @@ def test_rubric_no_removal_when_no_canvas_rubric(mock_course, course_root, mocke
 
     remove_mock.assert_not_called()
     mock_course.create_rubric_association.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Discussion rubrics: attached to the graded discussion's underlying assignment
+# ---------------------------------------------------------------------------
+
+_DISCUSSION_WITH_RUBRIC = (
+    '---\ntitle: "Introduce Yourself"\npoints_possible: 10\n'
+    'rubric: "Essay Rubric"\npublished: true\n---\n\nHello.\n'
+)
+
+
+def test_discussion_rubric_associated_with_its_assignment(
+    mock_course, course_root, mocker
+) -> None:
+    """A graded discussion's rubric goes on the discussion's assignment id,
+    not on the discussion topic id."""
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)
+    mock_course.create_discussion_topic.return_value = _mock_graded_discussion(55555, 44444)
+    mock_course.get_rubrics.return_value = [_mock_rubric(42, "Essay Rubric")]
+    (course_root / "discussions" / "week1-intro.md").write_text(_DISCUSSION_WITH_RUBRIC)
+
+    make_current(course_root)
+    run_sync(_config(), course_root)
+
+    mock_course.create_rubric_association.assert_called_once()
+    assoc = mock_course.create_rubric_association.call_args[1]["rubric_association"]
+    assert assoc["rubric_id"] == 42
+    assert assoc["association_id"] == 44444
+    assert assoc["association_type"] == "Assignment"
+    assert assoc["use_for_grading"] is True
+
+
+def test_discussion_rubric_on_ungraded_discussion_warns(
+    mock_course, course_root, mocker, capsys
+) -> None:
+    """An ungraded discussion has no assignment to carry a rubric, so the
+    rubric key is reported rather than silently dropped."""
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    _setup_first_sync_mocks(mock_course)  # discussion mock is ungraded
+    mock_course.get_rubrics.return_value = [_mock_rubric(42, "Essay Rubric")]
+    (course_root / "discussions" / "week1-intro.md").write_text(
+        '---\ntitle: "Introduce Yourself"\nrubric: "Essay Rubric"\n'
+        'published: true\n---\n\nHello.\n'
+    )
+
+    make_current(course_root)
+    run_sync(_config(), course_root)
+
+    mock_course.create_rubric_association.assert_not_called()
+    out = capsys.readouterr().out
+    assert "rubric 'Essay Rubric' not attached" in out
+    assert "not graded" in out
+
+
+def test_discussion_rubric_removed_when_key_absent(
+    mock_course, course_root, mocker
+) -> None:
+    """Dropping the rubric key removes the rubric from the discussion's
+    assignment, using the rubric_settings nested in the update response."""
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    remove_mock = mocker.patch(
+        "markdown_to_canvas.canvas_api.remove_rubric_from_assignment", return_value=True
+    )
+    _setup_first_sync_mocks(mock_course)
+    mock_course.create_discussion_topic.return_value = _mock_graded_discussion(
+        55555, 44444, rubric_settings={"id": 42, "title": "Old Rubric"}
+    )
+
+    make_current(course_root)
+    run_sync(_config(), course_root)
+
+    remove_mock.assert_called_once_with(mock_course, 44444, 42)
+    mock_course.create_rubric_association.assert_not_called()
+
+
+def test_deleted_rubric_reassociated_on_discussion(
+    mock_course, tmp_path, mocker, capsys
+) -> None:
+    """The repair pass re-points an unchanged graded discussion at a rubric
+    re-created after Canvas soft-deleted it, via the discussion's assignment."""
+    manifest: dict = {}
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    _write_rubric_repair_repo(root)
+    (root / "assignments" / "week1.md").unlink()
+    (root / "discussions").mkdir()
+    (root / "discussions" / "intro.md").write_text(_DISCUSSION_WITH_RUBRIC)
+    topic = _mock_graded_discussion(55555, 44444)
+    mock_course.create_discussion_topic.return_value = topic
+    mock_course.get_discussion_topic.return_value = topic
+
+    mock_course.get_rubrics.return_value = []
+    mock_course.create_rubric.return_value = {"rubric": _mock_rubric(42, "Essay Rubric")}
+
+    make_current(root)
+    run_sync(_config(), root)
+    capsys.readouterr()
+
+    mock_course.create_rubric.return_value = {"rubric": _mock_rubric(77, "Essay Rubric")}
+    mock_course.create_rubric_association.reset_mock()
+    mock_course.create_discussion_topic.reset_mock()
+    topic.update.reset_mock()
+
+    make_current(root)
+    run_sync(_config(), root)
+
+    out = capsys.readouterr().out
+    topic.update.assert_not_called()
+    mock_course.create_rubric_association.assert_called_once()
+    assoc = mock_course.create_rubric_association.call_args[1]["rubric_association"]
+    assert assoc["rubric_id"] == 77
+    assert assoc["association_id"] == 44444
+    assert "Re-associated rubric 'Essay Rubric': discussions/intro.md" in out
+
+
+def test_deleted_rubric_reassociated_when_named_by_frontmatter_snippet(
+    mock_course, tmp_path, mocker, capsys
+) -> None:
+    """The repair pass sees a rubric that a PASTE_SNIPPET_INTO_FRONTMATTER
+    snippet supplies, not only one written in the file's own frontmatter."""
+    manifest: dict = {}
+    mocker.patch("markdown_to_canvas.manifest.load", return_value=manifest)
+    mocker.patch("markdown_to_canvas.manifest.flush")
+    root = tmp_path / "course"
+    _write_rubric_repair_repo(root)
+    (root / "snippets").mkdir()
+    (root / "snippets" / "worksheet-defaults.md").write_text('rubric: "Essay Rubric"\n')
+    (root / "assignments" / "week1.md").write_text(
+        '---\ntitle: "Week 1"\npublished: true\n---\n'
+        "[PASTE_SNIPPET_INTO_FRONTMATTER](../snippets/worksheet-defaults.md)\n\n## Work\n"
+    )
+    mock_course.create_assignment.return_value = _mock_assignment(98765)
+    mock_course.get_rubrics.return_value = []
+    mock_course.create_rubric.return_value = {"rubric": _mock_rubric(42, "Essay Rubric")}
+
+    make_current(root)
+    run_sync(_config(), root)
+    capsys.readouterr()
+
+    mock_course.create_rubric.return_value = {"rubric": _mock_rubric(77, "Essay Rubric")}
+    mock_course.create_rubric_association.reset_mock()
+    mock_course.create_assignment.reset_mock()
+
+    make_current(root)
+    run_sync(_config(), root)
+
+    out = capsys.readouterr().out
+    mock_course.create_assignment.assert_not_called()
+    mock_course.create_rubric_association.assert_called_once()
+    assoc = mock_course.create_rubric_association.call_args[1]["rubric_association"]
+    assert assoc["rubric_id"] == 77
+    assert "Re-associated rubric 'Essay Rubric': assignments/week1.md" in out
+
+
+def test_do_discussion_returns_assignment_and_rubric_settings() -> None:
+    """The nested assignment in Canvas's response supplies assignment_id and
+    rubric_settings; announcements get neither key."""
+    from markdown_to_canvas.canvas_api import _do_discussion
+
+    course = MagicMock()
+    course.create_discussion_topic.return_value = _mock_graded_discussion(
+        55555, 44444, rubric_settings={"id": 42}
+    )
+    entry = _do_discussion(course, None, "T", "<p>x</p>")
+    assert entry["assignment_id"] == 44444
+    assert entry["rubric_settings"] == {"id": 42}
+
+    course.create_discussion_topic.return_value = _mock_discussion(55556)
+    entry = _do_discussion(course, None, "T", "<p>x</p>")
+    assert entry["assignment_id"] is None
+    assert entry["rubric_settings"] is None
+
+    entry = _do_discussion(course, None, "T", "<p>x</p>", canvas_type="announcement")
+    assert "assignment_id" not in entry
 
 
 def test_remove_rubric_from_assignment_empty(mocker) -> None:

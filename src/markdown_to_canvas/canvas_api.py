@@ -1283,7 +1283,25 @@ def _do_discussion(
             topic = course.create_discussion_topic(title=title, message=body, **kwargs)
     else:
         topic = course.create_discussion_topic(title=title, message=body, **kwargs)
-    return {"canvas_type": canvas_type, "canvas_id": topic.id, "html_url": topic.html_url}
+    result: dict[str, Any] = {
+        "canvas_type": canvas_type, "canvas_id": topic.id, "html_url": topic.html_url
+    }
+    if canvas_type == "discussion":
+        # A graded discussion's rubric lives on its underlying assignment. The
+        # create/update response nests that assignment, rubric_settings
+        # included, so callers can attach or remove a rubric without a GET.
+        # Ungraded discussions have assignment_id None and no nested assignment.
+        nested = getattr(topic, "assignment", None)
+        result["assignment_id"] = getattr(topic, "assignment_id", None)
+        result["rubric_settings"] = (
+            nested.get("rubric_settings") if isinstance(nested, dict) else None
+        )
+    return result
+
+
+def get_discussion_assignment_id(course, topic_id: int) -> int | None:
+    """The id of a discussion's underlying assignment, or None if ungraded."""
+    return getattr(course.get_discussion_topic(topic_id), "assignment_id", None)
 
 
 def create_stub(course, canvas_type: str, title: str) -> dict[str, Any]:
