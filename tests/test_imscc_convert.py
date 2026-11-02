@@ -1,6 +1,7 @@
 """Unit tests: frontmatter extraction, HTML body extraction, module item generation."""
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -1916,3 +1917,58 @@ def test_imported_question_with_h2_round_trips_through_the_parser(tmp_path: Path
     assert "What was challenging?" in parsed["question_text"]
     assert "Tell me." in parsed["question_text"]
     assert "Thanks" in parsed["neutral_comments"]
+
+
+# --- Tables: import writes pipe tables (or raw HTML), never grid/simple tables ---
+
+def _render(md: str) -> str:
+    import pypandoc
+    return pypandoc.convert_text(md, to="html5", format="markdown+smart")
+
+
+def test_table_with_styled_header_spans_imports_as_working_pipe_table() -> None:
+    """Grid/simple tables broke when attribute stripping shortened a cell
+    (College 101 podcast rubric: Developed/Emerging/Inadequate merged into one
+    header cell with literal ** showing)."""
+    html = (
+        "<table><thead><tr><th><strong>Criteria</strong></th>"
+        '<th><span style="color: #000000;"><strong>Sophisticated</strong></span></th>'
+        '<th><span style="font-size: 12pt;"><strong>Developed</strong></span></th>'
+        "<th><strong>Emerging</strong></th></tr></thead>"
+        "<tbody><tr><td>Content</td><td>Clear | full</td><td>Mostly</td><td>Vague</td></tr></tbody></table>"
+    )
+    md = _html_to_markdown(html)
+    assert md.lstrip().startswith("| **Criteria**")
+    assert "+---" not in md and "+===" not in md
+    out = _render(md)
+    assert len(re.findall(r"<th[ >]", out)) == 4
+    assert len(re.findall(r"<td[ >]", out)) == 4
+    assert "**" not in out
+    assert "Clear | full" in out
+
+
+def test_table_with_heading_in_cell_imports_as_raw_html_table() -> None:
+    """College 101 'Type of Motivation' table: <h2> in cells can't be a pipe
+    table; with grid tables it came out misaligned once the heading's
+    {#id style} block was stripped."""
+    html = (
+        '<table><thead><tr><th><h2 id="type" style="color: #000000;"><strong>Type</strong></h2></th>'
+        "<th>Examples</th></tr></thead>"
+        "<tbody><tr><td><p>one</p><p>two</p></td><td>Curiosity</td></tr></tbody></table>"
+    )
+    md = _html_to_markdown(html)
+    assert "<table>" in md
+    assert "+---" not in md
+    out = _render(md)
+    assert len(re.findall(r"<th[ >]", out)) == 2
+    assert len(re.findall(r"<td[ >]", out)) == 2
+    assert "|" not in out
+
+
+def test_table_without_header_row_round_trips_without_header() -> None:
+    html = "<table><tbody><tr><td>a</td><td>b</td></tr><tr><td>c</td><td>d</td></tr></tbody></table>"
+    md = _html_to_markdown(html)
+    assert md.lstrip().startswith("|")
+    out = _render(md)
+    assert "<thead" not in out and "<th" not in out
+    assert len(re.findall(r"<td[ >]", out)) == 4

@@ -31,6 +31,7 @@ from pathlib import Path
 import yaml
 
 from .convert import apply_outside_fences, split_fenced_segments
+from .grid_tables import TableWarning, convert_grid_tables
 
 # One attribute: #id, .class, or key=value. Pandoc writes double-quoted values
 # with backslash escapes, and Word's values (ccp-props="{\"134233117\":false}")
@@ -1159,6 +1160,24 @@ _EMPH_PROTECT_RES = (
 )
 
 
+def _is_inline_space(ch: str) -> bool:
+    return ch.isspace() and ch != "\n"
+
+
+def _space_run_start(text: str, idx: int) -> int:
+    """Start of the run of non-newline whitespace that ends at idx."""
+    while idx > 0 and _is_inline_space(text[idx - 1]):
+        idx -= 1
+    return idx
+
+
+def _space_run_end(text: str, idx: int) -> int:
+    """End of the run of non-newline whitespace that starts at idx."""
+    while idx < len(text) and _is_inline_space(text[idx]):
+        idx += 1
+    return idx
+
+
 def _fix_emphasis_paragraph(para: str) -> str:
     protected = [False] * len(para)
     for rx in _EMPH_PROTECT_RES:
@@ -1172,26 +1191,46 @@ def _fix_emphasis_paragraph(para: str) -> str:
     for width in (2, 1):
         is_open = False
         fixes: list[tuple[int, int, str]] = []
-        for m in runs:
-            if len(m.group(0)) != width:
-                continue
+        same_width = [m for m in runs if len(m.group(0)) == width]
+        for idx, m in enumerate(same_width):
             start, end = m.start(), m.end()
             before = para[start - 1] if start else "\n"
             after = para[end] if end < len(para) else "\n"
             ws_before, ws_after = before.isspace(), after.isspace()
             if ws_before and ws_after:
-                if is_open and width == 2 and after == "\n":
-                    # "**Respond: **" at the end of a line: drop the space.
-                    fixes.append((start - 1, start, ""))
+                # The inner space must be on the marker's own line: spaces
+                # back to a line start are indentation, and spaces up to a
+                # line end leave the marker at the end of its line.
+                k_before = _space_run_start(para, start)
+                k_after = _space_run_end(para, end)
+                if width == 2 and is_open and k_before > 0 and para[k_before - 1] != "\n":
+                    # "**Respond: **" or "| **Developed ** |": a closer
+                    # with spaces on both sides; drop the inner ones.
+                    fixes.append((k_before, start, ""))
                     is_open = False
+                elif (
+                    width == 2
+                    and not is_open
+                    and k_after < len(para)
+                    and para[k_after] != "\n"
+                    and idx + 1 < len(same_width)
+                ):
+                    # "| ** Developed** |": an opener with spaces on both
+                    # sides, and a later ** to close it; drop the inner ones.
+                    fixes.append((end, k_after, ""))
+                    is_open = True
                 continue  # a bullet or "5 * 3", not emphasis
             if width == 1 and _LIST_MARKER_RE.match(para[para.rfind("\n", 0, start) + 1 : end + 1]):
                 continue
             if not is_open:
                 if ws_after:
-                    fixes = []
-                    is_open = None  # an opener that cannot open: give up
-                    break
+                    k = _space_run_end(para, end)
+                    if k == len(para) or para[k] == "\n":
+                        fixes = []
+                        is_open = None  # an opener that cannot open: give up
+                        break
+                    # "|** Developed**": move the space out before the opener.
+                    fixes.append((start, k, para[end:k] + m.group(0)))
                 is_open = True
             else:
                 if ws_before:
@@ -1204,14 +1243,22 @@ def _fix_emphasis_paragraph(para: str) -> str:
 
 
 def fix_emphasis_spaces(markdown: str) -> str:
-    """``**Scenario: **In`` → ``**Scenario:** In``.
+    """``**Scenario: **In`` → ``**Scenario:** In``; ``|** Developed**`` →
+    ``| **Developed**``.
 
     Word splits text into runs at formatting changes and the space often lands
     inside the bold run. A ``**`` with a space before it cannot close emphasis,
-    so pandoc shows the asterisks. Within each paragraph, ``**`` (then ``*``)
-    runs are paired in order; a closer with a space before it gets the space
-    moved after it. A paragraph whose runs do not pair up, or that holds a
-    ``***`` run, is left alone.
+    and one with a space after it cannot open it, so pandoc shows the
+    asterisks. Within each paragraph, ``**`` (then ``*``) runs are paired in
+    order. A closer with a space before it gets the space moved after it; an
+    opener with a space after it gets the space moved before it. When the
+    marker already has a space on its outer side too, the inner space is
+    dropped instead (only for ``**``: a lone ``*`` between spaces is a bullet
+    or "5 * 3", and a ``**`` between spaces only counts as an opener when a
+    later ``**`` in the paragraph can close it). The space is never removed
+    from the outer side, so the word after a closer stays separate. A
+    paragraph whose runs do not pair up, or that holds a ``***`` run, is left
+    alone.
     """
 
     def _segment(seg: str) -> str:
@@ -1222,6 +1269,94 @@ def fix_emphasis_spaces(markdown: str) -> str:
         )
 
     return apply_outside_fences(markdown, _segment)
+
+
+@dataclass
+class GluedEmphasis:
+    line: int  # 1-based, within the text passed in
+    text: str  # the emphasis and the word joined to it, e.g. "**Tip:**If"
+
+
+# Paragraph and list-item boundaries, as in fix_emphasis_spaces.
+_EMPH_UNIT_SEP_RE = re.compile(r"\n[ \t]*\n|\n(?=[ \t]*(?:[-*+]|\d+[.)])[ \t])")
+
+
+def _emphasis_pairs(para: str) -> list[tuple[int, int, int, int]]:
+    """(open start, open end, close start, close end) of each ``**``/``*``
+    pair in a paragraph that pairs up cleanly; [] for a paragraph that does
+    not, or that holds ``***`` or ``\\*``. An opener has no whitespace after
+    it, a closer none before it; a run with whitespace on both sides is not
+    emphasis."""
+    protected = [False] * len(para)
+    for rx in _EMPH_PROTECT_RES:
+        for m in rx.finditer(para):
+            for k in range(m.start(), m.end()):
+                protected[k] = True
+    runs = [m for m in _STAR_RUN_RE.finditer(para) if not protected[m.start()]]
+    if any(len(m.group(0)) > 2 for m in runs) or "\\*" in para:
+        return []
+    pairs: list[tuple[int, int, int, int]] = []
+    for width in (2, 1):
+        opened: tuple[int, int] | None = None
+        found: list[tuple[int, int, int, int]] = []
+        for m in runs:
+            if len(m.group(0)) != width:
+                continue
+            start, end = m.start(), m.end()
+            ws_before = start == 0 or para[start - 1].isspace()
+            ws_after = end == len(para) or para[end].isspace()
+            if ws_before and ws_after:
+                continue
+            if width == 1 and _LIST_MARKER_RE.match(para[para.rfind("\n", 0, start) + 1 : end + 1]):
+                continue
+            if opened is None:
+                if ws_after:
+                    break
+                opened = (start, end)
+            elif not ws_before:
+                found.append((*opened, start, end))
+                opened = None
+            else:
+                break
+        else:
+            if opened is None:
+                pairs.extend(found)
+    return pairs
+
+
+def find_glued_emphasis(markdown: str) -> list[GluedEmphasis]:
+    """Bold or italic text with a word joined straight onto it:
+    ``**Tip:**If`` or ``in**the next 2 years**``. Pandoc renders these, but
+    the page reads "Tip:If". Nothing can tell where the missing space went, so
+    this only reports them. Code blocks, inline code, link targets, HTML tags
+    and math are skipped.
+    """
+    code = code_block_lines(markdown)
+    out: list[GluedEmphasis] = []
+    bounds = [0]
+    for m in _EMPH_UNIT_SEP_RE.finditer(markdown):
+        bounds += [m.start(), m.end()]
+    bounds.append(len(markdown))
+    for u in range(0, len(bounds), 2):
+        start, end = bounds[u], bounds[u + 1]
+        first_line = markdown.count("\n", 0, start)
+        para = markdown[start:end]
+        if any(first_line + k in code for k in range(para.count("\n") + 1)):
+            continue
+        for o_start, o_end, c_start, c_end in _emphasis_pairs(para):
+            glued_after = c_end < len(para) and para[c_end].isalnum()
+            glued_before = o_start > 0 and para[o_start - 1].isalnum()
+            if not (glued_after or glued_before):
+                continue
+            left = o_start
+            while glued_before and left > 0 and para[left - 1].isalnum():
+                left -= 1
+            right = c_end
+            while glued_after and right < len(para) and para[right].isalnum():
+                right += 1
+            line = first_line + para.count("\n", 0, o_start) + 1
+            out.append(GluedEmphasis(line, para[left:right].replace("\n", " ")))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1368,8 +1503,18 @@ def _trailing_ws(line: str) -> str:
     return m.group(0) if m else ""
 
 
-def clean_markdown_body(body: str) -> str:
-    """Remove Word debris from a Markdown body (no frontmatter)."""
+def clean_markdown_body(body: str, table_warnings: list | None = None) -> str:
+    """Remove Word debris from a Markdown body (no frontmatter).
+
+    Grid tables are converted first, as a step of their own: their output
+    adds blank lines on purpose (paragraphs in HTML table cells), which
+    `_tidy_changed_lines` would drop, and the later passes then see the
+    table's cells as contiguous text. Tables that can't be converted are
+    appended to `table_warnings` if it is given.
+    """
+    body, warnings = convert_grid_tables(body, code_block_lines(body))
+    if table_warnings is not None:
+        table_warnings.extend(warnings)
     labels = reference_labels(body)
     cleaned = repair_swapped_links(body, labels)
     # Strays first: the Word attribute blocks still anchor their spans, so a
@@ -1425,9 +1570,17 @@ def indent_frontmatter_comments(front: str) -> str:
     return "\n".join(changed) if before == after else front
 
 
-def clean_markdown_file_text(text: str) -> str:
+def clean_markdown_file_text(text: str, table_warnings: list | None = None) -> str:
+    """Clean a whole file; table warnings get line numbers in the file."""
     front, body = split_frontmatter_raw(text)
-    return indent_frontmatter_comments(front) + clean_markdown_body(body)
+    found: list[TableWarning] = []
+    cleaned = clean_markdown_body(body, found)
+    if table_warnings is not None:
+        front_lines = front.count("\n")
+        for w in found:
+            w.line += front_lines
+        table_warnings.extend(found)
+    return indent_frontmatter_comments(front) + cleaned
 
 
 @dataclass
@@ -1451,6 +1604,10 @@ class FixMarkdownPlan:
     fixes: list[FileFix] = field(default_factory=list)
     errors: list[tuple[Path, str]] = field(default_factory=list)
     contrast: list[tuple[Path, ContrastWarning]] = field(default_factory=list)
+    #: Grid tables left unconverted (merged cells, uneven rows).
+    tables: list[tuple[Path, TableWarning]] = field(default_factory=list)
+    #: Bold/italic text with a word joined onto it ("**Tip:**If").
+    glued: list[tuple[Path, GluedEmphasis]] = field(default_factory=list)
     scanned: int = 0
 
 
@@ -1463,7 +1620,9 @@ def plan_fix_markdown(files: list[Path]) -> FixMarkdownPlan:
             plan.errors.append((path, str(e)))
             continue
         plan.scanned += 1
-        cleaned = clean_markdown_file_text(text)
+        table_warnings: list[TableWarning] = []
+        cleaned = clean_markdown_file_text(text, table_warnings)
+        plan.tables.extend((path, w) for w in table_warnings)
         if cleaned != text:
             plan.fixes.append(FileFix(path, text, cleaned))
         # Checked after cleaning: that is what the page will show.
@@ -1472,6 +1631,9 @@ def plan_fix_markdown(files: list[Path]) -> FixMarkdownPlan:
         for w in find_low_contrast(body):
             w.line += front_lines
             plan.contrast.append((path, w))
+        for g in find_glued_emphasis(body):
+            g.line += front_lines
+            plan.glued.append((path, g))
     return plan
 
 

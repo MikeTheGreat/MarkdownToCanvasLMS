@@ -1233,9 +1233,19 @@ below). What it changes:
   the list paragraph spacing. It is also deleted, rather than split, when a
   styled span or `**` is still open across it.
 - **Spaces inside bold and italic markers.** `**Scenario: **In` becomes
-  `**Scenario:** In` (the first form shows its asterisks on the page). Markers
-  are paired within each paragraph or list item; one where they do not pair
-  up, or that contains `***` or `\*`, is left alone.
+  `**Scenario:** In`, and `|** Developed**` becomes `| **Developed**` (the
+  first forms show their asterisks on the page). The space is moved outside
+  the markers, or dropped when there is already a space outside them
+  (`| ** Developed ** |` becomes `| **Developed** |`), so the word after the
+  bold text is never joined to it. Markers are paired within each paragraph or
+  list item; one where they do not pair up, or that contains `***` or `\*`, is
+  left alone.
+
+  If you format Markdown with the markdownlint extension in VS Code, its fix
+  for spaces inside emphasis (rule MD037) deletes the space instead of moving
+  it, so `**watch out **for` becomes `**watch out**for`, which shows as
+  "watch outfor". Running `fix-markdown` before editing those files avoids
+  this.
 - **Stacked list markers.** `- - - Identify…` and `1.  1.  Think of…` (a list
   item holding only another list, which shows a stack of bullets) keep only
   the last marker, and the lines belonging to it lose the same indentation.
@@ -1244,6 +1254,35 @@ below). What it changes:
 - **Horizontal rules.** The 72-dash lines pandoc writes for a horizontal rule
   become `---`. A dash line directly under text (a heading underline) or
   touching a table is left alone.
+- **Grid tables.** Every grid table (the kind drawn with `+-----+` borders)
+  becomes a pipe table, the same format `import` writes. Older imports wrote
+  grid tables, and the attribute cleanup could leave their columns out of
+  line, which makes each row show up in Canvas as one merged cell with `|`
+  and `**` in it. `fix-markdown` finds the cells by their `|` separators
+  rather than by column position, so it repairs those tables as well. A table
+  with a cell holding more than one paragraph, a list or a heading becomes an
+  HTML `<table>` instead, with the cell contents still written in Markdown.
+  Only the first header row stays a header; further header rows become
+  ordinary rows. A table with merged cells, or rows with different numbers
+  of cells, is left unchanged and listed after the changes:
+
+  ```text
+  Grid tables not converted (1; convert these by hand):
+    pages/rubric.md:42  a border has a different number of columns (merged cells)
+  ```
+
+After the changes, `fix-markdown` lists bold or italic text that has a word
+joined straight onto it, which reads as one word on the page ("Tip:If"). It
+can't tell where the missing space belongs, so it only reports these:
+
+```text
+Bold or italic text joined to a word (2; add the missing space by hand):
+  assignments/advising-appointment-summary.md:50  **Screenshot**of
+  assignments/career-exploration-assignment.md:121  in**the next 2 years**
+```
+
+The list includes a word joined before the bold text too, and
+deliberate in-word emphasis such as `*note*s`; leave those as they are.
 
 After the changes, `fix-markdown` lists styled text whose colour against its
 background is below the WCAG AA contrast minimum (4.5:1 for ordinary text,
@@ -3848,6 +3887,8 @@ Every top-level folder the tool recognizes (`pages/`, `assignments/`, `discussio
 > **Heading levels:** Canvas already strips H1s from the content it exports, so imported headings normally keep their original levels — an H2 stays an H2. As a safety net, if a converted file *does* still contain an H1 (which Canvas would silently turn into an inaccessible styled paragraph; see the H1 warning above), the import shifts every heading in that file down one level so the H1 becomes an H2. Files without an H1 are left untouched.
 >
 > **Links to missing content:** When a page links to a Canvas item that isn't in the export (usually a link copied from an older course whose target was never brought over), import keeps the link text as plain text, drops the link, and prints a warning naming the file and link text. Links to graded quizzes and graded discussions, which Canvas records by their assignment ID, resolve to the imported quiz or discussion file.
+
+> **Tables:** Tables are imported as pipe tables (`| a | b |` rows with a `| --- | --- |` line under the header), which stay correct however the columns line up. A table that a pipe table can't represent — a cell holding more than one paragraph, a list or a heading, or merged cells — is imported as an HTML `<table>` block instead. Repos imported with older versions may contain grid tables (`+-----+` borders) whose columns no longer line up; those render as one merged cell per row. `fix-markdown` converts them (see [Cleaning Word debris out of Markdown](#cleaning-word-debris-out-of-markdown-fix-markdown)).
 
 > **Attribute cleanup:** Pandoc attaches curly-brace attribute blocks (e.g. `## Heading {#id .class style="..."}`) to headings, links, images, spans, and fenced divs during HTML→Markdown conversion. Import strips these down to just `id` (kept in case a table of contents links to it) and `style` (kept as user-authored formatting) — classes and other Canvas-internal attributes are dropped. If nothing is left, the `{...}` is removed entirely, and an emptied fenced div (`:::`) is unwrapped rather than left as an empty wrapper.
 >

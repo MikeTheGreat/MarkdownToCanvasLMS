@@ -496,6 +496,47 @@ def test_space_before_bold_closer_at_line_end_is_dropped() -> None:
     assert fix_emphasis_spaces("**Respond: **\n") == "**Respond:**\n"
 
 
+def test_space_inside_bold_opener_is_moved_out() -> None:
+    # The College 101 podcast rubric's header row after import.
+    md = "|** Developed\xa0**| x\n"
+    assert fix_emphasis_spaces(md) == "| **Developed**\xa0| x\n"
+    assert fix_emphasis_spaces("<th>** Developed **</th>\n") == "<th> **Developed** </th>\n"
+
+
+def test_bold_markers_with_spaces_on_both_sides_lose_the_inner_space() -> None:
+    assert fix_emphasis_spaces("| ** Developed ** |\n") == "| **Developed** |\n"
+    assert fix_emphasis_spaces("** Note: ** text\n") == "**Note:** text\n"
+    assert fix_emphasis_spaces("A ** Screenshot** of\n") == "A **Screenshot** of\n"
+
+
+def test_closer_after_a_line_break_keeps_the_line_indent() -> None:
+    """mpanitz College 101: the closer starts the next line of a list item.
+    The spaces before it are indentation, not a space inside the bold."""
+    md = (
+        "3. Far away! **What if I'm not sure?\\\n"
+        "   ** Make your best guess.\n"
+    )
+    assert fix_emphasis_spaces(md) == md
+
+
+def test_double_star_between_spaces_without_a_partner_is_left_alone() -> None:
+    for md in ("x = 2 ** 3 here\n", "x = 2 ** 3 and **bold**\n", "word** next\n"):
+        assert fix_emphasis_spaces(md) == md
+
+
+def test_space_after_closer_is_never_removed() -> None:
+    """A closer keeps the space after it, so the next word stays separate
+    ("**watch out** for", never "**watch out**for")."""
+    for md in (
+        "**watch out** for the thing\n",
+        "**watch out**\xa0for the thing\n",
+        "| **Sophisticated** | x |\n",
+    ):
+        assert fix_emphasis_spaces(md) == md
+    assert fix_emphasis_spaces("**watch out **for\n") == "**watch out** for\n"
+    assert fix_emphasis_spaces("**watch out\xa0**for\n") == "**watch out**\xa0for\n"
+
+
 def test_italic_closer_space_is_moved_out() -> None:
     assert fix_emphasis_spaces("*note: *then\n") == "*note:* then\n"
 
@@ -697,3 +738,46 @@ def test_diff_lines_show_a_removed_rule_line() -> None:
 
     fix = FileFix(Path("x.md"), "a\n---\nb", "a\nb")
     assert fix.diff_lines() == ["@@ -2 +1,0 @@", "----"]
+
+
+# ---------------------------------------------------------------------------
+# Emphasis joined to a word (reported, not changed)
+# ---------------------------------------------------------------------------
+
+
+def test_glued_emphasis_reports_word_joined_after_closer() -> None:
+    from markdown_to_canvas.markdown_cleanup import find_glued_emphasis
+    md = "Intro.\n\n💡**Tip:**If you\n\nA **Screenshot**of it, as\xa0**one**PDF.\n"
+    found = [(g.line, g.text) for g in find_glued_emphasis(md)]
+    assert found == [(3, "**Tip:**If"), (5, "**Screenshot**of"), (5, "**one**PDF")]
+
+
+def test_glued_emphasis_reports_word_joined_before_opener() -> None:
+    from markdown_to_canvas.markdown_cleanup import find_glued_emphasis
+    found = [(g.line, g.text) for g in find_glued_emphasis("pursue in**the next 2 years**\n")]
+    assert found == [(1, "in**the next 2 years**")]
+
+
+def test_glued_emphasis_ignores_separated_code_links_and_unpaired() -> None:
+    from markdown_to_canvas.markdown_cleanup import find_glued_emphasis
+    for md in (
+        "**watch out** for\n",
+        "**watch out**\xa0for\n",
+        "**watch out**, then\n",
+        "`**x**y`\n",
+        "[**x**](u)word\n",
+        "```\n**x**y\n```\n",
+        "    **x**y indented code\n",
+        "2**3 and **x**\n",
+        "***a**b*\n",
+    ):
+        assert find_glued_emphasis(md) == [], md
+
+
+def test_fix_markdown_plan_lists_glued_emphasis_with_file_line_numbers(tmp_path) -> None:
+    from markdown_to_canvas.markdown_cleanup import plan_fix_markdown
+    p = tmp_path / "page.md"
+    p.write_text("---\ntitle: x\n---\n\nA **Screenshot**of it.\n", encoding="utf-8")
+    plan = plan_fix_markdown([p])
+    assert [(path, g.line, g.text) for path, g in plan.glued] == [(p, 5, "**Screenshot**of")]
+    assert plan.fixes == []

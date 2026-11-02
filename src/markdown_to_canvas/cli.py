@@ -711,15 +711,22 @@ def fix_markdown_cmd(course_dir: str | None, apply: bool) -> None:
     - removes a trailing-backslash line break that ends its paragraph, where
       it draws nothing;
     - moves spaces out of bold/italic markers ("**Scenario: **In" becomes
-      "**Scenario:** In");
+      "**Scenario:** In", "|** Developed**" becomes "| **Developed**");
     - replaces \\' and \\" with ' and " outside code, attribute blocks, link
-      targets, HTML tags and $math$ (they then render as curly quotes).
+      targets, HTML tags and $math$ (they then render as curly quotes);
+    - converts every grid table (+----+ borders) to a pipe table, or to an
+      HTML table when a cell holds several paragraphs, a list or a heading.
+      Cells are found by their | separators, so a table whose columns no
+      longer line up is repaired too. A table with merged cells or uneven
+      rows is listed and left unchanged.
 
-    import applies the same repairs to newly imported content.
+    import applies the same repairs to newly imported content (it writes
+    pipe tables itself).
 
     It also lists styled text whose colour against its background is below
-    WCAG AA contrast (4.5:1; 3:1 in headings), checked on the cleaned files.
-    It does not change these.
+    WCAG AA contrast (4.5:1; 3:1 in headings), and bold or italic text with a
+    word joined onto it ("**Tip:**If", which reads "Tip:If"), checked on the
+    cleaned files. It does not change these.
 
     Without --apply this lists every changed line; --apply writes the files.
     Run update afterwards to upload the changes.
@@ -761,6 +768,25 @@ def fix_markdown_cmd(course_dir: str | None, apply: bool) -> None:
                 f"  {path.relative_to(repo)}:{w.line}  {w.ratio:.1f}:1, needs "
                 f"{w.required:g}:1  {w.color} on {w.background}  \"{w.text}\""
             )
+        click.echo()
+    if plan.glued:
+        click.secho(
+            f"Bold or italic text joined to a word ({len(plan.glued)}; add the "
+            "missing space by hand):",
+            fg="yellow",
+            bold=True,
+        )
+        for path, g in plan.glued:
+            click.echo(f"  {path.relative_to(repo)}:{g.line}  {g.text}")
+        click.echo()
+    if plan.tables:
+        click.secho(
+            f"Grid tables not converted ({len(plan.tables)}; convert these by hand):",
+            fg="yellow",
+            bold=True,
+        )
+        for path, tw in plan.tables:
+            click.echo(f"  {path.relative_to(repo)}:{tw.line}  {tw.reason}")
         click.echo()
 
     n = len(plan.fixes)

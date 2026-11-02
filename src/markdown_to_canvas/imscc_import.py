@@ -897,13 +897,24 @@ def _unwrap_outer_divs(html: str) -> str:
     return html
 
 
+#: Pandoc's Markdown writer with every table format except pipe tables turned
+#: off. Grid, simple and multiline tables pad each cell to a fixed width, and
+#: _simplify_pandoc_attrs() then shortens cell text by deleting `{...}` blocks
+#: and unwrapping `[...]{style}` spans, so the `|` separators stop lining up
+#: with the borders and pandoc reads each row as one merged cell. Pipe tables
+#: don't depend on alignment. A table a pipe table can't express (a cell with
+#: several paragraphs, a list or a heading; a merged cell) comes out as a raw
+#: HTML <table> instead, which can't be misaligned either.
+_PANDOC_TO_MARKDOWN = "markdown-grid_tables-simple_tables-multiline_tables"
+
+
 def _html_to_markdown(html: str) -> str:
     html = _strip_canvas_img_attrs(html)
     html = _unwrap_outer_divs(html)
     html, iframes = _extract_iframes(html)
     md = pypandoc.convert_text(
         html,
-        to="markdown",
+        to=_PANDOC_TO_MARKDOWN,
         format="html",
         extra_args=["--wrap=none"],
     )
