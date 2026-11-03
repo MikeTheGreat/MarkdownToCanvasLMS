@@ -34,7 +34,7 @@ from .relative_dates import (
 #: The format version this tool reads and writes. Increase it (and add a
 #: migration to MIGRATIONS) whenever a change makes the tool read an existing
 #: repo file differently. See CLAUDE.md.
-FORMAT_VERSION = 15
+FORMAT_VERSION = 16
 
 SETTINGS_RELPATH = Path("course_settings") / "course_settings.toml"
 
@@ -948,6 +948,20 @@ def _migrate_14_to_15(state: UpgradeState) -> list[str]:
     return lines
 
 
+def _migrate_15_to_16(state: UpgradeState) -> list[str]:
+    """Format 16 adds discussion checkpoints; stamp the manifests.
+
+    Older files need no rewriting: the new keys (a discussion's
+    ``checkpoints`` block, ``reply_to_topic_due_at`` / ``reply_to_others_due_at``
+    in ``due_dates``, ``reply_to_topic_offsets`` in relative tables) are all
+    optional. The version changes because an older tool would upload a
+    checkpointed discussion as a plain graded discussion with no due date.
+    """
+    return [
+        f"Record format version 16 in {manifest_path.name}" for manifest_path in state.manifests
+    ]
+
+
 #: Ordered migrations, keyed by the version they migrate *from*.
 MIGRATIONS: dict[int, Migration] = {
     0: _migrate_0_to_1,
@@ -965,6 +979,7 @@ MIGRATIONS: dict[int, Migration] = {
     12: _migrate_12_to_13,
     13: _migrate_13_to_14,
     14: _migrate_14_to_15,
+    15: _migrate_15_to_16,
 }
 
 

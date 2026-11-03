@@ -1,5 +1,5 @@
 [_repo_format]
-format_version = 10
+format_version = 16
 
 [_canvas_course]
 canvas_type = "course_identity"
@@ -11,7 +11,7 @@ recorded_at = "2026-10-03T17:48:06.042754+00:00"
 ["course_settings/course_settings.toml"]
 canvas_id = 0
 canvas_type = "course_settings"
-last_synced = "2026-10-06T03:18:46.319536+00:00"
+last_synced = "2026-11-03T04:31:35.301570+00:00"
 
 ["course_settings/course_settings.toml".section_hashes]
 grading_standards = "43d9bcb84acb9bbb"
@@ -76,14 +76,14 @@ lock_at = "2026-10-21T23:59:00-07:00"
 ["discussions/week-1-discussion.md"]
 canvas_id = 21873380
 canvas_type = "discussion"
-last_synced = "2026-10-06T03:18:48.733691+00:00"
+last_synced = "2026-11-03T04:30:11.816570+00:00"
 
 [["discussions/week-1-discussion.md".dates_used]]
 item = "Week 1 Discussion"
 type = "discussion"
 field = "due_at"
 format = ""
-text = "Monday, September 28 at 11:59 PM"
+text = "Monday, September 28 by 11:59 PM"
 
 [["discussions/week-1-discussion.md".dates_used]]
 item = "Week 1 Discussion"
@@ -123,7 +123,7 @@ lock_at = "2026-10-28T17:00:00-07:00"
 ["pages/week-1-homepage.md"]
 canvas_id = 42494571
 canvas_type = "page"
-last_synced = "2026-10-06T03:17:51.672537+00:00"
+last_synced = "2026-11-03T04:30:13.017585+00:00"
 canvas_url = "week-1-homepage"
 
 [["pages/week-1-homepage.md".dates_used]]
@@ -131,12 +131,38 @@ item = "Quiz 1"
 type = "quiz"
 field = "due_at"
 format = ""
-text = "Monday, October 12 at 11:59 PM"
+text = "Monday, October 12 by 11:59 PM"
 
 ["modules/week-1.md"]
 canvas_id = 11724188
 canvas_type = "module"
-last_synced = "2026-10-06T03:17:55.778330+00:00"
+last_synced = "2026-11-03T04:30:17.114165+00:00"
 
 ["modules/week-1.md".canvas_item_ids]
-"pages/week-1-homepage.md" = 109217909
+"pages/week-1-homepage.md" = 109534838
+
+["course_settings/rubrics.toml"]
+canvas_id = 0
+canvas_type = "rubrics"
+last_synced = "2026-11-03T04:30:05.833560+00:00"
+
+["course_settings/rubrics.toml".rubric_hashes]
+"Checkpoint Rubric" = "d8fe45a273aac90d"
+
+["discussions/checkpoint-forum.md"]
+canvas_id = 21955064
+canvas_type = "discussion"
+last_synced = "2026-11-03T04:31:38.698470+00:00"
+
+[["discussions/checkpoint-forum.md".dates_used]]
+item = "Checkpoint Forum"
+type = "discussion"
+field = "due_at"
+format = ""
+text = "Friday, November 13 by 11:59 PM"
+
+["discussions/checkpoint-forum.md".resolved_dates]
+unlock_at = "2026-11-09T00:00:00-08:00"
+reply_to_topic_due_at = "2026-11-11T23:59:00-08:00"
+reply_to_others_due_at = "2026-11-13T23:59:00-08:00"
+lock_at = "2026-11-16T23:59:00-08:00"

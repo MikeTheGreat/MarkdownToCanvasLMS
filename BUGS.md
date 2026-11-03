@@ -60,3 +60,28 @@ Found by reading the code on 2026-09-26 while adding the same-name guard; not
 reproduced. The stub path also titles the stub from the filename, not the
 module's frontmatter `title`, so a name check there would need to read the
 module file's frontmatter first.
+
+## Imported dates have no UTC offset, so Canvas may read them in the wrong time zone
+
+Canvas's IMSCC export writes dates in UTC without an offset: in
+`coll101-ol3-12086-f26-college-strategies-export.imscc`, a checkpoint with
+`<due_at>2026-11-04T07:59:59</due_at>` has `<all_day_date>2026-11-03</all_day_date>`,
+so it is due 23:59:59 Pacific on Nov 3. `import` copies such values unchanged
+into `due_dates` (and into commented frontmatter lines), for example
+`reply_to_others_due_at = "2026-11-04T07:59:59"`.
+
+Measured on 2026-11-02 in sandbox course 2758791: a checkpoint `dueAt` of
+`2026-11-12T23:59:00` (no offset) sent through GraphQL `updateDiscussionTopic`
+was stored as `2026-11-13T07:59:00Z`, that is, read as Pacific time, not UTC.
+So an imported, offset-less checkpoint date is uploaded 7-8 hours later than
+the original (07:59 Pacific the next day instead of 23:59).
+
+Not yet measured: whether REST `due_at`/`unlock_at`/`lock_at` (assignments,
+plain discussions, quizzes) read offset-less dates the same way. If they do,
+every date `import` writes is affected, not only checkpoint dates.
+
+Likely fix: in `import`, treat an offset-less exported date as UTC and write it
+with an explicit offset (either `Z`, or converted to the course's
+`default_time_zone` from `course_settings.xml` with that zone's offset), and add
+a migration note for repos imported before the fix. First measure the REST case
+to confirm the scope.

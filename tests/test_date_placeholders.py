@@ -335,3 +335,48 @@ class TestStale:
     def test_no_records(self):
         assert first_stale_reason(None, _ctx()) is None
         assert first_stale_reason([], _ctx()) is None
+
+
+# ---------------------------------------------------------------------------
+# Checkpointed discussions
+# ---------------------------------------------------------------------------
+
+_FORUM = [
+    {"name": "Unit 02 Forum", "type": "discussion",
+     "reply_to_topic_due_at": "2026-11-01T23:59:00-08:00",
+     "reply_to_others_due_at": "2026-11-03T23:59:00-08:00"},
+    {"name": "Kept Forum", "type": "discussion",
+     "reply_to_topic_due_at": "2026-11-01T23:59:00-08:00", "reply_to_others_due_at": "KEEP"},
+]
+
+
+class TestCheckpointedDiscussion:
+    def test_default_field_is_the_reply_to_others_date(self):
+        out, records, errors = _expand('[x]{.replace_date_with item="Unit 02 Forum"}', _ctx(due_dates=_FORUM))
+        assert errors == []
+        assert out == "Tuesday, November 3 by 11:59 PM"
+        assert records[0]["field"] == "due_at"
+
+    def test_explicit_due_at(self):
+        out, _, errors = _expand(
+            '[x]{.replace_date_with item="Unit 02 Forum" field=due_at format="%b %-d"}',
+            _ctx(due_dates=_FORUM),
+        )
+        assert errors == [] and out == "Nov 3"
+
+    def test_own_entry(self):
+        out, _, errors = _expand(
+            "[x]{.replace_date_with}", _ctx("Unit 02 Forum", "discussion", due_dates=_FORUM)
+        )
+        assert errors == [] and out == "Tuesday, November 3 by 11:59 PM"
+
+    def test_keep_is_unresolved(self):
+        _, _, errors = _expand('[x]{.replace_date_with item="Kept Forum"}', _ctx(due_dates=_FORUM))
+        assert len(errors) == 1 and "reply_to_others_due_at (KEEP)" in errors[0]
+
+    def test_checkpoint_keys_are_not_fields(self):
+        _, _, errors = _expand(
+            '[x]{.replace_date_with item="Unit 02 Forum" field=reply_to_topic_due_at}',
+            _ctx(due_dates=_FORUM),
+        )
+        assert len(errors) == 1 and "is not one of due_at, unlock_at, lock_at" in errors[0]

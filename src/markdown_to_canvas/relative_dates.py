@@ -67,11 +67,15 @@ CLAMP_KEY = "clamp_lock_at_to_last_day_of_term"
 #: Section-wide only: the fingerprint `generate-due-dates` records (see fingerprint()).
 HASH_KEY = "last_generated_hash"
 _SECTION_KEYS = _SETTING_KEYS + ("tables", CUTOFF_KEY, HASH_KEY)
+#: An item's offsets from its overall due date to its reply-to-topic
+#: checkpoint (a checkpointed discussion; see the checkpoints module).
+REPLY_TO_TOPIC_OFFSETS = "reply_to_topic_offsets"
 _ITEM_KEYS = (
     "name", "type", "relative_to", "offsets", "unlock_offset", "lock_offset", "virtual",
+    REPLY_TO_TOPIC_OFFSETS,
 )
 #: Keys a virtual item may not have: it names a date, not content with lock dates.
-_NOT_FOR_VIRTUAL = ("type", "unlock_offset", "lock_offset")
+_NOT_FOR_VIRTUAL = ("type", "unlock_offset", "lock_offset", REPLY_TO_TOPIC_OFFSETS)
 _TERM_KEYS = (
     "first_day",
     "last_day",
@@ -198,6 +202,9 @@ class RelativeItem:
     anchor_date: date | None = None
     #: A name for a date that other items count from; never written to due_dates.
     virtual: bool = False
+    #: Offsets from the overall (reply-to-others) due date to the reply-to-topic
+    #: due date of a checkpointed discussion; None for any other item.
+    reply_to_topic_offsets: tuple[str, ...] | None = None
 
     @property
     def due_time_is_explicit(self) -> bool:
@@ -313,6 +320,26 @@ def _load_item(raw: Any, table: str, index: int) -> RelativeItem:
             return None
         return tuple(_offset_list(raw[key], f"{where} {key}"))
 
+    topic_offsets = None
+    if REPLY_TO_TOPIC_OFFSETS in raw:
+        if item_type is not None and item_type != "discussion":
+            raise RelativeDueDatesError(
+                f"{where}: {REPLY_TO_TOPIC_OFFSETS} is only for checkpointed discussions, "
+                f"but the item's type is {item_type!r}"
+            )
+        if anchor == "NO_DUE_DATE":
+            raise RelativeDueDatesError(
+                f"{where}: {REPLY_TO_TOPIC_OFFSETS} needs a due date to count from, but "
+                f"the item is relative to NO_DUE_DATE"
+            )
+        topic_offsets = tuple(
+            _offset_list(raw[REPLY_TO_TOPIC_OFFSETS], f"{where} {REPLY_TO_TOPIC_OFFSETS}")
+        )
+        if not topic_offsets:
+            raise RelativeDueDatesError(f"{where}: {REPLY_TO_TOPIC_OFFSETS} cannot be empty")
+        if NONE in topic_offsets:
+            raise RelativeDueDatesError(f"{where}: {REPLY_TO_TOPIC_OFFSETS} cannot contain NONE")
+
     return RelativeItem(
         name=name.strip(),
         type=item_type,
@@ -323,6 +350,7 @@ def _load_item(raw: Any, table: str, index: int) -> RelativeItem:
         lock_offset=lock_rule("lock_offset"),
         anchor_date=anchor_date,
         virtual=virtual,
+        reply_to_topic_offsets=topic_offsets,
     )
 
 
@@ -693,6 +721,9 @@ class ComputedDates:
     #: Why clamp_lock_at_to_last_day_of_term set lock_at to the end of the
     #: term: CLAMPED_LATER or CLAMPED_NONE; None when it did not.
     lock_clamped: str | None = None
+    #: A checkpointed discussion's reply-to-topic due date; ``due_at`` is then
+    #: its reply-to-others (overall) due date. None for any other item.
+    reply_to_topic_due_at: str | None = None
 
 
 #: ComputedDates.lock_clamped values.
@@ -922,6 +953,28 @@ class _Calculator:
                 )
                 continue
             lock_at, clamped = self._clamped_lock_at(item, due)
+            topic_due = None
+            if item.reply_to_topic_offsets is not None:
+                assert due is not None  # loading rejects NO_DUE_DATE with the key
+                topic = self._apply(
+                    due, item.reply_to_topic_offsets,
+                    f"[{SECTION_KEY}.tables.{self.table.name}] item {item.name!r} "
+                    f"{REPLY_TO_TOPIC_OFFSETS}",
+                )
+                if topic > due:
+                    raise RelativeDueDatesError(
+                        f"[{SECTION_KEY}.tables.{self.table.name}] item {item.name!r}: its "
+                        f"{REPLY_TO_TOPIC_OFFSETS} give a reply-to-topic date "
+                        f"({topic.isoformat(sep=' ', timespec='minutes')}) after its overall "
+                        f"(reply-to-others) due date ({due.isoformat(sep=' ', timespec='minutes')}). "
+                        f"Nothing was written."
+                    )
+                if not self.term.first_day <= topic.date() <= self.term.last_day:
+                    outside.append(
+                        f"item {item.name!r} has its reply-to-topic date on "
+                        f"{topic.date().isoformat()}."
+                    )
+                topic_due = self._format(topic)
             result.dates.append(
                 ComputedDates(
                     name=item.name,
@@ -930,6 +983,7 @@ class _Calculator:
                     unlock_at=self._lock_field(item, "unlock_at", due),
                     lock_at=lock_at,
                     lock_clamped=clamped,
+                    reply_to_topic_due_at=topic_due,
                 )
             )
         if outside:

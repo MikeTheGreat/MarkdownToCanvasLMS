@@ -588,6 +588,15 @@ as `--dont-reschedule-before DATETIME` could override it for one run, and
 `--dont-reschedule-before none` could ignore it, without editing the file.
 Deferred until the key has been used for a term.
 
+## Date placeholders: choose a checkpointed discussion's reply-to-topic date
+
+Builds on discussion checkpoints (format 16). A checkpointed discussion's
+`due_dates` entry has `reply_to_topic_due_at` and `reply_to_others_due_at`
+instead of `due_at`, and a `replace_date_with` placeholder that selects
+`due_at` shows the reply-to-others date (the discussion's overall due date).
+There is no way to quote the earlier reply-to-topic date. `field` could accept
+`reply_to_topic_due_at` (and `reply_to_others_due_at` for symmetry).
+
 ## `generate-due-dates`: generate week anchors automatically
 
 Builds on virtual relative-table items (`virtual = true`; OpenSpec changes

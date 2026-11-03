@@ -33,6 +33,7 @@ from .convert import (
 from .ignore import IgnoreMatcher, load_ignore_matcher
 from .local_orphans import _quiet, collect_local_refs
 from .quiz import split_quiz_body
+from . import checkpoints as checkpoints_lib
 from .sync import is_virtual_entry, load_course_flags, load_due_dates
 
 # Top-level folders that are not plain content folders. Anything else at the
@@ -614,7 +615,12 @@ def _plan_warnings(planner: _Planner) -> None:
         g.get("title") for g in dest_settings.get("assignment_groups", []) if isinstance(g, dict)
     }
     dest_flags = _dest_flags(planner.dest)
-    due_names = {e.get("name") for e in load_due_dates(planner.src, src_settings)}
+    src_due_dates = [e for e in load_due_dates(planner.src, src_settings) if isinstance(e, dict)]
+    due_names = {e.get("name") for e in src_due_dates}
+    # Names whose entry holds checkpointed-discussion dates (checkpoints.ENTRY_KEYS).
+    checkpoint_names = {
+        e.get("name") for e in src_due_dates if any(k in e for k in checkpoints_lib.ENTRY_KEYS)
+    }
     relative_names = _relative_names(src_settings)
     dest_titles = _dest_titles(planner.dest)
     course_ids = _source_course_ids(planner.src)
@@ -667,8 +673,12 @@ def _plan_warnings(planner: _Planner) -> None:
                 if title in relative_names:
                     where.append("relative_due_dates")
                 if where:
+                    which = (
+                        "dates (including its reply_to_topic_due_at and reply_to_others_due_at "
+                        "checkpoint dates)" if title in checkpoint_names else "dates"
+                    )
                     plan.warnings.append(
-                        f"{rel}: dates for '{title}' live in the source's "
+                        f"{rel}: {which} for '{title}' live in the source's "
                         f"course_settings.toml ({' and '.join(where)}) and were not copied"
                     )
             others = [o for o in dest_titles.get((ctype, title), []) if o != rel]

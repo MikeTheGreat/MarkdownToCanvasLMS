@@ -8,7 +8,9 @@ fallback for editor previews and never reaches the output. Attributes:
 - ``item``: the ``name`` of a ``due_dates`` entry; omitted means the entry of
   the file being converted (its own title and content type).
 - ``type``: ``assignment``, ``discussion`` or ``quiz``; restricts the match.
-- ``field``: ``due_at`` (default), ``unlock_at`` or ``lock_at``.
+- ``field``: ``due_at`` (default), ``unlock_at`` or ``lock_at``. For a
+  checkpointed discussion's entry, ``due_at`` means its
+  ``reply_to_others_due_at`` (the discussion's overall due date).
 - ``format``: a strftime format; omitted means the course-wide default
   (``replace_date_with_format``).
 
@@ -46,6 +48,8 @@ FORMAT_COMMENT = (
 )
 
 _FIELDS = ("due_at", "unlock_at", "lock_at")
+#: A checkpointed discussion's entry has this instead of due_at (see checkpoints.py).
+_REPLY_TO_OTHERS_DUE = "reply_to_others_due_at"
 _TYPES = ("assignment", "discussion", "quiz")
 _ATTRIBUTES = ("item", "type", "field", "format")
 _SENTINELS = {"none", "keep", "create_none_then_keep"}
@@ -334,7 +338,11 @@ def _render(
     ctx: DatePlaceholderContext, name: str, entry_type: str | None, field: str, fmt: str | None
 ) -> str:
     entry = find_entry(ctx.due_dates, name, entry_type)
-    when = _as_datetime(entry.get(field), name, field)
+    source = field
+    if field == "due_at" and "due_at" not in entry and _REPLY_TO_OTHERS_DUE in entry:
+        # A checkpointed discussion: its overall due date is the reply-to-others one.
+        source = _REPLY_TO_OTHERS_DUE
+    when = _as_datetime(entry.get(source), name, source)
     return format_date(when, fmt or ctx.default_format)
 
 

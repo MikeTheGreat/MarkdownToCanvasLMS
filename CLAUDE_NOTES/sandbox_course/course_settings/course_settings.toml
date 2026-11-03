@@ -1,8 +1,10 @@
-format_version = 10
-upgraded_by = ["0.2.1.dev3+gcb162d079.d20260920 on 2026-10-05: 9 -> 10"]
+format_version = 16
+upgraded_by = ["0.2.1.dev3+gcb162d079.d20260920 on 2026-10-05: 9 -> 10", "0.2.1.dev3+gcb162d079.d20260920 on 2026-11-02: 10 -> 16"]
 
 # Date format (strftime) for [text]{.replace_date_with} placeholders that give no format=
 replace_date_with_format = "%A, %B %-d by %-I:%M %p"
+
+group_categories = ["Checkpoint Groups"]
 
 due_dates = [
     {name = "Problem Set 1", unlock_at = "NONE", due_at = "2026-09-23T23:59:00-07:00", lock_at = "2026-09-30T23:59:00-07:00"},
@@ -12,9 +14,15 @@ due_dates = [
     {name = "Lab 1", unlock_at = "2026-10-01T23:59:00-07:00", due_at = "2026-10-06T23:59:00-07:00", lock_at = "2026-10-13T23:59:00-07:00"},
     {name = "Week 1 Discussion", type = "discussion", unlock_at = "NONE", due_at = "2026-09-28T23:59:00-07:00", lock_at = "2026-10-05T23:59:00-07:00"},
     {name = "Quiz 1", type = "quiz", unlock_at = "NONE", due_at = "2026-10-12T23:59:00-07:00", lock_at = "2026-10-19T23:59:00-07:00"},
+    {name = "Checkpoint Forum", type = "discussion", unlock_at = "2026-11-09T00:00:00-08:00", reply_to_topic_due_at = "2026-11-11T23:59:00-08:00", reply_to_others_due_at = "2026-11-13T23:59:00-08:00", lock_at = "2026-11-16T23:59:00-08:00"},
     {name = "Problem Set 5", unlock_at = "2026-10-14T17:00:00-07:00", due_at = "2026-10-21T17:00:00-07:00", lock_at = "2026-10-28T17:00:00-07:00"},
 ]
 [relative_due_dates]
+# When true, `generate-due-dates` sets every lock date after the term file's
+# last_day, and every lock rule of "NONE", to last_day at 23:59 (term time zone).
+# Items with no lock rule are left as they are. A table may set it too.
+# clamp_lock_at_to_last_day_of_term = true
+
 days_of_week = ["Mon", "Wed"]
 unlock_relative_default = "NONE"
 lock_relative_default = "+7 CALENDAR_DAY"

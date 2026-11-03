@@ -1269,6 +1269,29 @@ def test_mv_keeps_a_group_discussions_group_category(tmp_path: Path) -> None:
     assert (repo / "discussions/team-plan.md").read_text() == text
 
 
+def test_mv_keeps_a_checkpointed_discussion_and_its_due_dates_entry(tmp_path: Path) -> None:
+    """mv moves the checkpoints block verbatim; the due_dates entry matches by
+    title, so it is left byte-identical."""
+    text = (
+        "---\ntitle: Forum\ncheckpoints:\n    reply_to_topic:\n        points_possible: 1\n"
+        "    # reply_to_others: each student's replies to other students' posts\n"
+        "    reply_to_others:\n        points_possible: 1\n        replies_required: 2\n"
+        "---\n\nPost.\n"
+    )
+    repo = _make_repo(tmp_path, {"discussions/forum.md": text})
+    settings = repo / "course_settings" / "course_settings.toml"
+    settings.write_text(
+        settings.read_text()
+        + 'due_dates = [{name = "Forum", type = "discussion", '
+        'reply_to_topic_due_at = "2026-11-01T23:59:00-08:00", '
+        'reply_to_others_due_at = "2026-11-03T23:59:00-08:00"}]\n'
+    )
+    before = settings.read_bytes()
+    run_mv(repo / "discussions/forum.md", repo / "discussions/unit-02-forum.md")
+    assert (repo / "discussions/unit-02-forum.md").read_text() == text
+    assert settings.read_bytes() == before
+
+
 # ---------------------------------------------------------------------------
 # mv --after: record a move already made on disk
 # ---------------------------------------------------------------------------

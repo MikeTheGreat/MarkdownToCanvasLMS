@@ -35,6 +35,9 @@ from .relative_dates import RelativeDueDatesError
 
 #: Order in which a new entry's date keys are written (as `import` writes them).
 DATE_KEYS = ("unlock_at", "due_at", "lock_at")
+#: The same for a checkpointed discussion's entry.
+CHECKPOINT_DATE_KEYS = ("unlock_at", "reply_to_topic_due_at", "reply_to_others_due_at", "lock_at")
+_ALL_DATE_KEYS = ("unlock_at", "due_at", "reply_to_topic_due_at", "reply_to_others_due_at", "lock_at")
 
 
 @dataclass
@@ -58,6 +61,9 @@ class EntryChange:
     #: why clamp_lock_at_to_last_day_of_term set lock_at (rd.CLAMPED_LATER or
     #: rd.CLAMPED_NONE), or None
     lock_clamped: str | None = None
+    #: keys deleted from the existing entry: ``due_at`` when an item became a
+    #: checkpointed discussion, the two checkpoint keys when it stopped being one
+    removed: dict[str, Any] = field(default_factory=dict)
 
     @property
     def label(self) -> str:
@@ -210,8 +216,14 @@ def _as_datetime(value: Any, zone: ZoneInfo) -> datetime | None:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=zone)
 
 
-#: (earlier, later) pairs Canvas requires to be in order.
-_DATE_ORDER = (("unlock_at", "due_at"), ("due_at", "lock_at"), ("unlock_at", "lock_at"))
+#: (earlier, later) pairs Canvas requires to be in order (and, for a
+#: checkpointed discussion, reply-to-topic before reply-to-others).
+_DATE_ORDER = (
+    ("unlock_at", "due_at"), ("due_at", "lock_at"), ("unlock_at", "lock_at"),
+    ("unlock_at", "reply_to_topic_due_at"), ("reply_to_topic_due_at", "reply_to_others_due_at"),
+    ("reply_to_others_due_at", "lock_at"), ("unlock_at", "reply_to_others_due_at"),
+    ("reply_to_topic_due_at", "lock_at"),
+)
 
 
 def _inconsistency(change: EntryChange, existing: dict[str, Any], zone: ZoneInfo) -> str | None:
@@ -221,6 +233,8 @@ def _inconsistency(change: EntryChange, existing: dict[str, Any], zone: ZoneInfo
     values (other fields already equal their computed value).
     """
     def source(key: str) -> tuple[Any, str]:
+        if key in change.removed:
+            return None, "removed"
         if key in change.kept:
             return change.kept[key][0], "kept"
         if key in change.fields:
@@ -372,6 +386,8 @@ def _after_plan(due_dates: list[Any], changes: list[EntryChange]) -> list[dict[s
     for change in changes:
         if change.kind == "changed":
             entries[change.index].update({k: new for k, (_old, new) in change.fields.items()})
+            for key in change.removed:
+                entries[change.index].pop(key, None)
         elif change.kind == "added":
             entries.append(_new_row(change))
     return entries
@@ -426,6 +442,13 @@ def plan_generation(repo: Path, term_path: Path, table_name: str | None = None) 
     for computed in calculation.dates:
         if computed.virtual:
             values = {"due_at": computed.due_at}
+        elif computed.reply_to_topic_due_at is not None:
+            values = {
+                "unlock_at": computed.unlock_at,
+                "reply_to_topic_due_at": computed.reply_to_topic_due_at,
+                "reply_to_others_due_at": computed.due_at,
+                "lock_at": computed.lock_at,
+            }
         else:
             values = {
                 "unlock_at": computed.unlock_at, "due_at": computed.due_at,
@@ -443,6 +466,13 @@ def plan_generation(repo: Path, term_path: Path, table_name: str | None = None) 
         differing = {
             k: (existing.get(k), v) for k, v in values.items() if not _same_value(existing.get(k), v)
         }
+        # Keys of the other kind of entry go: due_at when the item became a
+        # checkpointed discussion, the checkpoint keys when it stopped being one.
+        stale = (
+            ("due_at",) if "reply_to_others_due_at" in values
+            else ("reply_to_topic_due_at", "reply_to_others_due_at")
+        )
+        removed = {} if computed.virtual else {k: existing[k] for k in stale if k in existing}
         kept: dict[str, tuple[str, str]] = {}
         if cutoff is not None:
             for key in list(differing):
@@ -450,9 +480,9 @@ def plan_generation(repo: Path, term_path: Path, table_name: str | None = None) 
                 if current is not None and current <= cutoff:
                     kept[key] = differing.pop(key)
         change = EntryChange(
-            computed.name, computed.type, "changed" if differing else "unchanged",
+            computed.name, computed.type, "changed" if differing or removed else "unchanged",
             differing, index, values, kept, virtual=computed.virtual,
-            lock_clamped=computed.lock_clamped,
+            lock_clamped=computed.lock_clamped, removed=removed,
         )
         if kept and differing:
             problem = _inconsistency(change, existing, term.time_zone)
@@ -464,6 +494,7 @@ def plan_generation(repo: Path, term_path: Path, table_name: str | None = None) 
                 )
                 change.kind = "skipped"
                 change.fields = {}
+                change.removed = {}
         changes.append(change)
 
     warnings, notices = title_warnings(table, due_dates, content)
@@ -522,6 +553,8 @@ def render_plan(plan: GenerationPlan, verbose: bool = False) -> list[tuple[str, 
                 lines.append((f"\t{key}: {change.values[key]}", True))
             continue
         lines.append((f"{label}:", True))
+        for key in sorted(change.removed):
+            lines.append((f"\t{key}: {change.removed[key]} -> (removed)", True))
         for key in sorted(change.fields):
             old, new = change.fields[key]
             prefix = f"{key}: "
@@ -541,7 +574,7 @@ def render_plan(plan: GenerationPlan, verbose: bool = False) -> list[tuple[str, 
         ))
         if verbose:
             for change in kept:
-                fields = ", ".join(k for k in DATE_KEYS if k in change.kept)
+                fields = ", ".join(k for k in _ALL_DATE_KEYS if k in change.kept)
                 lines.append((f"\t{change.label}: {fields}", False))
     lines.extend(_clamp_lines(plan, verbose))
     if unchanged:
@@ -586,7 +619,33 @@ def _new_row(change: EntryChange) -> dict[str, Any]:
     row: dict[str, Any] = {"name": change.name}
     if change.type:
         row["type"] = change.type
-    row.update({k: change.values[k] for k in DATE_KEYS})
+    keys = CHECKPOINT_DATE_KEYS if "reply_to_others_due_at" in change.values else DATE_KEYS
+    row.update({k: change.values[k] for k in keys})
+    return row
+
+
+def _rebuilt_row(entry: Any, change: EntryChange) -> dict[str, Any]:
+    """The entry's keys in their order with the change applied; keys new to the
+    entry take the place of the first removed key, or go before lock_at."""
+    old = entry.unwrap() if hasattr(entry, "unwrap") else dict(entry)
+    new_keys = [k for k in change.fields if k not in old]
+    keys = CHECKPOINT_DATE_KEYS if "reply_to_others_due_at" in change.values else DATE_KEYS
+    new_keys.sort(key=lambda k: keys.index(k) if k in keys else len(keys))
+    row: dict[str, Any] = {}
+
+    def insert_new() -> None:
+        for key in new_keys:
+            row[key] = change.fields[key][1]
+        new_keys.clear()
+
+    for key, value in old.items():
+        if key in change.removed:
+            insert_new()
+            continue
+        if key == "lock_at":
+            insert_new()
+        row[key] = change.fields[key][1] if key in change.fields else value
+    insert_new()
     return row
 
 
@@ -662,8 +721,18 @@ def apply_plan(plan: GenerationPlan) -> None:
     for change in plan.changes:
         if change.kind == "changed":
             entry = due_dates[change.index]
+            if isinstance(due_dates, Array) and (
+                change.removed or any(k not in entry for k in change.fields)
+            ):
+                # Keys come and go (an item became, or stopped being, a
+                # checkpointed discussion): rebuild the row so it reads like
+                # one `import` writes, with the new keys where the old went.
+                due_dates[change.index] = toml_write._inline_value(_rebuilt_row(entry, change))
+                continue
             for key, (_old, new) in change.fields.items():
                 entry[key] = new
+            for key in change.removed:
+                del entry[key]
 
     if added:
         rows = [_new_row(c) for c in added]

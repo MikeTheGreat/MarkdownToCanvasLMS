@@ -986,3 +986,29 @@ def test_run_publish_warns_about_relative_due_dates(tmp_path, monkeypatch, capsy
         first = out.index(rd.NO_HASH_WARNING)
         assert first < out.index("Staging site in:")
         assert out.index("Built static site:") < out.index(rd.NO_HASH_WARNING, first + 1)
+
+
+def test_stage_checkpointed_discussion(tmp_path):
+    """The checkpoints block goes with the rest of the frontmatter, and a
+    placeholder shows the reply-to-others (overall) date."""
+    from markdown_to_canvas import date_placeholders
+
+    repo = tmp_path / "repo"
+    (repo / "discussions").mkdir(parents=True)
+    md = repo / "discussions" / "forum.md"
+    md.write_text(
+        "---\ntitle: Forum\ncheckpoints:\n    reply_to_topic:\n        points_possible: 1\n"
+        "    reply_to_others:\n        points_possible: 1\n        replies_required: 2\n---\n\n"
+        "Replies are due [x]{.replace_date_with}.\n"
+    )
+    dates = date_placeholders.DatePlaceholderContext(
+        ({"name": "Forum", "type": "discussion",
+          "reply_to_topic_due_at": "2026-11-01T23:59:00-08:00",
+          "reply_to_others_due_at": "2026-11-03T23:59:00-08:00"},),
+        date_placeholders.DEFAULT_FORMAT,
+    )
+    errors: list[str] = []
+    text = publish.stage_content_markdown(md, repo, errors=errors, dates=dates)
+    assert errors == []
+    assert "checkpoints" not in text and "replies_required" not in text
+    assert "Replies are due Tuesday, November 3 by 11:59 PM." in text

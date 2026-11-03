@@ -102,6 +102,7 @@ This tool, markdown-to-canvas, attempts to replicate that experience.
     - [Page (`pages/`)](#page-pages)
     - [Assignment (`assignments/`)](#assignment-assignments)
     - [Discussion (`discussions/`)](#discussion-discussions)
+      - [Discussion checkpoints](#discussion-checkpoints)
     - [Announcement (`announcements/`)](#announcement-announcements)
     - [Module (`modules/`)](#module-modules)
       - [Ordering modules that exist only on Canvas](#ordering-modules-that-exist-only-on-canvas)
@@ -2067,6 +2068,22 @@ or one of these sentinel values (case-insensitive):
 | `"CREATE_NONE_THEN_KEEP"` | Clear the date when the item is first created on Canvas; on every later update, act as `KEEP` |
 | `"NONE"` | Clear the date on every update, not just on create |
 
+A [checkpointed discussion](#discussion-checkpoints) has two due dates, so
+its entry uses `reply_to_topic_due_at` and `reply_to_others_due_at` instead of
+`due_at`, with the same values and sentinels; `unlock_at` and `lock_at` apply
+to both checkpoints:
+
+```toml
+due_dates = [
+    {name = "Unit 02 Forum", type = "discussion", unlock_at = "KEEP", reply_to_topic_due_at = "2026-10-10T23:59:00-07:00", reply_to_others_due_at = "2026-10-12T23:59:00-07:00", lock_at = "KEEP"},
+]
+```
+
+A `due_at` in the entry of a checkpointed discussion is an error, and so are
+the two checkpoint keys in the entry of anything else; the item is then neither
+uploaded nor has its dates sent. Write dates with their UTC offset (as above):
+Canvas reads a checkpoint date without one in the course's time zone.
+
 `KEEP` and `CREATE_NONE_THEN_KEEP` behave identically for an item that already
 exists on Canvas. They differ only on the first upload of a new item.
 `CREATE_NONE_THEN_KEEP` is useful for `lock_at` — it clears any lock date
@@ -2166,7 +2183,7 @@ emphasis, as in the first line above.
 | --- | --- |
 | `item` | The `name` of a `due_dates` entry. Leave it out in an assignment, discussion or quiz (including a quiz's question files) to mean that item's own entry, found by its title the way `update` finds it. Pages, announcements, the syllabus and question banks have no entry of their own, so they must give `item`. |
 | `type` | `assignment`, `discussion` or `quiz`. Needed only when two entries share a name; it picks the entry with that type (an entry with no `type` matches any). A placeholder with `type` never matches a [virtual entry](#virtual-entries-named-dates). |
-| `field` | `due_at` (the default), `unlock_at` or `lock_at`. |
+| `field` | `due_at` (the default), `unlock_at` or `lock_at`. For a [checkpointed discussion](#discussion-checkpoints), `due_at` means its `reply_to_others_due_at`, the discussion's overall due date; its earlier reply-to-topic date cannot be quoted. |
 | `format` | A [strftime](https://docs.python.org/3/library/datetime.html#format-codes) format. When left out, the course-wide default is used. |
 
 Only entries in `due_dates` can be quoted, and they are named by title, so
@@ -2742,6 +2759,69 @@ Canvas if needed, but you put students into its groups in Canvas. Deleting the
 `group_category_id` line later does not turn it back into a whole-class
 discussion. See
 [Group sets/group categories](#group-setsgroup-categories-group_categories).
+
+#### Discussion checkpoints
+
+Canvas can split a graded discussion into two graded parts, called
+checkpoints, each with its own points and due date: the student's reply to the
+topic, and a number of replies to other students' posts. Give the discussion a
+`checkpoints` block:
+
+```markdown
+---
+title: "Unit 02 Forum"
+published: true
+assignment_group_id: "Discussion Forums"
+rubric: "Forum Rubric"
+unlock_at: "2026-10-06T00:00:00-07:00"   # shared by both checkpoints
+lock_at:   "2026-10-14T23:59:00-07:00"
+checkpoints:
+    reply_to_topic:
+        points_possible: 1
+        due_at: "2026-10-10T23:59:00-07:00"
+    # reply_to_others: each student's replies to other students' posts
+    reply_to_others:
+        points_possible: 1
+        replies_required: 2      # how many replies each student must post
+        due_at: "2026-10-12T23:59:00-07:00"
+---
+```
+
+- The discussion's points are the sum of the two `points_possible` values, and
+  it has no due date of its own. A top-level `points_possible` or `due_at`
+  next to `checkpoints` is an error, and the discussion is not uploaded.
+  Without `checkpoints`, those two keys work as before.
+- `unlock_at` and `lock_at` stay at the top level and apply to both
+  checkpoints.
+- Each `due_at` is optional, and is usually set centrally instead: a
+  checkpointed discussion's `due_dates` entry uses `reply_to_topic_due_at` and
+  `reply_to_others_due_at` in place of `due_at` (see
+  [Centralized due dates](#centralized-due-dates)).
+- `reply_to_others` is what Canvas calls "Required Replies" (its API calls it
+  `reply_to_entry`). Canvas shows the two parts as "Unit 02 Forum Reply to
+  Topic" and "Unit 02 Forum Required Replies (2)".
+- `rubric`, `group_category_id`, `require_initial_post` and the other
+  discussion settings work as they do on any graded discussion. Canvas keeps
+  the rubric on the discussion as a whole; it does not fill in the checkpoint
+  grades from rubric scores.
+- Removing the `checkpoints` block (and adding `points_possible`) turns
+  checkpoints off on the next `update`, leaving a plain graded discussion. The
+  tool will not do this once students have replied, and Canvas does not allow
+  checkpoints to be added to a discussion that already has replies; in both
+  cases `update` reports an error and leaves the discussion alone.
+- `checkpoints` is only for discussions. On an assignment, page or quiz it is
+  an error.
+
+**Not every course can use checkpoints.** Checkpoints are a Canvas feature
+that a college turns on per account, so some courses do not have them. Before
+uploading a checkpointed discussion, `update` checks; when the course does not
+have the feature, it does not upload the discussion and prints an error that
+suggests the alternative: comment out the `checkpoints` block and use
+`points_possible` (the combined points), `due_at` (the reply-to-others date, or
+`due_at` in the `due_dates` entry) and `require_initial_post: true`, and write
+the earlier reply-to-topic deadline into the discussion's text, for example
+with a [date placeholder](#quoting-due-dates-in-text-replace_date_with) quoting
+a [virtual entry](#virtual-entries-named-dates).
 
 ### Announcement (`announcements/`)
 
@@ -3845,6 +3925,12 @@ it prints a `NOTICE:` saying to run `generate-due-dates`; until you do, `update`
 and `publish` warn that the fingerprint is missing. The version changes because
 an older tool stops with "unknown key" on `last_generated_hash`.
 
+Migration 15 to 16 goes with
+[discussion checkpoints](#discussion-checkpoints). It changes no file content;
+every manifest records version 16. The version changes because an older tool
+would upload a discussion that has a `checkpoints` block as a plain graded
+discussion with no due date.
+
 `upgrade` also checks that `tab_configuration` is a top-level key. The tool
 only reads it there, so when it is nested under a section
 (`[default_post_policy]`, for example) `upgrade` moves it to the top level,
@@ -3972,7 +4058,9 @@ A Quiz                                quizzes/a-quiz/a-quiz.md
 
 This is useful when setting up the centralized `due_dates` table in
 `course_settings.toml` — you can see all available titles at a glance.
-Due dates shown reflect centralized overrides when present.
+Due dates shown reflect centralized overrides when present. A
+[checkpointed discussion](#discussion-checkpoints) is listed under its
+reply-to-others date, its overall due date.
 
 ---
 
@@ -4080,6 +4168,7 @@ Each item has:
 | `offsets` | A list of offsets applied in order (below). May be empty. |
 | `unlock_offset`, `lock_offset` | Optional. How far from the item's own due date it unlocks or locks. |
 | `virtual` | Optional, `true` or `false` (the default). `true` makes the item a name for a date rather than an assignment, discussion or quiz; see [Virtual dates](#virtual-dates-virtual--true). |
+| `reply_to_topic_offsets` | Only for a [checkpointed discussion](#discussion-checkpoints). Offsets from the item's due date (its reply-to-others date) to its reply-to-topic date, for example `["-2 CALENDAR_DAY"]`; see below. |
 
 Tables are named, and one run uses one of them: the one named by `--table`, else
 the table named `default`. If there is no `default` table and none is chosen, the
@@ -4087,6 +4176,24 @@ command lists the table names and stops. That is how one repo can carry both an
 11-week and an 8-week schedule: keep the usual one as `default` and pick the other
 with `--table summer8`. The `ignore` list quiets
 the warnings below for titles that belong to another table.
+
+**Checkpointed discussions.** For a checkpointed discussion, the item's
+`relative_to` and `offsets` give its overall due date, which is the date the
+replies to other students are due. `reply_to_topic_offsets` count from that date
+to the earlier date the student's own post is due:
+
+```toml
+{ name = "Unit 02 Forum", type = "discussion", relative_to = { type = "ASSIGNMENT", assignment_name = "Hybrid Participation: Week 02" }, offsets = ["-1 CALENDAR_DAY"], reply_to_topic_offsets = ["-2 CALENDAR_DAY"] },
+```
+
+`generate-due-dates` then writes `reply_to_topic_due_at` and
+`reply_to_others_due_at` into the item's `due_dates` entry instead of `due_at`
+(removing a `due_at` the entry had, and the reverse when the key is taken off
+an item). The offsets work as below; an `ABS_TIME` among them sets the earlier
+date's time. A reply-to-topic date after the overall date, or outside the term,
+is an error. `unlock_offset` and `lock_offset` count from the overall date, an
+item relative to the discussion counts from its overall date, and
+`dont_reschedule_dates_before` applies to each of the two dates separately.
 
 ### Offsets
 

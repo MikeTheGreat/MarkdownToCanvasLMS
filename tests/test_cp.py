@@ -547,6 +547,24 @@ class TestWarnings:
         ws = self._warnings(src, dest, "assignments/hw1.md")
         assert any("dates for 'HW 1'" in w and "due_dates" in w for w in ws)
 
+    def test_centralized_checkpoint_dates(self, src, dest):
+        path = src / "course_settings/course_settings.toml"
+        path.write_text(path.read_text().replace(
+            'due_dates = [{ name = "HW 1", due_at = "2026-01-01T23:59:00-08:00" }]',
+            'due_dates = [{ name = "HW 1", due_at = "2026-01-01T23:59:00-08:00" }, '
+            '{ name = "D 1", type = "discussion", reply_to_topic_due_at = "2026-01-01T23:59:00-08:00", '
+            'reply_to_others_due_at = "2026-01-03T23:59:00-08:00" }]',
+        ))
+        ws = self._warnings(src, dest, "discussions/d1.md")
+        assert any(
+            "dates (including its reply_to_topic_due_at and reply_to_others_due_at checkpoint "
+            "dates) for 'D 1'" in w and "due_dates" in w
+            for w in ws
+        )
+        # An ordinary entry keeps the plain wording.
+        ws = self._warnings(src, dest, "assignments/hw1.md")
+        assert any(w.startswith("assignments/hw1.md: dates for 'HW 1'") for w in ws)
+
     def test_relative_due_date(self, src, dest):
         with (src / "course_settings/course_settings.toml").open("a") as fh:
             fh.write(

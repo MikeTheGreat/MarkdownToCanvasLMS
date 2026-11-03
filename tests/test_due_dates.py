@@ -1258,6 +1258,36 @@ def test_list_titles_with_centralized_dates(tmp_path: Path) -> None:
     assert "2099-12-31 23:59" in result.output
 
 
+def test_list_titles_checkpointed_discussion(tmp_path: Path) -> None:
+    """A checkpointed discussion is listed under its reply-to-others date,
+    from its due_dates entry or else from its checkpoints block."""
+    from click.testing import CliRunner
+    from markdown_to_canvas.cli import main
+
+    root = tmp_path / "course"
+    (root / "discussions").mkdir(parents=True)
+    block = (
+        "checkpoints:\n    reply_to_topic:\n        points_possible: 1\n"
+        '        due_at: "2099-01-01T23:59:00"\n'
+        "    reply_to_others:\n        points_possible: 1\n        replies_required: 1\n"
+        '        due_at: "2099-01-03T23:59:00"\n'
+    )
+    (root / "discussions" / "a.md").write_text(f"---\ntitle: Forum A\n{block}---\n\nx\n")
+    (root / "discussions" / "b.md").write_text(f"---\ntitle: Forum B\n{block}---\n\nx\n")
+    (root / "course_settings").mkdir()
+    (root / "course_settings" / "course_settings.toml").write_text(
+        'due_dates = [{name = "Forum B", type = "discussion", '
+        'reply_to_topic_due_at = "2099-02-01T23:59:00", reply_to_others_due_at = "2099-02-05T23:59:00"}]\n'
+    )
+    make_current(root)
+    result = CliRunner().invoke(main, ["list-titles", str(root)])
+    assert result.exit_code == 0, result.output
+    line_a = next(line for line in result.output.splitlines() if "Forum A" in line)
+    line_b = next(line for line in result.output.splitlines() if "Forum B" in line)
+    assert "2099-01-03 23:59" in line_a
+    assert "2099-02-05 23:59" in line_b
+
+
 def test_list_titles_empty_repo(tmp_path: Path) -> None:
     """list-titles on an empty repo should print a message."""
     from click.testing import CliRunner

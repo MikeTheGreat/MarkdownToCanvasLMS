@@ -1,0 +1,26 @@
+[[rubrics]]
+title = "Checkpoint Rubric"
+
+[[rubrics.criteria]]
+description = "Reply to topic"
+points = 1.0
+
+[[rubrics.criteria.ratings]]
+description = "Posted"
+points = 1.0
+
+[[rubrics.criteria.ratings]]
+description = "Missing"
+points = 0.0
+
+[[rubrics.criteria]]
+description = "Replies to others"
+points = 2.0
+
+[[rubrics.criteria.ratings]]
+description = "Both replies"
+points = 2.0
+
+[[rubrics.criteria.ratings]]
+description = "Missing"
+points = 0.0

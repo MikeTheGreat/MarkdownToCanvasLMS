@@ -42,6 +42,7 @@ from .ignore import IgnoreMatcher, load_ignore_matcher
 from .link_rewrite import extract_local_refs, infer_canvas_type, rewrite_links
 from .links import LINK_TEXT
 from .orphans import ResourceKey, extract_canvas_refs
+from . import checkpoints as checkpoints_lib
 from .quiz import parse_question_file, parse_quiz_file
 from .unrecorded_moves import Commands, check_unrecorded_moves, find_orphans
 
@@ -141,6 +142,11 @@ class SyncContext:
     group_category_ids: dict[str, list[int]] | None = None
     # Listed names whose creation on Canvas failed this run (not retried).
     group_category_failures: set[str] = field(default_factory=set)
+    # Whether the course's account has Discussion Checkpoints on: True/False,
+    # None when it could not be read, _NOT_LOOKED_UP until the first
+    # checkpointed discussion needs it (see _checkpoints_enabled).
+    checkpoints_enabled: Any = None
+    checkpoints_looked_up: bool = False
 
     @property
     def date_context(self) -> date_placeholders.DatePlaceholderContext:
@@ -430,7 +436,7 @@ def is_virtual_entry(entry: Any) -> bool:
 
 
 #: Keys a virtual due_dates entry may not have.
-_NOT_FOR_VIRTUAL_ENTRY = ("type", "unlock_at", "lock_at")
+_NOT_FOR_VIRTUAL_ENTRY = ("type", "unlock_at", "lock_at", *checkpoints_lib.ENTRY_KEYS)
 
 
 def _is_date_value(value: Any) -> bool:
@@ -675,6 +681,10 @@ def _apply_due_dates_only(ctx: SyncContext) -> None:
         except Exception:
             continue
         title = fm.get("title", md_path.stem)
+        checkpoints = check_checkpoints(ctx.due_dates, fm, ctype, title, local_key, errors)
+        if checkpoints is CHECKPOINTS_INVALID:
+            print(f"  Not sending dates due to errors: {local_key}")
+            continue
         override = find_due_date_override(ctx.due_dates, title, ctype)
         if override is None:
             if "resolved_dates" in existing:
@@ -685,12 +695,28 @@ def _apply_due_dates_only(ctx: SyncContext) -> None:
                 del existing["resolved_dates"]
                 manifest_lib.flush(ctx.manifest_path, manifest)
             continue
-        resolved = resolve_dates_symbolic(override)
+        keys = checkpoints_lib.SYMBOLIC_KEYS if checkpoints is not None else _DATE_KEYS
+        resolved = resolve_dates_symbolic(override, keys)
         if not ctx.force_uploads and existing.get("resolved_dates") == resolved:
             if ctx.verbose:
                 print(f"  Skipping (dates unchanged): {local_key}")
             continue
         canvas_id = existing["canvas_id"]
+        if checkpoints is not None:
+            # Checkpoint dates only go through GraphQL; REST's update_dates
+            # would write them onto the parent (see capi.CHECKPOINT_PARENT_KEYS).
+            if _checkpoints_enabled(ctx) is False:
+                warn(checkpoints_lib.feature_off_message(local_key), errors)
+                continue
+            dates = checkpoints_lib.resolve_dates(fm, checkpoints, override, creating=False)
+            _warn_empty_checkpoint_dates(dates, local_key, errors)
+            print(f"  {'Would update' if ctx.check_only else 'Updating'} dates: {local_key}")
+            ctx.counts.updated += 1
+            if not _send_checkpoints(ctx, canvas_id, checkpoints, dates, local_key, converted=False):
+                continue
+            existing["resolved_dates"] = resolved
+            manifest_lib.flush(ctx.manifest_path, manifest)
+            continue
         date_fields = _resolve_date_overrides(override, canvas_id, local_key, errors)
         if date_fields:
             print(f"  {'Would update' if ctx.check_only else 'Updating'} dates: {local_key}")
@@ -853,6 +879,39 @@ def find_due_date_override(
 
 
 _DATE_SENTINELS = {"none", "keep", "create_none_then_keep"}
+
+#: Returned by check_checkpoints when the file must not be uploaded.
+CHECKPOINTS_INVALID = object()
+
+
+def check_checkpoints(
+    due_dates: list[dict[str, Any]] | None,
+    frontmatter: dict[str, Any],
+    canvas_type: str | None,
+    title: str,
+    local_key: str,
+    errors: list[str] | None,
+) -> Any:
+    """Validate a file's ``checkpoints`` block and its due_dates entry.
+
+    Returns the parsed Checkpoints, None for a file without the block, or
+    CHECKPOINTS_INVALID after reporting each problem (the file is then neither
+    uploaded nor has its dates sent).
+    """
+    problems: list[str] = []
+    checkpoints = None
+    try:
+        checkpoints = checkpoints_lib.parse(frontmatter, canvas_type)
+    except checkpoints_lib.CheckpointError as exc:
+        problems.extend(exc.problems)
+    if canvas_type in ("assignment", "discussion", "quiz") and not problems:
+        entry = find_due_date_override(due_dates or [], title, canvas_type)
+        problems.extend(checkpoints_lib.entry_problems(entry, checkpoints, canvas_type))
+    if problems:
+        for problem in problems:
+            warn(f"ERROR: {local_key}: {problem}", errors)
+        return CHECKPOINTS_INVALID
+    return checkpoints
 
 
 def _resolve_assignment_group_id(
@@ -1021,7 +1080,9 @@ def _resolve_date_overrides(
     return result
 
 
-def resolve_dates_symbolic(override: dict[str, Any]) -> dict[str, str]:
+def resolve_dates_symbolic(
+    override: dict[str, Any], keys: tuple[str, ...] = _DATE_KEYS
+) -> dict[str, str]:
     """Compute the symbolic date resolution of a due_dates entry, for caching.
 
     For each date key: a concrete date string (verbatim), "NONE" (clear the
@@ -1033,7 +1094,7 @@ def resolve_dates_symbolic(override: dict[str, Any]) -> dict[str, str]:
     that; this resolution describes the steady state of an existing item).
     """
     resolved: dict[str, str] = {}
-    for dk in _DATE_KEYS:
+    for dk in keys:
         val = override.get(dk, "")
         if isinstance(val, str) and val.strip().lower() in _DATE_SENTINELS:
             resolved[dk] = "NONE" if val.strip().lower() == "none" else "KEEP"
@@ -2439,8 +2500,18 @@ def collect_title_items(
     for local_key, md_path, ctype in iter_gradeable_content(repo_path, matcher=None):
         fm, _ = parse_frontmatter(md_path.read_text())
         title = fm.get("title", md_path.stem)
-        override = find_due_date_override(due_dates, title, ctype)
-        due_at = (override or {}).get("due_at") or fm.get("due_at") or None
+        override = find_due_date_override(due_dates, title, ctype) or {}
+        # A checkpointed discussion is listed under its overall due date, the
+        # reply-to-others one.
+        block = fm.get(checkpoints_lib.KEY)
+        others = block.get(checkpoints_lib.REPLY_TO_OTHERS) if isinstance(block, dict) else None
+        due_at = (
+            override.get("due_at")
+            or override.get(checkpoints_lib.REPLY_TO_OTHERS_DUE)
+            or fm.get("due_at")
+            or (others.get("due_at") if isinstance(others, dict) else None)
+            or None
+        )
         items.append((due_at if due_at else None, title, local_key))
     return items
 
@@ -2896,11 +2967,48 @@ def _upload_assignment(
         synced_keys.add(local_key)
 
 
+def _checkpoints_enabled(ctx: SyncContext) -> bool | None:
+    """The course's Discussion Checkpoints feature state, looked up once per run."""
+    if not ctx.checkpoints_looked_up:
+        ctx.checkpoints_enabled = ctx.api.discussion_checkpoints_enabled(ctx.course)
+        ctx.checkpoints_looked_up = True
+    return ctx.checkpoints_enabled
+
+
+def _rest_value(value: Any) -> Any:
+    """A resolved checkpoint date for the REST parent params: a date, "" (clear)
+    or OMIT."""
+    if value is checkpoints_lib.OMIT:
+        return value
+    return "" if value is None else value
+
+
+def _warn_empty_checkpoint_dates(
+    dates: checkpoints_lib.ResolvedDates, local_key: str, errors: list[str] | None
+) -> None:
+    if dates.empty_keys:
+        warn(
+            f"WARNING: {local_key}: due_dates entry has empty value for "
+            f"{', '.join(dates.empty_keys)} — treating as KEEP (use 'KEEP', 'NONE', "
+            f"'CREATE_NONE_THEN_KEEP', or a date value to suppress this warning)",
+            errors,
+        )
+
+
 def _upload_discussion(
     ctx: SyncContext, existing: dict | None, frontmatter: dict, html: str, title: str,
-    published: bool, local_key: str, tracking: dict[str, Any] | None = None
+    published: bool, local_key: str, tracking: dict[str, Any] | None = None,
+    checkpoints: checkpoints_lib.Checkpoints | None = None,
 ) -> None:
-    """Upload a discussion to Canvas."""
+    """Upload a discussion to Canvas.
+
+    A checkpointed discussion (``checkpoints`` given) goes up in two steps:
+    the REST create/update (body, settings, assignment group, group set/group
+    category), then the GraphQL mutation that sets the checkpoints. REST
+    never sends parent points or dates to a topic that is already
+    checkpointed (capi strips them), and a topic whose file dropped its
+    checkpoints has them turned off before the REST update.
+    """
     course = ctx.course
     manifest = ctx.manifest
     manifest_path = ctx.manifest_path
@@ -2909,6 +3017,9 @@ def _upload_discussion(
     assignment_group_ids = ctx.assignment_group_ids
     synced_keys = ctx.synced_keys
     canvas_id = existing["canvas_id"] if existing else None
+    if checkpoints is not None and _checkpoints_enabled(ctx) is False:
+        warn(checkpoints_lib.feature_off_message(local_key), errors)
+        return
     extra = {}
     if "require_initial_post" in frontmatter:
         extra["require_initial_post"] = frontmatter["require_initial_post"]
@@ -2923,7 +3034,24 @@ def _upload_discussion(
     )
     grading_params = {k: frontmatter[k] for k in grading_keys if k in frontmatter}
     override = find_due_date_override(due_dates or [], title, "discussion")
-    if override is not None:
+    if checkpoints is not None:
+        # Parent params for a new or still-plain topic: graded, worth the sum,
+        # due on the reply-to-others date. The GraphQL step then converts it
+        # and clears the parent due date. (Validation already rejected a
+        # top-level points_possible/due_at and a due_at in the entry.)
+        rest_dates = checkpoints_lib.resolve_dates(frontmatter, checkpoints, override, creating=True)
+        grading_params["points_possible"] = checkpoints.total_points
+        for key, value in (
+            ("due_at", rest_dates.reply_to_others_due_at),
+            ("unlock_at", rest_dates.unlock_at),
+            ("lock_at", rest_dates.lock_at),
+        ):
+            value = _rest_value(value)
+            if value is checkpoints_lib.OMIT:
+                grading_params.pop(key, None)
+            else:
+                grading_params[key] = value
+    elif override is not None:
         grading_params.update(
             _resolve_date_overrides(override, canvas_id, local_key, errors)
         )
@@ -2947,11 +3075,17 @@ def _upload_discussion(
         extra["group_category_id"] = resolved_gc
     try:
         entry = ctx.api.create_or_update_discussion(
-            course, canvas_id, title, html, published=published, **extra
+            course, canvas_id, title, html, published=published,
+            checkpoints_wanted=checkpoints is not None, **extra
         )
     except capi.GroupCategoryChangeRefused as exc:
         warn(_group_category_refusal_message(ctx, exc, local_key), errors)
         return
+    except capi.CheckpointChangeRefused as exc:
+        warn(f"ERROR: {local_key}: {exc}; the discussion was left unchanged in Canvas", errors)
+        return
+    if entry.get("checkpoints_removed") and not ctx.check_only:
+        print("  Turned off checkpoints")
     if entry.get("date_warning"):
         msg = _date_rejection_message(
             local_key, title, grading_params.get("due_at"), entry.get("html_url")
@@ -2961,15 +3095,53 @@ def _upload_discussion(
         print(f"  Link: {entry['html_url']}")
     unpublish_refused = _warn_unpublish_refused(entry, local_key, "discussion", errors)
     extra_record: dict[str, Any] = dict(tracking or {})
-    if override is not None and not entry.get("date_warning"):
-        extra_record["resolved_dates"] = resolve_dates_symbolic(override)
+    checkpoints_failed = False
+    if checkpoints is not None:
+        creating = not entry.get("was_checkpointed", False)
+        dates = checkpoints_lib.resolve_dates(frontmatter, checkpoints, override, creating=creating)
+        _warn_empty_checkpoint_dates(dates, local_key, errors)
+        checkpoints_failed = not _send_checkpoints(
+            ctx, entry["canvas_id"], checkpoints, dates, local_key, converted=creating
+        )
+    if override is not None and not entry.get("date_warning") and not checkpoints_failed:
+        keys = checkpoints_lib.SYMBOLIC_KEYS if checkpoints is not None else _DATE_KEYS
+        extra_record["resolved_dates"] = resolve_dates_symbolic(override, keys)
     manifest_lib.record(
         manifest, manifest_path, local_key, entry["canvas_id"], "discussion",
-        extra=extra_record or None, mark_synced=not unpublish_refused,
+        extra=extra_record or None,
+        mark_synced=not unpublish_refused and not checkpoints_failed,
     )
     _apply_discussion_rubric(ctx, entry, frontmatter, local_key)
     if synced_keys is not None:
         synced_keys.add(local_key)
+
+
+def _send_checkpoints(
+    ctx: SyncContext, topic_id: int, checkpoints: checkpoints_lib.Checkpoints,
+    dates: checkpoints_lib.ResolvedDates, local_key: str, converted: bool,
+) -> bool:
+    """Set the topic's checkpoints with GraphQL. Returns False (after reporting)
+    when Canvas refused; the topic then keeps whatever REST left it as."""
+    plain_note = (
+        " The discussion is currently a plain graded discussion in Canvas; the next "
+        "update will try again." if converted else ""
+    )
+    try:
+        ctx.api.set_discussion_checkpoints(
+            ctx.course, topic_id, checkpoints_lib.graphql_checkpoints(checkpoints, dates)
+        )
+    except capi.CheckpointsDisabled:
+        ctx.checkpoints_enabled = False
+        ctx.checkpoints_looked_up = True
+        warn(checkpoints_lib.feature_off_message(local_key) + plain_note, ctx.errors)
+        return False
+    except capi.CheckpointChangeRefused as exc:
+        warn(f"ERROR: {local_key}: {exc}.{plain_note}", ctx.errors)
+        return False
+    except Exception as exc:  # noqa: BLE001 - report and carry on with other files
+        warn(f"ERROR: {local_key}: setting checkpoints failed: {exc}.{plain_note}", ctx.errors)
+        return False
+    return True
 
 
 # Announcement frontmatter keys handled outside the Canvas-settings pass-through:
@@ -3096,6 +3268,14 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
         print(f"  Skipping upload due to errors: {local_key}")
         return
 
+    checkpoints = check_checkpoints(
+        ctx.due_dates, frontmatter, canvas_type, frontmatter.get("title", md_file.stem),
+        local_key, errors,
+    )
+    if checkpoints is CHECKPOINTS_INVALID:
+        print(f"  Skipping upload due to errors: {local_key}")
+        return
+
     # Canvas has no unpublished/draft state for announcements — an announcement
     # is posted the moment it is created and can never be un-posted via the
     # API, so `published_if` (which implies flipping publish state on a later
@@ -3190,7 +3370,10 @@ def _sync_content_file(ctx: SyncContext, md_file: Path) -> None:
     elif canvas_type == "assignment":
         _upload_assignment(ctx, existing, frontmatter, html, title, published, local_key, tracking)
     elif canvas_type == "discussion":
-        _upload_discussion(ctx, existing, frontmatter, html, title, published, local_key, tracking)
+        _upload_discussion(
+            ctx, existing, frontmatter, html, title, published, local_key, tracking,
+            checkpoints=checkpoints,
+        )
     elif canvas_type == "announcement":
         _upload_announcement(ctx, existing, frontmatter, html, title, published, local_key, tracking)
     _leave_stale_for_deferred_links(manifest, manifest_path, local_key, deferred)
@@ -3620,6 +3803,11 @@ def _sync_quiz(ctx: SyncContext, quiz_folder: Path, quiz_md: Path) -> None:
         print(f"  Skipping upload due to errors: {local_key}")
         return
     title = frontmatter.get("title", quiz_folder.name)
+    if check_checkpoints(
+        ctx.due_dates, frontmatter, "quiz", title, local_key, errors
+    ) is CHECKPOINTS_INVALID:
+        print(f"  Skipping upload due to errors: {local_key}")
+        return
     question_dates = ctx.date_context.for_file(title, "quiz")
     published = resolve_published_if(frontmatter, ctx.flags, local_key, errors)
     if published is None:

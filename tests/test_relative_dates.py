@@ -1175,3 +1175,75 @@ def test_virtual_item_counts_as_an_item():
 ])
 def test_malformed_section_gives_no_warning_and_does_not_raise(settings):
     assert rd.stale_warning(settings) is None
+
+
+# --- checkpointed discussions: reply_to_topic_offsets -------------------------
+
+
+def _forum(**extra) -> dict:
+    # Overall (reply-to-others) date: START_OF_QUARTER (Wed 2026-09-30) + 6 days
+    # = Tue 2026-10-06 23:59.
+    return _item("Forum", offsets=["+6 CALENDAR_DAY"], **extra)
+
+
+def test_reply_to_topic_date_counts_back_from_the_overall_date():
+    d = _calc([_forum(reply_to_topic_offsets=["-2 CALENDAR_DAY"])])["Forum"]
+    assert d.due_at == "2026-10-06T23:59:00-07:00"
+    assert d.reply_to_topic_due_at == "2026-10-04T23:59:00-07:00"
+
+
+def test_reply_to_topic_abs_time():
+    d = _calc([_forum(reply_to_topic_offsets=["-1 CALENDAR_DAY", "17:00 ABS_TIME"])])["Forum"]
+    assert d.reply_to_topic_due_at == "2026-10-05T17:00:00-07:00"
+
+
+def test_reply_to_topic_as_a_single_string():
+    d = _calc([_forum(reply_to_topic_offsets="-1 CALENDAR_DAY")])["Forum"]
+    assert d.reply_to_topic_due_at == "2026-10-05T23:59:00-07:00"
+
+
+def test_items_without_the_key_have_no_reply_to_topic_date():
+    assert _calc([_forum()])["Forum"].reply_to_topic_due_at is None
+
+
+def test_reply_to_topic_after_the_overall_date_is_an_error():
+    with pytest.raises(RelativeDueDatesError, match="after its overall"):
+        _calc([_forum(reply_to_topic_offsets=["+1 CALENDAR_DAY"])])
+
+
+def test_reply_to_topic_outside_the_term_is_an_error():
+    early = _item("Forum", offsets=["+1 CALENDAR_DAY"], reply_to_topic_offsets=["-5 CALENDAR_DAY"])
+    with pytest.raises(RelativeDueDatesError, match="reply-to-topic date on 2026-09-26"):
+        _calc([early])
+
+
+@pytest.mark.parametrize(
+    "extra, message",
+    [
+        ({"reply_to_topic_offsets": []}, "cannot be empty"),
+        ({"reply_to_topic_offsets": ["NONE"]}, "cannot contain NONE"),
+        ({"reply_to_topic_offsets": ["-1 BOGUS"]}, "reply_to_topic_offsets"),
+        ({"reply_to_topic_offsets": ["-1 CALENDAR_DAY"], "type": "assignment"}, "only for checkpointed discussions"),
+    ],
+)
+def test_bad_reply_to_topic_offsets(extra, message):
+    with pytest.raises(RelativeDueDatesError, match=message):
+        _table([_forum(**extra)])
+
+
+def test_reply_to_topic_offsets_need_a_due_date():
+    with pytest.raises(RelativeDueDatesError, match="NO_DUE_DATE"):
+        _table([_item("Forum", anchor="NO_DUE_DATE", reply_to_topic_offsets=["-1 CALENDAR_DAY"])])
+
+
+def test_virtual_item_cannot_have_reply_to_topic_offsets():
+    with pytest.raises(RelativeDueDatesError, match="virtual item cannot have reply_to_topic_offsets"):
+        _table([_item("Week 2", virtual=True, reply_to_topic_offsets=["-1 CALENDAR_DAY"])])
+
+
+def test_anchor_on_a_checkpointed_discussion_uses_the_overall_date():
+    items = [
+        _forum(type="discussion", reply_to_topic_offsets=["-2 CALENDAR_DAY"]),
+        _item("After", anchor="ASSIGNMENT", anchor_name="Forum", offsets=["+1 CALENDAR_DAY"]),
+    ]
+    assert _calc(items)["After"].due_at == "2026-10-07T23:59:00-07:00"

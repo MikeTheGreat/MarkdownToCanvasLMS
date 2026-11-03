@@ -50,6 +50,8 @@ _READS = {
     "get_rubric_ids",
     "get_group_category_ids",
     "get_module_ids_by_name",
+    "get_discussion_checkpoint_state",
+    "discussion_checkpoints_enabled",
 }
 
 
@@ -129,6 +131,12 @@ def live(mocker):
         ),
         get_module_ids_by_name=mocker.patch.object(
             canvas_api, "get_module_ids_by_name", return_value={}
+        ),
+        get_discussion_checkpoint_state=mocker.patch.object(
+            canvas_api, "get_discussion_checkpoint_state", return_value=(False, False)
+        ),
+        discussion_checkpoints_enabled=mocker.patch.object(
+            canvas_api, "discussion_checkpoints_enabled", return_value=True
         ),
     )
     # cli.py binds get_course by name at import time.

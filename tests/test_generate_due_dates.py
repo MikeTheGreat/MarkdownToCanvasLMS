@@ -150,7 +150,7 @@ def test_old_repo_is_refused(tmp_path):
     root = _repo(tmp_path)
     _write(
         root / "course_settings" / "course_settings.toml",
-        _settings_text(root).replace("format_version = 15", "format_version = 1"),
+        _settings_text(root).replace("format_version = 16", "format_version = 1"),
     )
     with pytest.raises(RepoFormatError):
         gd.plan_generation(root, _term(tmp_path))
@@ -1378,3 +1378,121 @@ def test_key_goes_into_an_indented_section_with_subtables(tmp_path):
     assert after["relative_due_dates"].pop(rd.HASH_KEY)
     assert after["relative_due_dates"] == before["relative_due_dates"]
     assert after["course_flags"] == before["course_flags"]
+
+
+# --- checkpointed discussions ---------------------------------------------------
+
+_FORUM_ITEM = (
+    '    { name = "Forum", type = "discussion", relative_to = { type = "START_OF_QUARTER" }, '
+    'offsets = ["+6 CALENDAR_DAY"]REPLY },\n'
+)
+
+
+def _forum_settings(reply_offsets: str | None, entry: str = "") -> str:
+    reply = f", reply_to_topic_offsets = [{reply_offsets}]" if reply_offsets else ""
+    return (
+        'title = "Course"\n\n'
+        f"due_dates = [\n{entry}]\n\n"
+        "[relative_due_dates]\n"
+        'days_of_week = ["Mon", "Wed"]\n\n'
+        "[relative_due_dates.tables.default]\n"
+        "items = [\n" + _FORUM_ITEM.replace("REPLY", reply) + "]\n"
+    )
+
+
+def _forum_repo(tmp_path, settings):
+    root = _repo(tmp_path, settings=settings, content=False)
+    _write(root / "discussions" / "forum.md", "---\ntitle: Forum\n---\n\nHi\n")
+    return root
+
+
+def test_new_checkpointed_item_gets_both_keys_and_no_due_at(tmp_path):
+    root = _forum_repo(tmp_path, _forum_settings('"-2 CALENDAR_DAY"'))
+    gd.apply_plan(gd.plan_generation(root, _term(tmp_path)))
+    entry = _entries(root)["Forum"]
+    assert "due_at" not in entry
+    assert entry["reply_to_topic_due_at"] == "2026-10-04T23:59:00-07:00"
+    assert entry["reply_to_others_due_at"] == "2026-10-06T23:59:00-07:00"
+    assert list(entry) == ["name", "type", "unlock_at", "reply_to_topic_due_at", "reply_to_others_due_at", "lock_at"]
+
+
+def test_item_becoming_checkpointed_removes_due_at(tmp_path):
+    old = '    { name = "Forum", type = "discussion", unlock_at = "KEEP", due_at = "2026-10-06T23:59:00-07:00", lock_at = "KEEP" },\n'
+    root = _forum_repo(tmp_path, _forum_settings('"-2 CALENDAR_DAY"', old))
+    term = _term(tmp_path)
+    plan = gd.plan_generation(root, term)
+    (change,) = plan.changes
+    assert change.kind == "changed" and change.removed == {"due_at": "2026-10-06T23:59:00-07:00"}
+    lines = [text for text, _ in gd.render_plan(plan)]
+    assert "\tdue_at: 2026-10-06T23:59:00-07:00 -> (removed)" in lines
+    before = _settings_text(root)
+    gd.apply_plan(plan)
+    entry = _entries(root)["Forum"]
+    assert "due_at" not in entry
+    assert entry["reply_to_topic_due_at"] == "2026-10-04T23:59:00-07:00"
+    # Outside the changed row, the file is byte-identical, and the row is
+    # rewritten with the new keys where due_at was.
+    after = _without_hash(_settings_text(root))
+    old_lines = [line for line in before.splitlines() if '"Forum"' not in line]
+    new_lines = [line for line in after.splitlines() if '"Forum"' not in line]
+    assert old_lines == new_lines
+    (row,) = [line for line in after.splitlines() if 'reply_to_others_due_at' in line]
+    assert row == (
+        '    {name = "Forum", type = "discussion", unlock_at = "KEEP", '
+        'reply_to_topic_due_at = "2026-10-04T23:59:00-07:00", '
+        'reply_to_others_due_at = "2026-10-06T23:59:00-07:00", lock_at = "KEEP"},'
+    )
+
+
+def test_item_no_longer_checkpointed_removes_the_checkpoint_keys(tmp_path):
+    old = (
+        '    { name = "Forum", type = "discussion", unlock_at = "KEEP", '
+        'reply_to_topic_due_at = "2026-10-04T23:59:00-07:00", '
+        'reply_to_others_due_at = "2026-10-06T23:59:00-07:00", lock_at = "KEEP" },\n'
+    )
+    root = _forum_repo(tmp_path, _forum_settings(None, old))
+    gd.apply_plan(gd.plan_generation(root, _term(tmp_path)))
+    entry = _entries(root)["Forum"]
+    assert entry["due_at"] == "2026-10-06T23:59:00-07:00"
+    assert "reply_to_topic_due_at" not in entry and "reply_to_others_due_at" not in entry
+
+
+def test_unchanged_checkpointed_entry(tmp_path):
+    root = _forum_repo(tmp_path, _forum_settings('"-2 CALENDAR_DAY"'))
+    term = _term(tmp_path)
+    gd.apply_plan(gd.plan_generation(root, term))
+    assert not gd.plan_generation(root, term).has_changes
+
+
+def test_cutoff_keeps_the_earlier_checkpoint_only(tmp_path):
+    old = (
+        '    { name = "Forum", type = "discussion", unlock_at = "KEEP", '
+        'reply_to_topic_due_at = "2026-10-01T23:59:00-07:00", '
+        'reply_to_others_due_at = "2026-10-09T23:59:00-07:00", lock_at = "KEEP" },\n'
+    )
+    settings = _forum_settings('"-2 CALENDAR_DAY"', old).replace(
+        "[relative_due_dates]\n", '[relative_due_dates]\ndont_reschedule_dates_before = "2026-10-02"\n'
+    )
+    root = _forum_repo(tmp_path, settings)
+    plan = gd.plan_generation(root, _term(tmp_path))
+    (change,) = plan.changes
+    assert set(change.kept) == {"reply_to_topic_due_at"}
+    assert set(change.fields) == {"reply_to_others_due_at"}
+    assert change.kind == "changed"
+
+
+def test_order_check_covers_checkpoint_dates(tmp_path):
+    # Keeping an old reply-to-others date (before the cutoff) while the
+    # reply-to-topic date moves later would put them out of order.
+    old = (
+        '    { name = "Forum", type = "discussion", unlock_at = "KEEP", '
+        'reply_to_topic_due_at = "2026-10-20T23:59:00-07:00", '
+        'reply_to_others_due_at = "2026-10-01T23:59:00-07:00", lock_at = "KEEP" },\n'
+    )
+    settings = _forum_settings('"-2 CALENDAR_DAY"', old).replace(
+        "[relative_due_dates]\n", '[relative_due_dates]\ndont_reschedule_dates_before = "2026-10-02"\n'
+    )
+    root = _forum_repo(tmp_path, settings)
+    plan = gd.plan_generation(root, _term(tmp_path))
+    assert plan.changes[0].kind == "skipped"
+    assert any("reply_to_topic_due_at" in e and "after reply_to_others_due_at" in e for e in plan.errors)

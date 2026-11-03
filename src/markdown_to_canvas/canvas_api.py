@@ -502,6 +502,129 @@ def graphql(course, query: str, variables: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+class CheckpointsDisabled(Exception):
+    """Canvas refused checkpoints because the course's account has the
+    Discussion Checkpoints feature off."""
+
+
+class CheckpointChangeRefused(Exception):
+    """Canvas (or the tool, on Canvas's behalf) will not add checkpoints to,
+    or remove them from, a discussion that has replies.
+
+    ``action`` is "add" or "remove".
+    """
+
+    def __init__(self, action: str) -> None:
+        self.action = action
+        if action == "add":
+            text = (
+                "Canvas does not allow checkpoints to be added to a discussion that "
+                "already has replies"
+            )
+        else:
+            text = (
+                "checkpoints cannot be removed through the tool from a discussion "
+                "that has replies"
+            )
+        super().__init__(text)
+
+
+#: Feature-flag states that mean "on" for the course (see ARCHITECTURE.md,
+#: "Discussion checkpoints"; only allowed_on has been observed).
+_FLAG_ON_STATES = {"on", "allowed_on"}
+_FLAG_OFF_STATES = {"off", "allowed"}
+
+
+def discussion_checkpoints_enabled(course) -> bool | None:
+    """Whether the course's account has the discussion_checkpoints feature on.
+
+    The flag is account-level: the course-level flag URL returns 404, while
+    ``GET /accounts/<course.account_id>/features/flags/discussion_checkpoints``
+    works for a teacher token (measured 2026-11-02). Returns None when the
+    state cannot be read (no account id, the request is refused, or an
+    unknown state), so the caller falls back to Canvas's own refusal.
+    """
+    account_id = getattr(course, "account_id", None)
+    if account_id is None:
+        return None
+    try:
+        response = course._requester.request(
+            "GET", f"accounts/{account_id}/features/flags/discussion_checkpoints"
+        )
+        state = response.json().get("state")
+    except (CanvasException, ValueError, AttributeError):
+        return None
+    if state in _FLAG_ON_STATES:
+        return True
+    if state in _FLAG_OFF_STATES:
+        return False
+    return None
+
+
+_UPDATE_DISCUSSION_TOPIC = """
+mutation UpdateDiscussionTopic($input: UpdateDiscussionTopicInput!) {
+  updateDiscussionTopic(input: $input) {
+    discussionTopic { _id }
+    errors { attribute message }
+  }
+}
+"""
+
+
+def _checkpoint_mutation(course, variables_input: dict[str, Any]) -> None:
+    """Run updateDiscussionTopic, mapping Canvas's checkpoint refusals to exceptions."""
+    try:
+        data = graphql(course, _UPDATE_DISCUSSION_TOPIC, {"input": variables_input})
+    except RuntimeError as exc:
+        _raise_checkpoint_error(str(exc))
+        raise
+    payload = (data.get("data") or {}).get("updateDiscussionTopic") or {}
+    if payload.get("errors"):
+        text = str(payload["errors"])
+        _raise_checkpoint_error(text)
+        raise RuntimeError(f"updateDiscussionTopic failed: {text}")
+
+
+def _raise_checkpoint_error(text: str) -> None:
+    lowered = text.lower()
+    if "discussion_checkpoints feature flag must be enabled" in lowered:
+        raise CheckpointsDisabled(text)
+    if "cannot be enabled after replies" in lowered:
+        raise CheckpointChangeRefused("add")
+
+
+def set_discussion_checkpoints(course, topic_id: int, checkpoints: list[dict[str, Any]]) -> None:
+    """Give a discussion its two checkpoints (GraphQL; Canvas has no REST route).
+
+    ``checkpoints`` is the mutation's ``checkpoints`` input (see
+    checkpoints.graphql_checkpoints). Works on a plain graded discussion
+    (converts it in place) and on a checkpointed one (replaces points, dates
+    and the required-replies count, and resets the parent's points to the sum
+    and its due date to none). Measured 2026-11-02.
+    """
+    _checkpoint_mutation(course, {
+        "discussionTopicId": str(topic_id),
+        "assignment": {"forCheckpoints": True},
+        "checkpoints": checkpoints,
+    })
+
+
+def remove_discussion_checkpoints(course, topic_id: int, points_possible: float | None) -> None:
+    """Turn a discussion's checkpoints off, leaving a plain graded discussion.
+
+    Canvas then has ``points_possible`` (when given) and no due date; the
+    caller sends the file's dates afterwards.
+    """
+    assignment: dict[str, Any] = {"forCheckpoints": False}
+    if points_possible is not None:
+        assignment["pointsPossible"] = float(points_possible)
+    _checkpoint_mutation(course, {
+        "discussionTopicId": str(topic_id),
+        "setCheckpoints": False,
+        "assignment": assignment,
+    })
+
+
 def update_post_policy(course, post_manually: bool) -> None:
     """Set the course default post policy via the GraphQL ``setCoursePostPolicy`` mutation.
 
@@ -1213,16 +1336,91 @@ def _strip_discussion_dates(kwargs: dict[str, Any]) -> dict[str, Any]:
 
 
 def create_or_update_discussion(
-    course, canvas_id: int | None, title: str, body: str, **kwargs
+    course, canvas_id: int | None, title: str, body: str,
+    checkpoints_wanted: bool | None = None, **kwargs
 ) -> dict[str, Any]:
+    """Create or update a discussion topic over REST.
+
+    ``checkpoints_wanted`` (None for callers that do not manage checkpoints)
+    says whether the file has a ``checkpoints`` block; see
+    ``_apply_checkpoint_state`` for what it changes on an existing topic.
+    """
     return _retry_without_unpublish(
         lambda **kw: _retry_without_dates(
-            lambda **kw2: _do_discussion(course, canvas_id, title, body, **kw2),
+            lambda **kw2: _do_discussion(
+                course, canvas_id, title, body, checkpoints_wanted=checkpoints_wanted, **kw2
+            ),
             kw,
             _strip_discussion_dates,
         ),
         kwargs,
     )
+
+
+#: Parent-assignment keys REST must not send to a checkpointed topic: Canvas
+#: accepts them and leaves the parent inconsistent with its checkpoints
+#: (points no longer the sum, a parent due date). Measured 2026-11-02.
+CHECKPOINT_PARENT_KEYS = ("points_possible", "due_at", "unlock_at", "lock_at")
+
+
+def _without_parent_keys(kwargs: dict[str, Any]) -> dict[str, Any]:
+    assignment = kwargs.get("assignment")
+    if not isinstance(assignment, dict):
+        return kwargs
+    return {
+        **kwargs,
+        "assignment": {k: v for k, v in assignment.items() if k not in CHECKPOINT_PARENT_KEYS},
+    }
+
+
+def _checkpoint_state(topic) -> tuple[bool, bool]:
+    """(is_checkpointed, has_replies) of a fetched discussion topic.
+
+    A missing reply count counts as having replies, so nothing destructive
+    happens on incomplete data.
+    """
+    assignment = getattr(topic, "assignment", None)
+    is_checkpointed = getattr(topic, "is_checkpointed", None) is True or (
+        isinstance(assignment, dict) and assignment.get("has_sub_assignments") is True
+    )
+    subentries = getattr(topic, "discussion_subentry_count", None)
+    has_replies = True if not isinstance(subentries, int) or isinstance(subentries, bool) else subentries > 0
+    return is_checkpointed, has_replies
+
+
+def get_discussion_checkpoint_state(course, topic_id: int) -> tuple[bool, bool] | None:
+    """(is_checkpointed, has_replies) of a Canvas discussion, None if it was deleted."""
+    try:
+        return _checkpoint_state(course.get_discussion_topic(topic_id))
+    except ResourceDoesNotExist:
+        return None
+
+
+def _apply_checkpoint_state(
+    course, topic, checkpoints_wanted: bool | None, kwargs: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Reconcile an existing topic's checkpoint state with the file before the REST update.
+
+    Returns (kwargs to send, extra result keys). Raises CheckpointChangeRefused
+    before anything is changed when checkpoints would be added to, or removed
+    from, a topic with replies. When the file dropped its checkpoints, they
+    are turned off here, first, so REST never writes parent points or dates
+    onto a checkpointed topic.
+    """
+    if checkpoints_wanted is None:
+        return kwargs, {}
+    is_checkpointed, has_replies = _checkpoint_state(topic)
+    if is_checkpointed and checkpoints_wanted:
+        return _without_parent_keys(kwargs), {"was_checkpointed": True}
+    if is_checkpointed and not checkpoints_wanted:
+        if has_replies:
+            raise CheckpointChangeRefused("remove")
+        points = (kwargs.get("assignment") or {}).get("points_possible")
+        remove_discussion_checkpoints(course, topic.id, points)
+        return kwargs, {"was_checkpointed": True, "checkpoints_removed": True}
+    if checkpoints_wanted and has_replies:
+        raise CheckpointChangeRefused("add")
+    return kwargs, {"was_checkpointed": False}
 
 
 # Discussion-topic parameters that are meaningful for an announcement and may be
@@ -1264,11 +1462,15 @@ def create_or_update_announcement(
 
 def _do_discussion(
     course, canvas_id: int | None, title: str, body: str,
-    canvas_type: str = "discussion", **kwargs
+    canvas_type: str = "discussion", checkpoints_wanted: bool | None = None, **kwargs
 ) -> dict[str, Any]:
+    checkpoint_info: dict[str, Any] = {}
     if canvas_id is not None:
         try:
             topic = course.get_discussion_topic(canvas_id)
+            kwargs, checkpoint_info = _apply_checkpoint_state(
+                course, topic, checkpoints_wanted, kwargs
+            )
             if "group_category_id" in kwargs:
                 subentries = getattr(topic, "discussion_subentry_count", None)
                 kwargs = _guard_group_category(
@@ -1284,7 +1486,8 @@ def _do_discussion(
     else:
         topic = course.create_discussion_topic(title=title, message=body, **kwargs)
     result: dict[str, Any] = {
-        "canvas_type": canvas_type, "canvas_id": topic.id, "html_url": topic.html_url
+        "canvas_type": canvas_type, "canvas_id": topic.id, "html_url": topic.html_url,
+        **checkpoint_info,
     }
     if canvas_type == "discussion":
         # A graded discussion's rubric lives on its underlying assignment. The

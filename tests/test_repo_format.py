@@ -1850,3 +1850,42 @@ def test_version_14_tool_refuses_a_version_15_repo(tmp_path, monkeypatch):
     monkeypatch.setattr(rf, "FORMAT_VERSION", 14)
     with pytest.raises(RepoFormatError, match="Update markdown-to-canvas"):
         rf.check_repo_format(tmp_path)
+
+
+def test_migration_15_to_16_only_records_the_version(tmp_path, capsys):
+    path = _settings(tmp_path, "format_version = 15\n" + _RELATIVE_WITH_ITEM)
+    manifest = _manifest(tmp_path, version=15)
+    before_text = path.read_text()
+    rf.run_upgrade(tmp_path, target_version=16)
+    after = tomllib.loads(path.read_text())
+    assert after.pop("format_version") == 16
+    after.pop("upgraded_by", None)
+    before = tomllib.loads(before_text)
+    before.pop("format_version")
+    assert after == before
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 16}
+    assert f"Record format version 16 in {manifest.name}" in capsys.readouterr().out
+
+
+def test_migration_15_to_16_noop_writes_nothing(tmp_path):
+    path = _settings(tmp_path, "format_version = 15\n")
+    manifest = _manifest(tmp_path, version=15)
+    before = (path.read_bytes(), manifest.read_bytes())
+    rf.run_upgrade(tmp_path, noop=True, target_version=16)
+    assert (path.read_bytes(), manifest.read_bytes()) == before
+
+
+def test_migration_15_to_16_lagging_manifest(tmp_path):
+    path = _settings(tmp_path, "format_version = 16\n")
+    manifest = _manifest(tmp_path, version=15)
+    before = path.read_bytes()
+    rf.run_upgrade(tmp_path, target_version=16)
+    assert path.read_bytes() == before
+    assert tomllib.loads(manifest.read_text())["_repo_format"] == {"format_version": 16}
+
+
+def test_version_15_tool_refuses_a_version_16_repo(tmp_path, monkeypatch):
+    _settings(tmp_path, "format_version = 16\n")
+    monkeypatch.setattr(rf, "FORMAT_VERSION", 15)
+    with pytest.raises(RepoFormatError, match="Update markdown-to-canvas"):
+        rf.check_repo_format(tmp_path)

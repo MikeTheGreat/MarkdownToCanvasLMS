@@ -200,6 +200,18 @@ class DryRunCanvas:
     def get_discussion_assignment_id(self, course, topic_id) -> int | None:
         return self._new_id()
 
+    # -- discussion checkpoints ------------------------------------------------
+
+    def discussion_checkpoints_enabled(self, course) -> bool | None:
+        # No course to ask: unknown, so the run carries on as if it were on.
+        return None
+
+    def set_discussion_checkpoints(self, course, topic_id, checkpoints) -> None:
+        return None
+
+    def remove_discussion_checkpoints(self, course, topic_id, points_possible) -> None:
+        return None
+
     def create_or_update_announcement(
         self, course, canvas_id, title, body, **kwargs
     ) -> dict[str, Any]:
@@ -437,3 +449,29 @@ class NoopCanvas(DryRunCanvas):
             canvas_id = self._new_id()
             self._modules.setdefault(title.strip().casefold(), []).append(canvas_id)
         return SimpleNamespace(id=canvas_id)
+
+    def discussion_checkpoints_enabled(self, course) -> bool | None:
+        return capi.discussion_checkpoints_enabled(course)
+
+    def create_or_update_discussion(
+        self, course, canvas_id, title, body, checkpoints_wanted=None, **kwargs
+    ) -> dict[str, Any]:
+        """Simulate the upload, but check a real topic's checkpoint state as
+        the real call would, so --noop reports the same refusals and says when
+        checkpoints would be turned off."""
+        extra: dict[str, Any] = {}
+        if checkpoints_wanted is not None and canvas_id is not None and not self._is_fake(canvas_id):
+            state = capi.get_discussion_checkpoint_state(course, canvas_id)
+            if state is not None:
+                is_checkpointed, has_replies = state
+                if is_checkpointed and not checkpoints_wanted:
+                    if has_replies:
+                        raise capi.CheckpointChangeRefused("remove")
+                    print(f"  Would turn off checkpoints (Canvas discussion {canvas_id})")
+                    extra = {"was_checkpointed": True, "checkpoints_removed": True}
+                elif checkpoints_wanted and not is_checkpointed and has_replies:
+                    raise capi.CheckpointChangeRefused("add")
+                else:
+                    extra = {"was_checkpointed": is_checkpointed}
+        result = super().create_or_update_discussion(course, canvas_id, title, body, **kwargs)
+        return {**result, **extra}

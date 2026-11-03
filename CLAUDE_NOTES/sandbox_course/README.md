@@ -30,3 +30,11 @@ Load the token before running the tool, from the project root:
   format); pages/week-1-homepage.md quotes Quiz 1's due_at by item= and type=.
   Changing an entry's due_at in due_dates and running update must re-upload
   only the files that quote it.
+- Discussion checkpoints (2026-11-02): discussions/checkpoint-forum.md is a
+  checkpointed discussion (1 + 2 points, 2 required replies) with a rubric
+  (course_settings/rubrics.toml) and the group set/group category
+  "Checkpoint Groups"; its due_dates entry uses reply_to_topic_due_at and
+  reply_to_others_due_at. Checked: first upload, a dates-only change to one
+  checkpoint, removing the block (checkpoints turned off) and putting it
+  back (the plain topic converted in place). Its body quotes its own due
+  date, which is the reply-to-others date.

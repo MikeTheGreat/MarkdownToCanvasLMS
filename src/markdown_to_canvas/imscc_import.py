@@ -15,6 +15,7 @@ from urllib.parse import unquote
 import pypandoc
 import tomlkit
 
+from . import checkpoints as checkpoints_lib
 from . import date_placeholders, toml_write
 from .relative_dates import CLAMP_HELP, CUTOFF_HELP, DEFAULT_TIMES, DEFAULT_TIMES_HELP
 from .canvas_api import NUMERIC_TAB_IDS, TOOL_TAB_PREFIX
@@ -1113,6 +1114,8 @@ def parse_assignment_settings(xml_path: Path) -> dict[str, Any]:
 
 
 _DATE_KEYS = ("unlock_at", "due_at", "lock_at")
+#: A checkpointed discussion's due_dates keys, in the order they are written.
+_CHECKPOINT_DATE_KEYS = checkpoints_lib.SYMBOLIC_KEYS
 
 
 def _extract_date_fields(fm_fields: dict[str, Any]) -> dict[str, Any]:
@@ -1125,14 +1128,19 @@ def _collect_due_date(
     title: str,
     content_type: str,
     date_fields: dict[str, Any],
+    keys: tuple[str, ...] = _DATE_KEYS,
 ) -> None:
-    """Append a due_dates entry to *collector* if any date field has a value."""
+    """Append a due_dates entry to *collector* if any date field has a value.
+
+    ``keys`` are the entry's date keys: ``_DATE_KEYS``, or
+    ``_CHECKPOINT_DATE_KEYS`` for a checkpointed discussion.
+    """
     if collector is None:
         return
-    if not any(date_fields.get(k) for k in _DATE_KEYS):
+    if not any(date_fields.get(k) for k in keys):
         return
     entry: dict[str, Any] = {"name": title, "type": content_type}
-    for k in _DATE_KEYS:
+    for k in keys:
         entry[k] = date_fields.get(k) or ""
     collector.append(entry)
 
@@ -1255,8 +1263,48 @@ def parse_topic_meta(xml_path: Path) -> dict[str, Any]:
             use_for_grading_raw = _el_text(assignment_el, "rubric_use_for_grading", ns)
             if use_for_grading_raw:
                 result["use_for_grading"] = use_for_grading_raw.lower() == "true"
+        block = _parse_checkpoints(root, assignment_el, ns)
+        if block is not None:
+            # A checkpointed discussion: the parent's points are the sum and
+            # it has no due date of its own (see checkpoints.py).
+            result.pop("points_possible", None)
+            result.pop("due_at", None)
+            result[checkpoints_lib.KEY] = block
 
     return result
+
+
+def _parse_checkpoints(
+    root: ET.Element, assignment_el: ET.Element, ns: str
+) -> dict[str, Any] | None:
+    """The ``checkpoints`` frontmatter block of a checkpointed discussion, or None.
+
+    Canvas exports the two checkpoints as ``<sub_assignment tag=...>`` elements
+    (each a full set of assignment fields) inside ``<sub_assignments>`` in the
+    topic's ``<assignment>``, and the number of required replies as the
+    topic-level ``<reply_to_entry_required_count>``. Each checkpoint's
+    ``due_at`` is returned under ``_due_at``; the caller moves it to due_dates.
+    """
+    container = assignment_el.find(f"{{{ns}}}sub_assignments" if ns else "sub_assignments")
+    if container is None:
+        return None
+    by_tag: dict[str, ET.Element] = {}
+    for sub in container.findall(f"{{{ns}}}sub_assignment" if ns else "sub_assignment"):
+        by_tag.setdefault(sub.get("tag", ""), sub)
+    names = {tag: name for name, tag in checkpoints_lib.CANVAS_TAGS.items()}
+    if set(names) - set(by_tag):
+        return None
+    block: dict[str, Any] = {}
+    for tag, name in sorted(names.items(), key=lambda kv: kv[1] != checkpoints_lib.REPLY_TO_TOPIC):
+        sub = by_tag[tag]
+        pts_raw = _el_text(sub, "points_possible", ns)
+        entry: dict[str, Any] = {"points_possible": float(pts_raw) if pts_raw else 0.0}
+        if name == checkpoints_lib.REPLY_TO_OTHERS:
+            count_raw = _el_text(root, "reply_to_entry_required_count", ns)
+            entry["replies_required"] = int(count_raw) if count_raw.isdigit() and int(count_raw) > 0 else 1
+        entry["_due_at"] = _el_text(sub, "due_at", ns) or None
+        block[name] = entry
+    return block
 
 
 def _xml_ns(element: ET.Element) -> str:
@@ -1322,13 +1370,30 @@ def convert_discussion(ctx: ImportContext, entry: TempEntry) -> None:
     _note_group_category(ctx, fm_fields)
 
     date_fields = _extract_date_fields(fm_fields)
-    _collect_due_date(ctx.due_dates_collector, fm_fields.get("title", ""), "discussion", date_fields)
+    date_keys = _DATE_KEYS
+    block = fm_fields.get(checkpoints_lib.KEY)
+    if isinstance(block, dict):
+        # Checkpoint due dates go to due_dates like due_at does, and stay in
+        # the block as commented-out lines.
+        date_keys = _CHECKPOINT_DATE_KEYS
+        for name, key in (
+            (checkpoints_lib.REPLY_TO_TOPIC, checkpoints_lib.REPLY_TO_TOPIC_DUE),
+            (checkpoints_lib.REPLY_TO_OTHERS, checkpoints_lib.REPLY_TO_OTHERS_DUE),
+        ):
+            due = block[name].pop("_due_at", None)
+            if due:
+                date_fields[key] = due
+                block[name]["#due_at"] = due
+    _collect_due_date(
+        ctx.due_dates_collector, fm_fields.get("title", ""), "discussion", date_fields, date_keys
+    )
 
     markdown = _read_topic_body(ctx, entry)
 
+    commented = {k: v for k, v in date_fields.items() if k in _DATE_KEYS}
     frontmatter = _build_frontmatter(
         fm_fields,
-        commented_fields=date_fields if date_fields else None,
+        commented_fields=commented if date_fields else None,
         comment_note="Due dates are managed centrally in course_settings/course_settings.toml",
     )
     out_path = ctx.output_dir / entry.local_path
@@ -2650,7 +2715,10 @@ def _due_dates_rows(due_dates: list[dict[str, Any]]) -> list[dict[str, str]]:
         row = {"name": entry["name"]}
         if entry.get("type"):
             row["type"] = entry["type"]
-        for k in _DATE_KEYS:
+        keys = (
+            _CHECKPOINT_DATE_KEYS if checkpoints_lib.REPLY_TO_OTHERS_DUE in entry else _DATE_KEYS
+        )
+        for k in keys:
             row[k] = entry.get(k, "")
         rows.append(row)
     return rows
@@ -3256,6 +3324,33 @@ def _format_scalar(value: Any) -> str:
     return str(value)
 
 
+#: Comment lines written directly above a nested frontmatter key.
+_NESTED_KEY_COMMENTS = {
+    checkpoints_lib.REPLY_TO_OTHERS: (
+        "reply_to_others: each student's replies to other students' posts "
+        "(Canvas's \"Required Replies\" checkpoint)"
+    ),
+}
+
+
+def _render_mapping(lines: list[str], mapping: dict[str, Any], indent: str) -> None:
+    """Append a nested YAML mapping. A key starting with ``#`` is written as a
+    commented-out line (``# due_at: ...``)."""
+    for key, value in mapping.items():
+        if value is None:
+            continue
+        if key.startswith("#"):
+            lines.append(f"{indent}# {key[1:]}: {_format_scalar(value)}")
+            continue
+        if key in _NESTED_KEY_COMMENTS:
+            lines.append(f"{indent}# {_NESTED_KEY_COMMENTS[key]}")
+        if isinstance(value, dict):
+            lines.append(f"{indent}{key}:")
+            _render_mapping(lines, value, indent + "    ")
+        else:
+            lines.append(f"{indent}{key}: {_format_scalar(value)}")
+
+
 def _build_frontmatter(
     fields: dict[str, Any],
     commented_fields: dict[str, Any] | None = None,
@@ -3272,8 +3367,14 @@ def _build_frontmatter(
     for key, value in fields.items():
         if value is None:
             continue
+        if isinstance(value, dict):
+            lines.append(f"{key}:")
+            _render_mapping(lines, value, "    ")
+            continue
         lines.append(f"{key}: {_format_scalar(value)}")
-    if commented_fields:
+    # An empty dict (rather than None) still writes the note: a checkpointed
+    # discussion's due dates are commented out inside its checkpoints block.
+    if commented_fields is not None and (commented_fields or comment_note):
         if comment_note:
             lines.append(f"    # {comment_note}")
         for key, value in commented_fields.items():
