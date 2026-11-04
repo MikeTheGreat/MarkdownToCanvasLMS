@@ -376,7 +376,7 @@ Course dir: /home/you/Courses/it142  (course 142)
 
 The registry is a file you edit by hand,
 `~/.config/markdown-to-canvas/course_registry.toml`. It maps a short key to a
-course directory, so you can run a command from anywhere:
+course directory (or to a group of them), so you can run a command from anywhere:
 
 ```toml
 [courses]
@@ -396,6 +396,33 @@ markdown-to-canvas update 142a           # the section-A Canvas course of the sa
 markdown-to-canvas list-titles 142
 ```
 
+- An entry can also be a **group**: an array of other keys, paths and tables.
+  A command that takes `COURSE_DIR` then runs once for each element:
+
+  ```toml
+  101 = ["13", "14"]                              # two registered keys
+  all = ["13", "~/Courses/it142", { path = "~/Courses/it143", config = "course_settings/canvas-b.toml" }]
+  ```
+
+  ```bash
+  markdown-to-canvas update 101        # updates 13, then 14
+  ```
+
+  - Each run starts with a heading such as `=== 101: 13 (1/2) ===`. After the
+    last run you get a summary such as `13: ok, 14: failed`.
+  - A failed run does not stop the next one. The command exits with status 1
+    if any run failed.
+  - A string in a group is a registered key if one exists. Otherwise it must be
+    a path that is absolute or starts with `~`. It is never a path relative to
+    your current directory.
+  - All other options apply to every run (`-t`, `-s`, `--noop`, `--yes`, and so
+    on). Each run asks its own confirmation questions.
+  - `--config` cannot be used with a group, and `--config` cannot name a
+    group. Each course uses its own config.
+  - A group cannot contain another group.
+  - `publish` writes every run to the same `--output-dir`. Give `publish` one
+    key at a time if you want separate sites.
+  - A directory with the same name as the group key still wins, as with any key.
 - A path must be absolute or start with `~`. A key that is not registered, or a
   registered directory that no longer exists, is an error that names the key;
   the "not registered" message lists the keys you do have.

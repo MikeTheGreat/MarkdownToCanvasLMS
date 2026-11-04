@@ -1,3 +1,4 @@
+import contextvars
 import os
 import shlex
 import subprocess
@@ -30,6 +31,8 @@ from .course_registry import (  # noqa: E402  (safe: imports nothing that reads 
     load_env_files,
     resolve_config,
     resolve_course,
+    resolve_courses,
+    is_group,
     registry_path,
     resolve_term,
 )
@@ -129,7 +132,14 @@ def _resolve_course(course_dir: str | None, config: Path | None = None) -> tuple
     config is --config if given, else the registry entry's config, else None
     (meaning the command's own default).
     """
-    if course_dir is None:
+    member = _current_member.get()
+    if course_dir is not None and member is not None:
+        # Running one member of a group (see _for_each_course).
+        resolved = member
+        if not resolved.path.is_dir():
+            what = f"Course {resolved.key!r}" if resolved.key else "Course"
+            die(f"{what} is registered as {resolved.path}, which is not a directory.")
+    elif course_dir is None:
         found = find_repo_root(Path.cwd())
         if found is None:
             die(
@@ -146,6 +156,75 @@ def _resolve_course(course_dir: str | None, config: Path | None = None) -> tuple
     via = f"  (course {resolved.key})" if resolved.key else ""
     click.echo(f"Course dir: {resolved.path}{via}")
     return resolved.path, config if config is not None else resolved.config
+
+
+#: The group member being run by `_for_each_course`, or None. `_resolve_course`
+#: uses it in place of resolving its string argument, because a member can be a
+#: path or an inline table, which has no key to look up.
+_current_member: contextvars.ContextVar[ResolvedCourse | None] = contextvars.ContextVar(
+    "current_member", default=None
+)
+
+
+def _member_name(member: ResolvedCourse) -> str:
+    return member.key if member.key else str(member.path)
+
+
+def _for_each_course(func):
+    """Run a COURSE_DIR command once for each course a group key stands for.
+
+    Goes between the command's options and `_handle_cli_errors`, so a member's
+    `die()` has already happened inside `func` and arrives here as SystemExit.
+    A COURSE_DIR that is a path, a plain key or omitted just calls `func`. For a
+    group key each member is run in order with a heading, a failure does not
+    stop the rest, and a summary follows; the exit status is 1 if any failed.
+    Any other Exception also fails just that member. Ctrl-C and click.Abort are not
+    caught, so they stop the whole command.
+    """
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        course_dir = kwargs.get("course_dir")
+        if course_dir is None or not is_group(course_dir):
+            return func(*args, **kwargs)
+        if kwargs.get("config") is not None:
+            die(
+                f"--config cannot be used with {course_dir!r}, which is a group of "
+                f"courses: each course uses its own config. Run the courses one "
+                f"at a time to give --config."
+            )
+        try:
+            members = resolve_courses(course_dir)
+        except RegistryError as e:
+            die(str(e))
+        results: list[tuple[str, bool]] = []
+        for i, member in enumerate(members, 1):
+            name = _member_name(member)
+            click.echo(f"=== {course_dir}: {name} ({i}/{len(members)}) ===")
+            token = _current_member.set(member)
+            try:
+                func(*args, **{**kwargs, "course_dir": name})
+                ok = True
+            except SystemExit as e:
+                ok = e.code in (0, None)
+            except click.exceptions.Exit as e:
+                ok = e.exit_code == 0
+            except click.ClickException as e:
+                e.show()
+                ok = False
+            except Exception as e:  # an unexpected error fails this member only
+                click.secho(f"Error: {type(e).__name__}: {e}", fg="red", err=True)
+                ok = False
+            finally:
+                _current_member.reset(token)
+            results.append((name, ok))
+            click.echo()
+        summary = ", ".join(f"{n}: {'ok' if ok else 'failed'}" for n, ok in results)
+        failed = any(not ok for _, ok in results)
+        click.secho(summary, fg="red" if failed else "green")
+        if failed:
+            sys.exit(1)
+
+    return wrapper
 
 
 def _guard_course(
@@ -398,6 +477,8 @@ def mv_cmd(src: Path, dest: str, noop: bool, verbose: bool, after: bool) -> None
     help="Replace destination files that differ from the source (snippets the "
     "destination already has are still kept).",
 )
+@_for_each_course
+@_handle_cli_errors
 def cp_cmd(srcs: tuple[Path, ...], course_dir: str, noop: bool, verbose: bool, overwrite: bool) -> None:
     """Copy content, with its assets, snippets and rubrics, into another course.
 
@@ -497,6 +578,8 @@ def _flags_config(repo: Path, config: Path | None) -> Config | None:
         "course_id (default: <COURSE_DIR>/course_settings/canvas.toml, if present)."
     ),
 )
+@_for_each_course
+@_handle_cli_errors
 def publish(
     course_dir: str | None, output_dir: Path, config: Path | None
 ) -> None:
@@ -520,6 +603,8 @@ def publish(
 
 @main.command(name="emit-workflow")
 @_course_dir_argument()
+@_for_each_course
+@_handle_cli_errors
 def emit_workflow_cmd(course_dir: str | None) -> None:
     """Write a GitHub Actions workflow for publishing to GitHub Pages.
 
@@ -564,6 +649,7 @@ def emit_workflow_cmd(course_dir: str | None) -> None:
     help="Remove orphaned entries from the local manifest only; never touch Canvas.",
 )
 @click.option("--yes", "-y", "assume_yes", is_flag=True, default=False, help=_YES_HELP)
+@_for_each_course
 @_handle_cli_errors
 def prune(course_dir: str, config: Path | None, mode: str | None, assume_yes: bool) -> None:
     """Delete or unpublish Canvas items whose local source file no longer exists.
@@ -608,6 +694,7 @@ def prune(course_dir: str, config: Path | None, mode: str | None, assume_yes: bo
     type=_CONFIG_PARAM,
     help="Path to canvas.toml, or a registered course key whose canvas.toml to use (default: <COURSE_DIR>/course_settings/canvas.toml)",
 )
+@_for_each_course
 @_handle_cli_errors
 def find_canvas_orphans_cmd(course_dir: str | None, config: Path | None) -> None:
     """Find Canvas resources not referenced by any other resource in the course.
@@ -647,6 +734,7 @@ def find_canvas_orphans_cmd(course_dir: str | None, config: Path | None) -> None
     help="Also list every referenced file and what refers to it, before the "
     "unreferenced ones.",
 )
+@_for_each_course
 @_handle_cli_errors
 def find_local_orphans_cmd(course_dir: str | None, verbose: bool) -> None:
     """Find files in the course repo that nothing else in the repo references.
@@ -684,6 +772,7 @@ def find_local_orphans_cmd(course_dir: str | None, verbose: bool) -> None:
     default=False,
     help="Rewrite the files. Without it, only show what would change.",
 )
+@_for_each_course
 @_handle_cli_errors
 def fix_markdown_cmd(course_dir: str | None, apply: bool) -> None:
     """Remove Word and import debris from the course's Markdown files.
@@ -855,6 +944,7 @@ def fix_markdown_cmd(course_dir: str | None, apply: bool) -> None:
     default=False,
     help="With --clean --apply, skip the confirmation when the manifest records a different course.",
 )
+@_for_each_course
 @_handle_cli_errors
 def fix_manifest_cmd(
     course_dir: str | None,
@@ -1092,6 +1182,8 @@ def create_tool_aliases(course_url: str) -> None:
     default=False,
     help="Show what would change without writing any file.",
 )
+@_for_each_course
+@_handle_cli_errors
 def upgrade_cmd(course_dir: str | None, noop: bool) -> None:
     """Upgrade a course repo (and its manifests) to this tool's file format.
 
@@ -1159,6 +1251,8 @@ def _stdin_is_terminal() -> bool:
     default=False,
     help="List each item whose dates were kept by dont_reschedule_dates_before.",
 )
+@_for_each_course
+@_handle_cli_errors
 def generate_due_dates_cmd(
     course_dir: str | None, term_file: str | None, table_name: str | None, noop: bool,
     assume_yes: bool, verbose: bool,
@@ -1296,6 +1390,8 @@ def _write_generated_dates(plan, noop: bool, assume_yes: bool) -> None:
         "(default: <COURSE_DIR>/course_settings/canvas.toml, if present)."
     ),
 )
+@_for_each_course
+@_handle_cli_errors
 def list_titles(course_dir: str | None, config: Path | None) -> None:
     """List all assignments, discussions, and quizzes with their due dates and file paths.
 
@@ -1460,6 +1556,7 @@ def _move_check_commands(
     ),
 )
 @click.option("--yes", "-y", "assume_yes", is_flag=True, default=False, help=_YES_HELP)
+@_for_each_course
 @_handle_cli_errors
 def update(
     course_dir: str | None,

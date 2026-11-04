@@ -300,10 +300,41 @@ line of output, and returns `(directory, config)`:
   `--config` (`upgrade`, `generate-due-dates`, `find-local-orphans`, `emit-workflow`)
   discard it. The manifest name derives from the config path (`manifest_path_for`), so a
   registry config selects the section's manifest exactly as `--config` does.
+- **Groups** — a `[courses]` entry can be an array (a group) of elements. An element is a
+  registered key of a non-group entry, an absolute or `~` path string, or a `{path, config}`
+  table. A string is tried as a key first, then as a path. It is never resolved against the
+  current directory. `course_registry.resolve_courses(arg)` returns the courses the argument
+  stands for: one for a path or a plain key, N for a group. It checks the whole group first. An
+  empty array, an array element, an element that names another group, a bad table and a
+  non-key relative string are all `RegistryError`. A member whose directory is missing is
+  returned anyway. `is_group(arg)` says whether an argument is a group key (a directory at the
+  path wins, so it is then not a group). `resolve_course` and `resolve_config` raise
+  `RegistryError` for a group key, so no caller can take the first member by accident.
+  `cli._for_each_course` does the fan-out. It sits between the options and
+  `_handle_cli_errors` on `update`, `publish`, `prune`, `fix-manifest`, `fix-markdown`,
+  `upgrade`, `generate-due-dates`, `list-titles`, `find-canvas-orphans`,
+  `find-local-orphans`, `emit-workflow` and `cp`. For a group it dies first if `--config` was
+  given. Then it runs the command once per member, in order. Before each run it prints
+  `=== GROUP: MEMBER (i/N) ===`. It catches `SystemExit` (nonzero is a failure),
+  `click.exceptions.Exit`, `ClickException` and any other `Exception` (printed as
+  `Error: TYPE: message`) per member. Every one of these commands also has
+  `@_handle_cli_errors`. `KeyboardInterrupt` and
+  `click.Abort` pass through and stop the whole command. After the last member it prints
+  `13: ok, 14: failed` and exits 1 if any member failed. The wrapper passes the member's key
+  (or its directory, for a path or table member) as `course_dir`, so
+  `_move_check_commands` prints commands that work. It also sets the module-level
+  `_current_member` context variable. `_resolve_course` reads it in place of resolving the
+  string, because a table member has no key. It dies with the usual "not a directory" message
+  when the member's directory is missing, which fails only that member. Members run one after
+  another, so prompts work and two sections of one repo never touch a manifest at the same
+  time. Every option, including `-t`, `-s`, `--new`, `--noop`, `--yes` and any `--output-dir`,
+  applies unchanged to every member. `publish` therefore writes each member to the same
+  `--output-dir` unless you run the members one at a time. `import` and `mv` take no course
+  key, so groups do not apply to them. A path or plain key prints no heading and no summary.
 - **`--config` values** — every `--config` option uses `_CONFIG_PARAM` (`_ConfigParam` in
   `cli.py`), which calls `course_registry.resolve_config`. A file that exists at the path as
   typed wins; otherwise a registered key gives that entry's `config` joined to the entry's
-  own directory (or `course_settings/canvas.toml` there when it has none); otherwise the
+  own directory (a group key is an error) (or `course_settings/canvas.toml` there when it has none); otherwise the
   value stays a path and the command's own "Config file not found" error applies. Only the
   config comes from the key, never the course directory. A key whose file is missing dies in
   the converter with the path and the key. The entry config that `_resolve_course` supplies
@@ -333,7 +364,7 @@ call, so tests move `HOME`; `XDG_CONFIG_HOME` is not consulted):
 
 | File | Purpose |
 | --- | --- |
-| `course_registry.toml` | `[courses]` table: `key = "<path>"` or `key = { path, config }`; optional top-level `current_term = "<path>"` |
+| `course_registry.toml` | `[courses]` table: `key = "<path>"`, `key = { path, config }`, or `key = [<element>, ...]` (a group); optional top-level `current_term = "<path>"` |
 | `terms/<name>.toml` | term files, named by `--term` without `.toml` |
 | `.env` | fallback for `CANVAS_API_TOKEN` and other variables |
 

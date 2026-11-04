@@ -67,6 +67,15 @@ keys in one command. The same `KEY:path` form would let `cp` name its SRC paths
 from outside the source course (`cp 142:assignments/hw1.md 143`); today `cp`
 finds its source course from the SRC paths, like `mv`.
 
+## Allow nested groups in the course registry
+
+A course registry entry may be an array of keys, paths and tables (a group, see
+README "Naming a course"), but a group may not contain another group: `b =
+["a", "142"]` where `a` is itself an array is an error. Allowing it would need
+cycle detection (`a` containing `b` containing `a`) and a rule for an element
+that appears twice through different groups; de-duplicating by key, not by
+path, since two keys can name the same repo with different configs.
+
 ## Course flags: follow-on features beyond the shipped v1
 
 Course flags themselves, `published_if` (frontmatter), and due_dates

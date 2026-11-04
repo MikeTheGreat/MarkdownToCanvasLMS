@@ -1,7 +1,8 @@
 """Per-user registry of courses and terms, kept under ~/.config/markdown-to-canvas/.
 
 ``course_registry.toml`` maps a short key to a course directory (and, optionally,
-the canvas.toml to use for it), and may name the ``current_term`` file that
+the canvas.toml to use for it) or to a group: an array of keys, paths and
+``{path, config}`` tables that a command runs over one after another. It may name the ``current_term`` file that
 ``generate-due-dates`` uses when ``--term`` is not given; ``terms/<name>.toml``
 are term files that ``--term`` accepts by name; ``.env`` is a fallback for the
 API token.
@@ -143,7 +144,9 @@ def _parse_entry(key: str, raw: Any) -> tuple[Path, Path | None]:
     if isinstance(raw, str):
         raw = {"path": raw}
     if not isinstance(raw, dict):
-        raise RegistryError(f"{where} must be a path string or a table with path and config")
+        raise RegistryError(
+            f"{where} must be a path string, a table with path and config, or a list of those"
+        )
     unknown = sorted(set(raw) - set(_ENTRY_KEYS))
     if unknown:
         raise RegistryError(
@@ -188,6 +191,11 @@ def resolve_course(arg: str) -> ResolvedCourse:
     courses = _read_courses()
     if courses is None or arg not in courses:
         raise RegistryError(_unknown_course_message(arg, courses))
+    if isinstance(courses[arg], list):
+        raise RegistryError(
+            f"{arg!r} is a group of courses, not a single course; "
+            f"use resolve_courses() to expand it."
+        )
     course_dir, config = _parse_entry(arg, courses[arg])
     if not course_dir.is_dir():
         raise RegistryError(
@@ -195,6 +203,79 @@ def resolve_course(arg: str) -> ResolvedCourse:
         )
     course_dir = course_dir.resolve()
     return ResolvedCourse(course_dir, arg, course_dir / config if config else None)
+
+
+def is_group(arg: str) -> bool:
+    """True when ``arg`` would be read as a registry key that names a group.
+
+    A directory that exists at the path as typed wins over a key, so it is never
+    a group. Never raises: a missing or bad registry is simply "not a group", and
+    the lookup that follows reports the real problem.
+    """
+    if Path(arg).is_dir():
+        return False
+    try:
+        courses = _read_courses()
+    except (RegistryError, OSError):
+        return False
+    return courses is not None and isinstance(courses.get(arg), list)
+
+
+def _group_member(group: str, courses: dict[str, Any], element: Any) -> ResolvedCourse:
+    """One element of a group, as a course. The directory is not checked to exist."""
+    where = f"{registry_path()}: group {group!r}"
+    if isinstance(element, str):
+        if element in courses:
+            raw = courses[element]
+            if isinstance(raw, list):
+                raise RegistryError(
+                    f"{where} lists {element!r}, which is itself a group; "
+                    f"a group may not contain another group."
+                )
+            course_dir, config = _parse_entry(element, raw)
+            key: str | None = element
+        else:
+            if not element or not (element.startswith("~") or Path(element).is_absolute()):
+                raise RegistryError(
+                    f"{where} has the element {element!r}, which is neither a "
+                    f"registered course key nor a path that is absolute or "
+                    f"starts with ~."
+                )
+            course_dir, config = _parse_entry(group, element)
+            key = None
+    elif isinstance(element, dict):
+        course_dir, config = _parse_entry(group, element)
+        key = None
+    else:
+        raise RegistryError(
+            f"{where} has an element that is not a key, a path string or a "
+            f"table with path and config: {element!r}"
+        )
+    course_dir = course_dir.resolve()
+    return ResolvedCourse(course_dir, key, course_dir / config if config else None)
+
+
+def resolve_courses(arg: str) -> list[ResolvedCourse]:
+    """Turn a course argument into the courses it stands for.
+
+    Same lookup as ``resolve_course`` for a path or a non-group key (a list of
+    one). A key naming a group gives its elements in order. The whole group is
+    checked first, so a malformed or nested element fails before anything runs;
+    a member whose directory is missing is returned anyway, for the caller to
+    report at its turn.
+    """
+    as_path = Path(arg)
+    if as_path.is_dir():
+        return [ResolvedCourse(as_path.resolve())]
+    courses = _read_courses()
+    if courses is None or arg not in courses:
+        raise RegistryError(_unknown_course_message(arg, courses))
+    entry = courses[arg]
+    if not isinstance(entry, list):
+        return [resolve_course(arg)]
+    if not entry:
+        raise RegistryError(f"{registry_path()}: group {arg!r} is empty")
+    return [_group_member(arg, courses, element) for element in entry]
 
 
 def resolve_config(arg: str) -> Path:
@@ -212,6 +293,11 @@ def resolve_config(arg: str) -> Path:
     courses = _read_courses()
     if courses is None or arg not in courses:
         return as_path
+    if isinstance(courses[arg], list):
+        raise RegistryError(
+            f"{arg!r} names a group of several courses, not one canvas.toml; "
+            f"give a single course's key (or a file path) to --config."
+        )
     course_dir, config = _parse_entry(arg, courses[arg])
     return course_dir.resolve() / (config or Path("course_settings") / "canvas.toml")
 

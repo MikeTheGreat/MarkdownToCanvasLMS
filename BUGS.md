@@ -85,3 +85,18 @@ with an explicit offset (either `Z`, or converted to the course's
 `default_time_zone` from `course_settings.xml` with that zone's offset), and add
 a migration note for repos imported before the fix. First measure the REST case
 to confirm the scope.
+
+## `publish` with a group key writes every course to the same directory
+
+`publish` accepts a course registry group key (for example `publish 101`, where
+`101 = ["13", "14"]`) and runs once for each member. Every run uses the same
+`--output-dir` (default `site/`). Each run replaces the output of the run before
+it, so only the last member's site stays on disk. The summary still shows
+`13: ok, 14: ok`.
+
+Found on 2026-11-04 while adding groups (change `course-registry-multi-keys`).
+README.md and ARCHITECTURE.md describe the behavior. No test covers the overwrite.
+
+Likely fix: for a group, write each member to its own directory (for example
+`<output-dir>/<member name>`), or refuse a group for `publish` and tell the user
+to publish one key at a time.
