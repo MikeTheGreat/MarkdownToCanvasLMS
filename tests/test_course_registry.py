@@ -117,6 +117,54 @@ def test_key_used_when_no_such_directory(home, tmp_path, monkeypatch):
     assert reg.resolve_course("142").path == registered.resolve()
 
 
+@pytest.fixture
+def unreadable(monkeypatch):
+    """Make a path check on a relative argument fail with EIO, as on a stale mount.
+
+    Absolute paths (the registered course directories) still work, so only the
+    "is it a path as typed?" check hits the error.
+    """
+    real_is_dir, real_is_file = Path.is_dir, Path.is_file
+
+    def fail_if_relative(real):
+        def check(self, *args, **kwargs):
+            if not self.is_absolute():
+                raise OSError(5, "Input/output error", str(self))
+            return real(self, *args, **kwargs)
+        return check
+
+    monkeypatch.setattr(Path, "is_dir", fail_if_relative(real_is_dir))
+    monkeypatch.setattr(Path, "is_file", fail_if_relative(real_is_file))
+
+
+def test_unreadable_current_directory_falls_through_to_the_key(home, tmp_path, unreadable):
+    registered = make_course(tmp_path, "registered")
+    write_registry(home, f'[courses]\n142 = "{registered}"\n')
+    got = reg.resolve_course("142")
+    assert got.path == registered.resolve()
+    assert got.key == "142"
+
+
+def test_unreadable_current_directory_still_finds_a_group(home, tmp_path, unreadable):
+    a = make_course(tmp_path, "a")
+    b = make_course(tmp_path, "b")
+    write_registry(home, f'[courses]\na = "{a}"\nb = "{b}"\nboth = ["a", "b"]\n')
+    assert reg.is_group("both")
+    assert [c.path for c in reg.resolve_courses("both")] == [a.resolve(), b.resolve()]
+
+
+def test_unreadable_current_directory_falls_through_for_config_and_term(
+    home, tmp_path, unreadable
+):
+    registered = make_course(tmp_path, "registered")
+    write_registry(home, f'[courses]\n142 = "{registered}"\n')
+    assert reg.resolve_config("142") == (
+        registered.resolve() / "course_settings" / "canvas.toml"
+    )
+    term = make_term(home, "2026Fall")
+    assert reg.resolve_term("2026Fall") == term
+
+
 def test_unknown_course_lists_registered_keys(home, tmp_path, monkeypatch):
     write_registry(home, f'[courses]\n142 = "{tmp_path}"\n143 = "{tmp_path}"\n')
     monkeypatch.chdir(tmp_path)
@@ -379,6 +427,43 @@ def test_token_source_names_the_fallback(home, tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     reg.load_env_files()
     assert reg.token_source == str(home / ".config" / "markdown-to-canvas" / ".env")
+
+
+def _load_without_token(home, tmp_path, monkeypatch, work: Path) -> str:
+    """Run load_env_files from ``work``, then config.load; return the error."""
+    from markdown_to_canvas import config
+
+    monkeypatch.setattr(reg, "TOKEN_VAR", VAR)
+    _clean_var(monkeypatch)
+    monkeypatch.delenv("CANVAS_API_TOKEN", raising=False)
+    monkeypatch.chdir(work)
+    reg.load_env_files()
+    cfg = tmp_path / "canvas.toml"
+    cfg.write_text('base_url = "https://x"\ncourse_id = 1\n')
+    with pytest.raises(ValueError) as e:
+        config.load(cfg)
+    return str(e.value)
+
+
+def test_missing_token_lists_every_place_searched(home, tmp_path, monkeypatch):
+    work = tmp_path / "work"
+    work.mkdir()
+    msg = _load_without_token(home, tmp_path, monkeypatch, work)
+    assert f"none found (searched up from {work})" in msg
+    assert "environment variable in your shell: not set" in msg
+    assert f"{home / '.config' / 'markdown-to-canvas' / '.env'}: file not found" in msg
+    assert f"[auth] api_token in {tmp_path / 'canvas.toml'}: not set" in msg
+
+
+def test_missing_token_names_a_found_env_that_lacks_it(home, tmp_path, monkeypatch):
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / ".env").write_text("OTHER=1\n")
+    (home / ".config" / "markdown-to-canvas").mkdir(parents=True)
+    (home / ".config" / "markdown-to-canvas" / ".env").write_text("OTHER=1\n")
+    msg = _load_without_token(home, tmp_path, monkeypatch, work)
+    assert f"found {work / '.env'}, which does not set {VAR}" in msg
+    assert f"markdown-to-canvas/.env: does not set {VAR}" in msg
 
 
 # ---------------------------------------------------------------------------

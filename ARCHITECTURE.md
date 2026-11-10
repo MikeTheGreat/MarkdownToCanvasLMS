@@ -287,7 +287,13 @@ line of output, and returns `(directory, config)`:
   `course_settings/canvas.toml`, rather than silently acting on some parent directory the
   user did not mean). Otherwise the argument is looked up as a key in the registry. A path
   therefore beats a key. Neither → an error that lists the registered keys; a registered
-  directory that is gone → an error naming the key.
+  directory that is gone → an error naming the key. The "path as typed" check
+  (`_usable_dir` / `_usable_file`, used by `resolve_course`, `resolve_courses`, `is_group`,
+  `resolve_config` and `resolve_term`) treats an `OSError` as "no such path". A relative
+  argument is checked against the current directory, and `Path.is_dir()` raises on errors
+  other than "not found", such as EIO from a stale mount. Without the catch, running
+  `gg update 142` from an unreadable directory crashed before the key lookup that does not
+  need that directory.
 - **Argument omitted** — walk up from the current working directory via `find_repo_root()`
   looking for `course_settings/course_settings.toml`, so the command can be run from any
   subdirectory of the course. If no course encloses the cwd, the command exits asking for
@@ -398,6 +404,12 @@ because `cli` calls `load_env_files()` before those imports.
   canvasapi's `InvalidAccessToken` (expired or unknown token), prints the traceback, and dies
   with the full token and its source. This exists because a cwd `.env` overrides the shell,
   including `env -f FILE`, so a stale token in the directory you run from wins without notice.
+  When no token is found, `config.load()` raises with a list of every place it searched
+  (`config._missing_token_message`, from `course_registry.token_search_report()` plus the
+  canvas.toml line). `load_env_files()` records the start directory and the `.env` it found in
+  `env_search_start` / `env_search_found` for this. The list exists because the `.env` search
+  starts at the cwd, so a token in `~/.env` is not found when you run from outside `~` (for
+  example from a mounted drive), and the old one-line error did not show why.
 - **`import --register KEY`.** `check_key_free()` runs before `run_import` (so a taken key
   stops before anything is written); `add_entry()` runs only after the import succeeded. It
   edits the registry with `tomlkit` (comments and other entries survive) and never overwrites a

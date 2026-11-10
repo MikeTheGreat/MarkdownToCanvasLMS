@@ -587,6 +587,12 @@ If Canvas rejects the token (expired or unknown), the tool prints the stack
 trace, the full token it sent, and where that token came from (which `.env`
 file, the shell, or a canvas.toml `[auth]` block).
 
+If no token is set at all, the error lists each place the tool searched and
+what it found there. The `.env` search starts at the current directory, so a
+token in `~/.env` is not found when you run the tool from outside your home
+directory (for example from a mounted drive). Put the token in the fallback
+file to use it from any directory.
+
 Or put it in the `[auth]` block of `course_settings/canvas.toml` for local-only use (add `course_settings/canvas.toml` to `.gitignore` if you do this).
 
 ---

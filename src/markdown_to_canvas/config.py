@@ -70,6 +70,19 @@ class Config:
 last_token: tuple[str, str] | None = None
 
 
+def _missing_token_message(path: Path) -> str:
+    """The "token not set" error, listing every place that was searched."""
+    from .course_registry import config_dir, token_search_report
+
+    places = [*token_search_report(), f"[auth] api_token in {path}: not set"]
+    lines = "\n".join(f"  - {p}" for p in places)
+    return (
+        f"Canvas API token not set. Searched these places:\n{lines}\n"
+        f"Set CANVAS_API_TOKEN in {config_dir() / '.env'} to use it from any "
+        f"directory, or set it in one of the other places."
+    )
+
+
 def load(
     path: Path, require_token: bool = True, require_course: bool = True
 ) -> Config:
@@ -91,7 +104,7 @@ def load(
     elif api_token:
         last_token = (api_token, f"[auth] api_token in {path}")
     if not api_token and require_token:
-        raise ValueError("Canvas API token not set. Use CANVAS_API_TOKEN env var or canvas.toml [auth] api_token.")
+        raise ValueError(_missing_token_message(path))
 
     if require_course:
         base_url = data["base_url"].rstrip("/")

@@ -34,6 +34,29 @@ CURRENT_TERM_KEY = "current_term"
 _ENTRY_KEYS = ("path", "config")
 
 
+def _usable_dir(path: Path) -> bool:
+    """``path.is_dir()``, but False when the check itself fails.
+
+    An argument is tried as a path before it is tried as a key or a name. The
+    path is relative to the current directory, which can be unreadable (a stale
+    mount gives EIO). ``Path.is_dir()`` hides only "not found" errors and raises
+    the rest, so an unreadable directory would stop a key lookup that never
+    needs it. Treat it as "no directory there" and let the lookup go on.
+    """
+    try:
+        return path.is_dir()
+    except OSError:
+        return False
+
+
+def _usable_file(path: Path) -> bool:
+    """``path.is_file()``, but False when the check itself fails. See ``_usable_dir``."""
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
 class RegistryError(Exception):
     """A problem with the registry or a lookup in it; the message says what.
 
@@ -78,9 +101,14 @@ def load_env_files() -> None:
     environment, then ``~/.config/markdown-to-canvas/.env``. The first load
     overrides the shell (as it always has); the fallback never overrides.
     """
-    global token_source
+    global token_source, env_search_start, env_search_found
     shell_has_token = bool(os.environ.get(TOKEN_VAR))
+    try:
+        env_search_start = os.getcwd()
+    except OSError:
+        env_search_start = None
     local = find_dotenv(usecwd=True)
+    env_search_found = local or None
     load_dotenv(local, override=True, verbose=True)
     fallback = config_dir() / ENV_NAME
     if fallback.is_file():
@@ -100,6 +128,50 @@ def load_env_files() -> None:
 #: environment", or None when none of them set it. Reported by the CLI when
 #: Canvas rejects the token, since a stale .env in the cwd silently wins.
 token_source: str | None = None
+
+#: The directory load_env_files() started its .env search from (None when the
+#: cwd could not be read), and the .env it found there or in a parent (None when
+#: there was none). Used to list the searched places when no token is set.
+env_search_start: str | None = None
+env_search_found: str | None = None
+
+
+def token_search_report() -> list[str]:
+    """One line per place a token can come from, saying what was found there.
+
+    Covers the places ``load_env_files`` reads. The canvas.toml ``[auth]``
+    line is added by ``config.load``, which knows the file.
+    """
+    if env_search_found:
+        has = bool(dotenv_values(env_search_found).get(TOKEN_VAR))
+        local = (
+            f"a .env in the current directory or a parent: found "
+            f"{env_search_found}, "
+            + ("which sets " if has else "which does not set ")
+            + TOKEN_VAR
+        )
+    elif env_search_start:
+        local = (
+            f"a .env in the current directory or a parent: none found "
+            f"(searched up from {env_search_start})"
+        )
+    else:
+        local = "a .env in the current directory or a parent: not searched (the current directory could not be read)"
+    shell = (
+        f"the {TOKEN_VAR} environment variable in your shell: "
+        + ("set" if token_source == "the shell environment" else "not set")
+    )
+    fallback = config_dir() / ENV_NAME
+    try:
+        if not fallback.is_file():
+            state = "file not found"
+        elif dotenv_values(fallback).get(TOKEN_VAR):
+            state = f"sets {TOKEN_VAR}"
+        else:
+            state = f"does not set {TOKEN_VAR}"
+    except OSError as e:
+        state = f"could not be read ({e.strerror})"
+    return [local, shell, f"{fallback}: {state}"]
 
 
 # ---------------------------------------------------------------------------
@@ -186,7 +258,7 @@ def resolve_course(arg: str) -> ResolvedCourse:
     otherwise the argument is looked up as a registry key.
     """
     as_path = Path(arg)
-    if as_path.is_dir():
+    if _usable_dir(as_path):
         return ResolvedCourse(as_path.resolve())
     courses = _read_courses()
     if courses is None or arg not in courses:
@@ -212,7 +284,7 @@ def is_group(arg: str) -> bool:
     a group. Never raises: a missing or bad registry is simply "not a group", and
     the lookup that follows reports the real problem.
     """
-    if Path(arg).is_dir():
+    if _usable_dir(Path(arg)):
         return False
     try:
         courses = _read_courses()
@@ -265,7 +337,7 @@ def resolve_courses(arg: str) -> list[ResolvedCourse]:
     report at its turn.
     """
     as_path = Path(arg)
-    if as_path.is_dir():
+    if _usable_dir(as_path):
         return [ResolvedCourse(as_path.resolve())]
     courses = _read_courses()
     if courses is None or arg not in courses:
@@ -288,7 +360,7 @@ def resolve_config(arg: str) -> Path:
     error applies.
     """
     as_path = Path(arg)
-    if as_path.is_file():
+    if _usable_file(as_path):
         return as_path
     courses = _read_courses()
     if courses is None or arg not in courses:
@@ -318,7 +390,7 @@ def list_terms() -> list[str]:
 def resolve_term(arg: str) -> Path:
     """A term file named by path, or by a term name in the terms directory."""
     as_path = Path(arg)
-    if as_path.is_file():
+    if _usable_file(as_path):
         return as_path
     by_name = terms_dir() / f"{arg}.toml"
     if by_name.is_file():
